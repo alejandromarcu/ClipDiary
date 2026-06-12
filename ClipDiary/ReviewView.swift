@@ -37,7 +37,7 @@ struct ReviewWindow: View {
     @State private var draftItemID: String?
     @State private var draftError: String?
     /// Day whose picked clips are being edited in a sheet.
-    @State private var editDay: Date?
+    @State private var editDay: DaySelection?
     @State private var showSources = false
 
     private var items: [SourceItem] { store.sourceItems }
@@ -63,7 +63,9 @@ struct ReviewWindow: View {
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
-            PickedStrip(day: current?.captureDate?.dayKey ?? startDay.dayKey) { editDay = $0 }
+            PickedStrip(day: current?.captureDate?.dayKey ?? startDay.dayKey) {
+                editDay = DaySelection(day: $0)
+            }
         }
         .padding(16)
         .frame(minWidth: 700, idealWidth: 840, maxWidth: .infinity,
@@ -85,8 +87,8 @@ struct ReviewWindow: View {
                 .help("Next photo/video — skips into the following day at the end of a day (↓)")
             }
         }
-        .sheet(item: $editDay) { day in
-            DaySheet(day: day).environmentObject(store)
+        .sheet(item: $editDay) { selection in
+            DaySheet(day: selection.day).environmentObject(store)
         }
         .sheet(isPresented: $showSources) {
             SourceFoldersSheet().environmentObject(store)
@@ -379,7 +381,7 @@ private struct PickedThumb: View {
                 .shadow(color: .black.opacity(0.8), radius: 2)
                 .padding(3)
         }
-        .task { image = await store.thumbnail(for: clip) }
+        .task(id: clip.thumbnailKey) { image = await store.thumbnail(for: clip) }
     }
 }
 

@@ -49,6 +49,15 @@ struct Clip: Identifiable, Codable, Equatable, Hashable {
 
     var trimmedDuration: Double { max(0, outSeconds - inSeconds) }
 
+    /// Changes when the frame a thumbnail shows would change: the clip's
+    /// identity, its trim in-point (videos) or its crop (photos). Views use
+    /// it as a task id to regenerate thumbnails; the store uses it to drop
+    /// stale cache entries on update.
+    var thumbnailKey: String {
+        let cropKey = crop.map { "\($0.x),\($0.y),\($0.width),\($0.height)" } ?? "full"
+        return "\(id.uuidString)|\(inSeconds)|\(cropKey)"
+    }
+
     /// True when no tag filter is set, or the clip carries the tag
     /// (case-insensitive, matching how tags are deduped).
     func matches(tagFilter: String?) -> Bool {
@@ -100,6 +109,13 @@ enum DateStamp {
     }
 }
 
+/// Wraps a day so it can drive `.sheet(item:)`, instead of retroactively
+/// conforming the system Date type to Identifiable.
+struct DaySelection: Identifiable {
+    let day: Date
+    var id: Date { day }
+}
+
 extension Date {
     /// Start of the calendar day, used as the canonical key for a day.
     var dayKey: Date { Calendar.current.startOfDay(for: self) }
@@ -116,8 +132,10 @@ extension Date {
 }
 
 func formatTime(_ seconds: Double) -> String {
-    let total = max(0, seconds)
-    let m = Int(total) / 60
-    let s = total.truncatingRemainder(dividingBy: 60)
+    // Round to centiseconds before splitting, so 59.997 shows as
+    // "1:00.00" rather than "0:60.00".
+    let centiseconds = Int((max(0, seconds) * 100).rounded())
+    let m = centiseconds / 6000
+    let s = Double(centiseconds % 6000) / 100
     return String(format: "%d:%05.2f", m, s)
 }

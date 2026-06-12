@@ -6,7 +6,7 @@ struct ContentView: View {
     @EnvironmentObject var store: LibraryStore
 
     @State private var displayedMonth = Date().dayKey
-    @State private var selectedDay: Date?
+    @State private var selectedDay: DaySelection?
     private enum ImportKind { case media, mash }
     @State private var showImporter = false
     @State private var importKind: ImportKind = .media
@@ -119,8 +119,8 @@ struct ContentView: View {
                 self.tagFilter = nil
             }
         }
-        .sheet(item: $selectedDay) { day in
-            DaySheet(day: day).environmentObject(store)
+        .sheet(item: $selectedDay) { selection in
+            DaySheet(day: selection.day).environmentObject(store)
         }
         .sheet(isPresented: $showExportSheet) {
             ExportSheet(month: displayedMonth, tagFilter: tagFilter).environmentObject(store)
@@ -192,7 +192,7 @@ struct ContentView: View {
                             day: day,
                             tagFilter: tagFilter,
                             onTap: { openWindow(value: ReviewRequest(day: day)) },
-                            onEdit: { selectedDay = day }
+                            onEdit: { selectedDay = DaySelection(day: day) }
                         )
                         .environmentObject(store)
                     } else {
@@ -299,10 +299,6 @@ struct MashSource: Identifiable {
     let url: URL
 }
 
-extension Date: @retroactive Identifiable {
-    public var id: TimeInterval { timeIntervalSince1970 }
-}
-
 // MARK: - Day cell
 
 struct DayCell: View {
@@ -370,7 +366,7 @@ struct DayCell: View {
             Button("Edit Day's Clips…", action: onEdit)
                 .disabled(dayClips.isEmpty)
         }
-        .task(id: dayClips.first?.id.uuidString ?? "" + "\(dayClips.first?.inSeconds ?? 0)") {
+        .task(id: dayClips.first?.thumbnailKey) {
             if let first = dayClips.first {
                 thumbnail = await store.thumbnail(for: first)
             } else {
@@ -445,6 +441,9 @@ struct ExportSheet: View {
         }
         .padding(24)
         .frame(width: 440)
+        // Esc would otherwise close the sheet mid-export (the Cancel button
+        // is already disabled while exporting).
+        .interactiveDismissDisabled(isExporting)
     }
 
     private func chooseDestinationAndExport(clips: [Clip]) {
@@ -579,6 +578,12 @@ struct PreviewWindow: View {
             let built = try await Exporter.buildComposition(
                 clips: clips, store: store, renderSize: orientation.size
             )
+            // The orientation picker cancels and restarts this task; a stale
+            // build finishing late must not overwrite the newer one.
+            guard !Task.isCancelled else {
+                built.cleanUp()
+                return
+            }
             let item = AVPlayerItem(asset: built.composition)
             item.videoComposition = built.videoComposition
             let player = AVPlayer(playerItem: item)

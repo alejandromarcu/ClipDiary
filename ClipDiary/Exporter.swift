@@ -284,18 +284,7 @@ struct Exporter {
             throw ExportError.sessionFailed("Could not read photo \(clip.fileName).")
         }
 
-        var image = oriented
-        if let crop = clip.crop, !crop.isFull {
-            let pixelRect = CGRect(
-                x: crop.x * Double(oriented.width),
-                y: crop.y * Double(oriented.height),
-                width: crop.width * Double(oriented.width),
-                height: crop.height * Double(oriented.height)
-            ).integral
-            if let cropped = oriented.cropping(to: pixelRect) {
-                image = cropped
-            }
-        }
+        let image = clip.crop.map { croppedImage(oriented, to: $0) } ?? oriented
 
         // Even dimensions for H.264, never upscaled beyond the source.
         let fitScale = min(1, min(renderSize.width / CGFloat(image.width),

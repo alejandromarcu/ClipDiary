@@ -52,14 +52,14 @@ final class LibraryStore: ObservableObject {
 
     // MARK: - Persistence
 
-    private func load() {
-        guard let metadataURL, let data = try? Data(contentsOf: metadataURL) else {
-            clips = []
-            return
-        }
+    /// Reads and decodes a project's clip list. Throws when the file can't
+    /// be read or decoded — opening such a project as empty would overwrite
+    /// the real data with `[]` on the next save.
+    private static func loadClips(from url: URL) throws -> [Clip] {
+        let data = try Data(contentsOf: url)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        clips = (try? decoder.decode([Clip].self, from: data)) ?? []
+        return try decoder.decode([Clip].self, from: data)
     }
 
     private func save() {
@@ -103,16 +103,16 @@ final class LibraryStore: ObservableObject {
     }
 
     /// Restores the last-used project from its saved bookmark, if any.
+    /// Pruning of dead bookmarks happens inside `openFromBookmark`.
     func restoreLastProject() {
         guard let data = UserDefaults.standard.data(forKey: Keys.lastBookmark) else { return }
-        if !openFromBookmark(data) {
-            UserDefaults.standard.removeObject(forKey: Keys.lastBookmark)
-        }
+        openFromBookmark(data)
     }
 
     /// Resolves a stored bookmark, takes security-scoped access, and opens the
-    /// project. Returns false if it can't be resolved/accessed or isn't a
-    /// project (caller prunes the dead bookmark).
+    /// project. Returns false if it can't be opened; the bookmark is pruned
+    /// when the folder is gone or no longer a project, but kept when only its
+    /// clip list won't decode (the user can fix the file and retry).
     @discardableResult
     func openFromBookmark(_ data: Data) -> Bool {
         var stale = false
@@ -125,36 +125,54 @@ final class LibraryStore: ObservableObject {
             forgetBookmark(data)
             return false
         }
-        if activateProject(at: url, takeScope: true) { return true }
-        forgetBookmark(data)
-        return false
+        switch activateProject(at: url, takeScope: true) {
+        case .opened:
+            return true
+        case .notAProject:
+            forgetBookmark(data)
+            return false
+        case .unreadableLibrary:
+            return false
+        }
     }
 
-    /// Switches to `url`: releases the previous scope, optionally takes
-    /// security-scoped access, loads its clips, and records it as last-used +
-    /// most-recent. Returns false (without switching) if it isn't a project.
+    private enum ActivationResult { case opened, notAProject, unreadableLibrary }
+
+    /// Switches to `url`: loads its clips, releases the previous scope,
+    /// optionally keeps security-scoped access, and records it as last-used +
+    /// most-recent. Fails without switching (the current project stays open)
+    /// if `url` isn't a project or its clip list won't decode — opening a
+    /// project whose clips.json exists but can't be read would silently
+    /// overwrite the real data with an empty library on the next save.
     @discardableResult
-    private func activateProject(at url: URL, takeScope: Bool) -> Bool {
-        guard FileManager.default.fileExists(
-            atPath: url.appendingPathComponent("clips.json").path
-        ) else {
+    private func activateProject(at url: URL, takeScope: Bool) -> ActivationResult {
+        let metaURL = url.appendingPathComponent("clips.json")
+        guard FileManager.default.fileExists(atPath: metaURL.path) else {
             if takeScope { url.stopAccessingSecurityScopedResource() }
             lastError = "“\(url.lastPathComponent)” isn’t a ClipDiary project (no clips.json). Use New Project to create one."
-            return false
+            return .notAProject
+        }
+        let loadedClips: [Clip]
+        do {
+            loadedClips = try Self.loadClips(from: metaURL)
+        } catch {
+            if takeScope { url.stopAccessingSecurityScopedResource() }
+            lastError = "Could not read the clip list of “\(url.lastPathComponent)”: \(error.localizedDescription)\n\nThe project was not opened and its clips.json is untouched — restore or fix the file and try again."
+            return .unreadableLibrary
         }
         releaseCurrentScope()
         accessingScopedURL = takeScope ? url : nil
 
         currentProjectURL = url
         clipsDir = url.appendingPathComponent("Clips", isDirectory: true)
-        metadataURL = url.appendingPathComponent("clips.json")
+        metadataURL = metaURL
         sourcesURL = url.appendingPathComponent("sources.json")
         try? FileManager.default.createDirectory(at: clipsDir, withIntermediateDirectories: true)
         thumbnailCache.removeAllObjects()
-        load()
+        clips = loadedClips
         loadSources()
         rememberProject(url)
-        return true
+        return .opened
     }
 
     private func releaseCurrentScope() {
@@ -248,6 +266,8 @@ final class LibraryStore: ObservableObject {
                 else { continue }
                 if url.startAccessingSecurityScopedResource() {
                     accessingSourceURLs.append(url)
+                } else {
+                    lastError = "Could not regain access to source folder “\(url.lastPathComponent)” — its files won't appear in review. Try removing and re-adding it in Sources."
                 }
                 folders.append(SourceFolder(url: url, bookmark: record.bookmark))
             }
@@ -314,7 +334,8 @@ final class LibraryStore: ObservableObject {
 
     /// How many clips were picked from this source file ("Added ✓" badge).
     func usageCount(of item: SourceItem) -> Int {
-        clips.filter { $0.sourcePath == item.url.path }.count
+        let path = item.url.canonicalSourcePath
+        return clips.filter { $0.sourcePath == path }.count
     }
 
     // MARK: - Queries
@@ -325,7 +346,7 @@ final class LibraryStore: ObservableObject {
     }
 
     /// Every distinct tag in the library, alphabetical, for quick reuse.
-    /// Case-insensitive: the first spelling encountered wins.
+    /// Case-insensitive: the alphabetically first spelling wins.
     var allTags: [String] {
         var seen = Set<String>()
         return clips.flatMap(\.tags)
@@ -473,8 +494,9 @@ final class LibraryStore: ObservableObject {
         var clip = draft
         clip.id = UUID()
         clip.createdAt = Date()
-        clip.sourcePath = item.url.path
-        if let existing = clips.first(where: { $0.sourcePath == item.url.path }) {
+        let sourcePath = item.url.canonicalSourcePath
+        clip.sourcePath = sourcePath
+        if let existing = clips.first(where: { $0.sourcePath == sourcePath }) {
             clip.fileName = existing.fileName
         } else {
             let fallbackExt = item.kind == .photo ? "jpg" : "mov"
@@ -496,6 +518,9 @@ final class LibraryStore: ObservableObject {
 
     func update(_ clip: Clip) {
         guard let idx = clips.firstIndex(where: { $0.id == clip.id }) else { return }
+        if clips[idx].thumbnailKey != clip.thumbnailKey {
+            thumbnailCache.removeObject(forKey: clip.id as NSUUID)
+        }
         clips[idx] = clip
         save()
     }
@@ -519,8 +544,11 @@ final class LibraryStore: ObservableObject {
             return cached
         }
         if clip.kind == .photo {
-            guard let cg = loadOrientedCGImage(from: fileURL(for: clip), maxPixel: 480) else {
+            guard var cg = loadOrientedCGImage(from: fileURL(for: clip), maxPixel: 480) else {
                 return nil
+            }
+            if let crop = clip.crop {
+                cg = croppedImage(cg, to: crop)
             }
             let image = NSImage(cgImage: cg, size: .zero)
             thumbnailCache.setObject(image, forKey: clip.id as NSUUID)
@@ -553,6 +581,19 @@ nonisolated func loadOrientedCGImage(from url: URL, maxPixel: Int) -> CGImage? {
         kCGImageSourceThumbnailMaxPixelSize: maxPixel,
     ]
     return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+}
+
+/// Applies a clip's normalized crop to an oriented image. Shared by the
+/// thumbnail generator and the export's photo-segment renderer.
+nonisolated func croppedImage(_ image: CGImage, to crop: CropRect) -> CGImage {
+    guard !crop.isFull else { return image }
+    let pixelRect = CGRect(
+        x: crop.x * Double(image.width),
+        y: crop.y * Double(image.height),
+        width: crop.width * Double(image.width),
+        height: crop.height * Double(image.height)
+    ).integral
+    return image.cropping(to: pixelRect) ?? image
 }
 
 // MARK: - Project pickers

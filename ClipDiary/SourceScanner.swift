@@ -21,6 +21,15 @@ struct SourceItem: Identifiable, Hashable {
     var isUndated: Bool { captureDate == nil }
 }
 
+extension URL {
+    /// Canonical path for recording/matching a clip's `sourcePath` across
+    /// launches — security-scoped bookmark resolution can return equivalent
+    /// but differently spelled paths (e.g. with a /private prefix).
+    var canonicalSourcePath: String {
+        standardizedFileURL.resolvingSymlinksInPath().path
+    }
+}
+
 /// Recursively walks source folders and indexes every photo and video with
 /// its capture time. Pure file inspection — no UI, no project state.
 enum SourceScanner {

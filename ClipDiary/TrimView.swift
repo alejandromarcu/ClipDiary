@@ -312,6 +312,7 @@ struct TrimEditor: View {
             }
         }
         .onAppear { setUp() }
+        .task { await loadThumbnails(url: sourceURL ?? store.fileURL(for: clip)) }
         .onDisappear {
             // Auto-save so switching clips or closing the sheet keeps edits.
             // No-op if the clip was just deleted. Review drafts aren't in the
@@ -377,8 +378,6 @@ struct TrimEditor: View {
                 stopPreview()
             }
         }
-
-        Task { await loadThumbnails(url: url) }
     }
 
     private func tearDown() {
@@ -416,6 +415,7 @@ struct TrimEditor: View {
         let count = 10
         var images: [NSImage] = []
         for i in 0..<count {
+            if Task.isCancelled { return }
             let seconds = clip.durationSeconds * (Double(i) + 0.5) / Double(count)
             let time = CMTime(seconds: seconds, preferredTimescale: 600)
             if let (cg, _) = try? await generator.image(at: time) {

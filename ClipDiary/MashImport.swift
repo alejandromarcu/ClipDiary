@@ -262,6 +262,9 @@ struct MashImportSheet: View {
         }
         .padding(24)
         .frame(width: 420)
+        // Esc would otherwise close the sheet mid-import, leaving the
+        // splitting task running invisibly (Cancel is already disabled).
+        .interactiveDismissDisabled(isImporting)
         .task { await scan() }
     }
 
