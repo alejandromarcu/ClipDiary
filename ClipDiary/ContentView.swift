@@ -158,6 +158,24 @@ struct ContentView: View {
                     .padding(.horizontal, 8).padding(.vertical, 3)
                     .background(Capsule().fill(.yellow.opacity(0.25)))
             }
+            let avail = store.availability(inMonthOf: displayedMonth)
+            if !avail.isEmpty {
+                HStack(spacing: 10) {
+                    if avail.videoCount > 0 {
+                        Label("\(avail.videoCount) · \(formatDurationShort(avail.videoDuration))",
+                              systemImage: "video.fill")
+                            .monospacedDigit()
+                    }
+                    if avail.photoCount > 0 {
+                        Label("\(avail.photoCount)", systemImage: "photo.fill")
+                    }
+                }
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .help("Photos and videos available to review this month, from your source folders")
+                Divider().frame(height: 16)
+            }
+
             let monthClips = store.clips(inMonthOf: displayedMonth, taggedWith: tagFilter)
             let total = monthClips.reduce(0) { $0 + $1.trimmedDuration }
             Text("\(monthClips.count) clips · \(formatTime(total))")
@@ -181,27 +199,42 @@ struct ContentView: View {
         .padding(.horizontal)
     }
 
+    /// A bordered month grid that fills the available height: each week row
+    /// (and each day within it) divides the space equally, so making the
+    /// window taller makes the cells taller. Hairline separators between cells
+    /// give it the look of a wall calendar.
     private var calendarGrid: some View {
-        let days = daysForDisplayedMonth()
-        let columns = Array(repeating: GridItem(.flexible(), spacing: 6), count: 7)
-        return ScrollView {
-            LazyVGrid(columns: columns, spacing: 6) {
-                ForEach(Array(days.enumerated()), id: \.offset) { _, day in
-                    if let day {
-                        DayCell(
-                            day: day,
-                            tagFilter: tagFilter,
-                            onTap: { openWindow(value: ReviewRequest(day: day)) },
-                            onEdit: { selectedDay = DaySelection(day: day) }
+        let weeks = weeksForDisplayedMonth()
+        return VStack(spacing: 0) {
+            ForEach(Array(weeks.enumerated()), id: \.offset) { _, week in
+                HStack(spacing: 0) {
+                    ForEach(Array(week.enumerated()), id: \.offset) { _, day in
+                        Group {
+                            if let day {
+                                DayCell(
+                                    day: day,
+                                    tagFilter: tagFilter,
+                                    onTap: { openWindow(value: ReviewRequest(day: day)) },
+                                    onEdit: { selectedDay = DaySelection(day: day) }
+                                )
+                                .environmentObject(store)
+                            } else {
+                                Color(nsColor: .controlBackgroundColor).opacity(0.35)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .overlay(
+                            Rectangle()
+                                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
                         )
-                        .environmentObject(store)
-                    } else {
-                        Color.clear.frame(height: 86)
                     }
                 }
+                .frame(maxHeight: .infinity)
             }
-            .padding()
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.horizontal)
+        .padding(.bottom, 8)
     }
 
     private var footer: some View {
@@ -223,8 +256,9 @@ struct ContentView: View {
         }
     }
 
-    /// All cells for the month grid; nil = padding cell before the 1st / after the last day.
-    private func daysForDisplayedMonth() -> [Date?] {
+    /// The month laid out as week rows of 7 cells each; nil = padding cell
+    /// before the 1st / after the last day.
+    private func weeksForDisplayedMonth() -> [[Date?]] {
         guard let interval = calendar.dateInterval(of: .month, for: displayedMonth),
               let dayRange = calendar.range(of: .day, in: .month, for: displayedMonth)
         else { return [] }
@@ -238,7 +272,7 @@ struct ContentView: View {
             cells.append(calendar.date(byAdding: .day, value: offset, to: firstDay))
         }
         while cells.count % 7 != 0 { cells.append(nil) }
-        return cells
+        return stride(from: 0, to: cells.count, by: 7).map { Array(cells[$0..<$0 + 7]) }
     }
 }
 
@@ -312,53 +346,43 @@ struct DayCell: View {
     @State private var thumbnail: NSImage?
 
     private var dayClips: [Clip] { store.clips(on: day, taggedWith: tagFilter) }
+    private var hasThumbnail: Bool { thumbnail != nil }
 
     var body: some View {
         Button(action: onTap) {
-            ZStack(alignment: .topLeading) {
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(nsColor: .controlBackgroundColor))
-
-                if let thumbnail {
-                    Image(nsImage: thumbnail)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(height: 86)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                        .overlay(
-                            LinearGradient(
-                                colors: [.black.opacity(0.55), .clear],
-                                startPoint: .top, endPoint: .center
+            VStack(alignment: .leading, spacing: 0) {
+                header
+                Spacer(minLength: 2)
+                availabilityFooter
+            }
+            .padding(6)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            // The thumbnail goes in the background so a scaledToFill image
+            // can't stretch the cell — every cell sizes purely from its
+            // content, letting the grid split height evenly.
+            .background {
+                ZStack {
+                    Color(nsColor: .controlBackgroundColor)
+                    if let thumbnail {
+                        Image(nsImage: thumbnail)
+                            .resizable()
+                            .scaledToFill()
+                            .overlay(
+                                LinearGradient(
+                                    colors: [.black.opacity(0.6), .clear, .black.opacity(0.55)],
+                                    startPoint: .top, endPoint: .bottom
+                                )
                             )
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                        )
-                }
-
-                HStack {
-                    Text("\(Calendar.current.component(.day, from: day))")
-                        .font(.callout.bold())
-                        .foregroundStyle(thumbnail == nil ? Color.primary : .white)
-                    Spacer()
-                    if dayClips.count > 1 {
-                        Text("\(dayClips.count)")
-                            .font(.caption2.bold())
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(Capsule().fill(.blue))
-                            .foregroundStyle(.white)
-                    } else if let first = dayClips.first {
-                        Text(formatTime(first.trimmedDuration))
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.white.opacity(0.9))
                     }
                 }
-                .padding(6)
-
+            }
+            .clipped()
+            .overlay {
                 if day.isSameDay(as: Date()) {
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(Color.accentColor, lineWidth: 2)
+                    Rectangle().stroke(Color.accentColor, lineWidth: 2)
                 }
             }
-            .frame(height: 86)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .contextMenu {
@@ -372,6 +396,54 @@ struct DayCell: View {
             } else {
                 thumbnail = nil
             }
+        }
+    }
+
+    /// Day number plus a badge for clips already picked on this day.
+    private var header: some View {
+        HStack(alignment: .top) {
+            Text("\(Calendar.current.component(.day, from: day))")
+                .font(.callout.bold())
+                .foregroundStyle(hasThumbnail ? .white : Color.primary)
+            Spacer()
+            if dayClips.count > 1 {
+                Text("\(dayClips.count)")
+                    .font(.caption2.bold())
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Capsule().fill(.blue))
+                    .foregroundStyle(.white)
+            } else if let first = dayClips.first {
+                Text(formatTime(first.trimmedDuration))
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(hasThumbnail ? .white.opacity(0.9) : .secondary)
+            }
+        }
+    }
+
+    /// What's still available to review for this day, from the source folders:
+    /// video count + combined length and photo count. Shown regardless of
+    /// whether any clip has been picked.
+    @ViewBuilder
+    private var availabilityFooter: some View {
+        let avail = store.availability(on: day)
+        if !avail.isEmpty {
+            VStack(alignment: .leading, spacing: 1) {
+                if avail.videoCount > 0 {
+                    Label {
+                        Text("\(avail.videoCount) · \(formatDurationShort(avail.videoDuration))")
+                            .monospacedDigit()
+                    } icon: {
+                        Image(systemName: "video.fill")
+                    }
+                }
+                if avail.photoCount > 0 {
+                    Label("\(avail.photoCount)", systemImage: "photo.fill")
+                }
+            }
+            .font(.caption2)
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .foregroundStyle(hasThumbnail ? .white.opacity(0.95) : .secondary)
         }
     }
 }

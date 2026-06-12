@@ -338,6 +338,33 @@ final class LibraryStore: ObservableObject {
         return clips.filter { $0.sourcePath == path }.count
     }
 
+    /// What's available to review for a day: how many source videos (and their
+    /// combined length) and how many source photos fall on it. Drives the
+    /// per-day footage hint in the calendar, independent of what's been picked.
+    func availability(on day: Date) -> DayAvailability {
+        availability(where: { $0.isSameDay(as: day) })
+    }
+
+    /// Same tally across a whole month, for the calendar header.
+    func availability(inMonthOf month: Date) -> DayAvailability {
+        availability(where: { $0.isSameMonth(as: month) })
+    }
+
+    private func availability(where matches: (Date) -> Bool) -> DayAvailability {
+        var result = DayAvailability()
+        for item in sourceItems {
+            guard let date = item.captureDate, matches(date) else { continue }
+            switch item.kind {
+            case .video:
+                result.videoCount += 1
+                result.videoDuration += item.duration ?? 0
+            case .photo:
+                result.photoCount += 1
+            }
+        }
+        return result
+    }
+
     // MARK: - Queries
 
     func clips(on day: Date, taggedWith tag: String? = nil) -> [Clip] {

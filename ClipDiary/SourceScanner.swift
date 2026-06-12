@@ -15,6 +15,10 @@ struct SourceItem: Identifiable, Hashable {
     /// day the album was downloaded. Undated items are reviewed in a bucket
     /// after all dated days instead of being placed on a guessed day.
     let captureDate: Date?
+    /// Video files only: full duration in seconds, loaded during the scan so
+    /// the calendar can show a day's available footage length. nil for photos
+    /// or when it can't be read.
+    var duration: Double? = nil
 
     var id: String { url.path }
     var fileName: String { url.lastPathComponent }
@@ -42,8 +46,9 @@ enum SourceScanner {
         var items: [SourceItem] = []
         for file in enumerateMedia(in: folders, excluding: excluded) {
             if Task.isCancelled { return [] }
-            let date = await captureDate(of: file.url, kind: file.kind)
-            items.append(SourceItem(url: file.url, kind: file.kind, captureDate: date))
+            let meta = await metadata(of: file.url, kind: file.kind)
+            items.append(SourceItem(url: file.url, kind: file.kind,
+                                    captureDate: meta.date, duration: meta.duration))
         }
         return items.sorted { a, b in
             switch (a.captureDate, b.captureDate) {
@@ -95,15 +100,22 @@ enum SourceScanner {
         return nil
     }
 
-    private static func captureDate(of url: URL, kind: ClipKind) async -> Date? {
+    /// Capture date (+ duration for videos), loaded together so a video's
+    /// asset is only opened once.
+    private static func metadata(of url: URL, kind: ClipKind) async -> (date: Date?, duration: Double?) {
         switch kind {
         case .photo:
-            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-            return exifCreationDate(of: source)
+            guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return (nil, nil) }
+            return (exifCreationDate(of: source), nil)
         case .video:
             let asset = AVURLAsset(url: url)
-            guard let item = try? await asset.load(.creationDate) else { return nil }
-            return try? await item.load(.dateValue)
+            var date: Date?
+            if let item = try? await asset.load(.creationDate) {
+                date = try? await item.load(.dateValue)
+            }
+            let seconds = try? await asset.load(.duration).seconds
+            let duration = (seconds?.isFinite == true && seconds! > 0) ? seconds : nil
+            return (date, duration)
         }
     }
 }

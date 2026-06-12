@@ -109,6 +109,17 @@ enum DateStamp {
     }
 }
 
+/// What a calendar day has waiting in the project's source folders: the count
+/// and combined length of its videos, plus its photo count. Shown as a hint on
+/// each day cell whether or not clips have been picked yet.
+struct DayAvailability {
+    var videoCount = 0
+    var videoDuration = 0.0
+    var photoCount = 0
+
+    var isEmpty: Bool { videoCount == 0 && photoCount == 0 }
+}
+
 /// Wraps a day so it can drive `.sheet(item:)`, instead of retroactively
 /// conforming the system Date type to Identifiable.
 struct DaySelection: Identifiable {
@@ -138,4 +149,11 @@ func formatTime(_ seconds: Double) -> String {
     let m = centiseconds / 6000
     let s = Double(centiseconds % 6000) / 100
     return String(format: "%d:%05.2f", m, s)
+}
+
+/// Coarse `m:ss` length (no fractional seconds) for at-a-glance totals like
+/// a calendar day's available footage.
+func formatDurationShort(_ seconds: Double) -> String {
+    let total = Int(max(0, seconds).rounded())
+    return String(format: "%d:%02d", total / 60, total % 60)
 }
