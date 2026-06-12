@@ -146,6 +146,35 @@ struct TagRow: View {
     }
 }
 
+/// Day chooser that shows the date as a button opening a calendar popover —
+/// the convenient picker, without the compact picker's up/down steppers.
+/// Shared by the video and photo editors.
+struct DayPickerField: View {
+    @Binding var selection: Date
+    @State private var showingPicker = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text("Day")
+            Button {
+                showingPicker.toggle()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "calendar")
+                    Text(selection.formatted(date: .abbreviated, time: .omitted))
+                }
+            }
+            .popover(isPresented: $showingPicker, arrowEdge: .bottom) {
+                DatePicker("Day", selection: $selection, displayedComponents: .date)
+                    .datePickerStyle(.graphical)
+                    .labelsHidden()
+                    .padding()
+                    .frame(width: 280)
+            }
+        }
+    }
+}
+
 /// The actual trim UI for a single clip.
 struct TrimEditor: View {
     @EnvironmentObject var store: LibraryStore
@@ -199,25 +228,11 @@ struct TrimEditor: View {
                 Text(formatTime(clip.inSeconds))
                 Spacer()
                 Button {
-                    skip(by: -skipStep)
-                } label: {
-                    Label("Back \(Int(skipStep))s", systemImage: "gobackward.5")
-                }
-                .keyboardShortcut(.leftArrow, modifiers: [])
-                .help("Jump back \(Int(skipStep)) seconds (←)")
-                Button {
                     isPlayingPreview ? stopPreview() : playTrimmedPreview()
                 } label: {
                     Label(isPlayingPreview ? "Stop" : "Preview Trim",
                           systemImage: isPlayingPreview ? "stop.fill" : "play.fill")
                 }
-                Button {
-                    skip(by: skipStep)
-                } label: {
-                    Label("Forward \(Int(skipStep))s", systemImage: "goforward.5")
-                }
-                .keyboardShortcut(.rightArrow, modifiers: [])
-                .help("Jump forward \(Int(skipStep)) seconds (→)")
                 Text("Length: \(formatTime(clip.trimmedDuration))")
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -231,14 +246,24 @@ struct TrimEditor: View {
                 .help("Mark the current playback time as the end of the trim (O)")
             }
             .font(.callout.monospacedDigit())
+            // Keep the keyboard skip shortcuts even though the on-screen
+            // Back/Forward buttons were removed.
+            .background {
+                HStack {
+                    Button("Back \(Int(skipStep))s") { skip(by: -skipStep) }
+                        .keyboardShortcut(.leftArrow, modifiers: [])
+                    Button("Forward \(Int(skipStep))s") { skip(by: skipStep) }
+                        .keyboardShortcut(.rightArrow, modifiers: [])
+                }
+                .hidden()
+            }
 
             TagRow(tags: $clip.tags)
 
             Divider()
 
             HStack {
-                DatePicker("Day", selection: $editedDate, displayedComponents: .date)
-                    .datePickerStyle(.compact)
+                DayPickerField(selection: $editedDate)
                 Toggle("Date stamp", isOn: $clip.showsDateOverlay)
                     .toggleStyle(.checkbox)
                     .help("Show this clip's date in the bottom-left corner of the month video. Turn off for 1SE imports (already stamped) or cover clips.")

@@ -94,8 +94,7 @@ struct PhotoEditor: View {
             Divider()
 
             HStack {
-                DatePicker("Day", selection: $editedDate, displayedComponents: .date)
-                    .datePickerStyle(.compact)
+                DayPickerField(selection: $editedDate)
                 Toggle("Date stamp", isOn: $clip.showsDateOverlay)
                     .toggleStyle(.checkbox)
                     .help("Show this photo's date in the bottom-left corner of the month video. Turn off for cover photos.")
