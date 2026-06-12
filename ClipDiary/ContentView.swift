@@ -12,6 +12,7 @@ struct ContentView: View {
     @State private var importKind: ImportKind = .media
     @State private var mashSource: MashSource?
     @State private var showExportSheet = false
+    @State private var showSourcesSheet = false
     @Environment(\.openWindow) private var openWindow
     @State private var tagFilter: String?
 
@@ -60,6 +61,12 @@ struct ContentView: View {
                 }
                 .pickerStyle(.menu)
                 .disabled(store.allTags.isEmpty)
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button { showSourcesSheet = true } label: {
+                    Label("Sources", systemImage: "folder.badge.gearshape")
+                }
+                .help("Manage the folders scanned for this project's photos and videos")
             }
             ToolbarItem(placement: .primaryAction) {
                 Menu {
@@ -118,6 +125,21 @@ struct ContentView: View {
         .sheet(isPresented: $showExportSheet) {
             ExportSheet(month: displayedMonth, tagFilter: tagFilter).environmentObject(store)
         }
+        .sheet(isPresented: $showSourcesSheet) {
+            SourceFoldersSheet().environmentObject(store)
+        }
+        // A freshly created project has neither clips nor sources — offer the
+        // source-folder setup right away. onAppear covers arriving from the
+        // welcome screen (where onChange can't fire: the calendar wasn't
+        // installed yet); onChange covers switching projects in-place.
+        .onAppear { offerSourcesSetupIfFresh() }
+        .onChange(of: store.currentProjectURL) { _, _ in offerSourcesSetupIfFresh() }
+    }
+
+    private func offerSourcesSetupIfFresh() {
+        if store.hasProject && store.clips.isEmpty && store.sourceFolders.isEmpty {
+            showSourcesSheet = true
+        }
     }
 
     // MARK: - Header / footer
@@ -166,8 +188,13 @@ struct ContentView: View {
             LazyVGrid(columns: columns, spacing: 6) {
                 ForEach(Array(days.enumerated()), id: \.offset) { _, day in
                     if let day {
-                        DayCell(day: day, tagFilter: tagFilter) { selectedDay = day }
-                            .environmentObject(store)
+                        DayCell(
+                            day: day,
+                            tagFilter: tagFilter,
+                            onTap: { openWindow(value: ReviewRequest(day: day)) },
+                            onEdit: { selectedDay = day }
+                        )
+                        .environmentObject(store)
                     } else {
                         Color.clear.frame(height: 86)
                     }
@@ -180,7 +207,7 @@ struct ContentView: View {
     private var footer: some View {
         HStack {
             Image(systemName: "info.circle")
-            Text("Drag the yellow handles in a day's editor to cut the beginning and end of a clip. Clips can be any length.")
+            Text("Click a day to review that day's photos & videos from your source folders (↑/↓ to move, ⌘↩ to add). Right-click a day to edit its picked clips.")
             Spacer()
         }
         .font(.caption)
@@ -282,7 +309,9 @@ struct DayCell: View {
     @EnvironmentObject var store: LibraryStore
     let day: Date
     var tagFilter: String?
+    /// Left click: review the day's source media. Context menu: edit clips.
     var onTap: () -> Void
+    var onEdit: () -> Void
 
     @State private var thumbnail: NSImage?
 
@@ -336,6 +365,11 @@ struct DayCell: View {
             .frame(height: 86)
         }
         .buttonStyle(.plain)
+        .contextMenu {
+            Button("Review Sources…", action: onTap)
+            Button("Edit Day's Clips…", action: onEdit)
+                .disabled(dayClips.isEmpty)
+        }
         .task(id: dayClips.first?.id.uuidString ?? "" + "\(dayClips.first?.inSeconds ?? 0)") {
             if let first = dayClips.first {
                 thumbnail = await store.thumbnail(for: first)

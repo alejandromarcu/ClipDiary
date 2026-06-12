@@ -37,5 +37,14 @@ struct ClipDiaryApp: App {
                     .environmentObject(store)
             }
         }
+
+        // Clicking a calendar day opens the review window: flip through the
+        // source folders' photos/videos and pick the day's keepers.
+        WindowGroup("Review", for: ReviewRequest.self) { $request in
+            if let request {
+                ReviewWindow(startDay: request.day)
+                    .environmentObject(store)
+            }
+        }
     }
 }

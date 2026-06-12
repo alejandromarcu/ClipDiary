@@ -42,6 +42,10 @@ struct Clip: Identifiable, Codable, Equatable, Hashable {
     /// corner. Off by default for 1SE imports, whose frames already carry a
     /// stamp; also handy off for cover photos.
     var showsDateOverlay: Bool = true
+    /// Path of the source-folder file this clip was picked from, if any.
+    /// Several clips may share one source (and one copied media file), e.g.
+    /// two segments cut from the same long video.
+    var sourcePath: String? = nil
 
     var trimmedDuration: Double { max(0, outSeconds - inSeconds) }
 
@@ -54,7 +58,7 @@ struct Clip: Identifiable, Codable, Equatable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id, fileName, date, inSeconds, outSeconds, durationSeconds, createdAt,
-             tags, kind, crop, showsDateOverlay
+             tags, kind, crop, showsDateOverlay, sourcePath
     }
 }
 
@@ -73,6 +77,7 @@ extension Clip {
         kind = try container.decodeIfPresent(ClipKind.self, forKey: .kind) ?? .video
         crop = try container.decodeIfPresent(CropRect.self, forKey: .crop)
         showsDateOverlay = try container.decodeIfPresent(Bool.self, forKey: .showsDateOverlay) ?? true
+        sourcePath = try container.decodeIfPresent(String.self, forKey: .sourcePath)
     }
 }
 

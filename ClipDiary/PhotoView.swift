@@ -1,7 +1,9 @@
 import SwiftUI
 
 /// Editor for a photo clip: crop by dragging the yellow corners, choose how
-/// long the photo is shown, change its date, tag it, or delete it.
+/// long the photo is shown, change its date, tag it, or delete it. Like
+/// `TrimEditor` it has a review mode: with `onAdd` set, the clip is a draft
+/// for the source photo at `sourceURL` and "Add to Clips" hands it back.
 struct PhotoEditor: View {
     @EnvironmentObject var store: LibraryStore
     @Environment(\.dismiss) private var dismiss
@@ -13,6 +15,10 @@ struct PhotoEditor: View {
 
     /// Snapshot as the editor opened, for Revert.
     private let original: Clip
+    private let sourceURL: URL?
+    private let onAdd: ((Clip) -> Void)?
+
+    private var isReview: Bool { onAdd != nil }
 
     private var hasChanges: Bool {
         clip != original || editedDate.dayKey != original.date
@@ -34,8 +40,10 @@ struct PhotoEditor: View {
         }
     }
 
-    init(clip: Clip) {
+    init(clip: Clip, sourceURL: URL? = nil, onAdd: ((Clip) -> Void)? = nil) {
         original = clip
+        self.sourceURL = sourceURL
+        self.onAdd = onAdd
         _clip = State(initialValue: clip)
         _editedDate = State(initialValue: clip.date)
     }
@@ -108,18 +116,31 @@ struct PhotoEditor: View {
                 }
                 .disabled(!hasChanges)
                 .help("Discard this photo's unsaved changes")
-                Button(role: .destructive) {
-                    store.delete(clip)
-                    dismiss()
-                } label: {
-                    Label("Delete Photo", systemImage: "trash")
+                if let onAdd {
+                    Button {
+                        var added = clip
+                        added.date = editedDate.dayKey
+                        onAdd(added)
+                    } label: {
+                        Label("Add to Clips", systemImage: "plus.circle.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .help("Add this cropped photo to the day's clips (⌘↩)")
+                } else {
+                    Button(role: .destructive) {
+                        store.delete(clip)
+                        dismiss()
+                    } label: {
+                        Label("Delete Photo", systemImage: "trash")
+                    }
                 }
             }
         }
         .onAppear { load() }
         // Auto-save so switching clips or closing the sheet keeps edits.
-        // No-op if the clip was just deleted.
-        .onDisappear { saveEdits() }
+        // No-op if the clip was just deleted. Review drafts aren't saved.
+        .onDisappear { if !isReview { saveEdits() } }
     }
 
     private func saveEdits() {
@@ -129,7 +150,7 @@ struct PhotoEditor: View {
     }
 
     private func load() {
-        let url = store.fileURL(for: clip)
+        let url = sourceURL ?? store.fileURL(for: clip)
         Task.detached {
             let cg = loadOrientedCGImage(from: url, maxPixel: 2048)
             await MainActor.run {

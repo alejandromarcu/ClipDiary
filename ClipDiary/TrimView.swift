@@ -175,7 +175,10 @@ struct DayPickerField: View {
     }
 }
 
-/// The actual trim UI for a single clip.
+/// The actual trim UI for a single clip. Two modes: editing a library clip
+/// (auto-saves on disappear, can delete), or reviewing a source video — the
+/// clip is a draft, `sourceURL` points at the original file, and an "Add to
+/// Clips" button hands the configured draft to `onAdd`.
 struct TrimEditor: View {
     @EnvironmentObject var store: LibraryStore
     @Environment(\.dismiss) private var dismiss
@@ -185,16 +188,23 @@ struct TrimEditor: View {
     @State private var timeObserver: Any?
     @State private var thumbnails: [NSImage] = []
     @State private var isPlayingPreview = false
+    @State private var playheadSeconds = 0.0
     @State private var editedDate: Date
 
     /// Snapshot as the editor opened, for Revert.
     private let original: Clip
+    private let sourceURL: URL?
+    private let onAdd: ((Clip) -> Void)?
 
-    init(clip: Clip) {
+    init(clip: Clip, sourceURL: URL? = nil, onAdd: ((Clip) -> Void)? = nil) {
         original = clip
+        self.sourceURL = sourceURL
+        self.onAdd = onAdd
         _clip = State(initialValue: clip)
         _editedDate = State(initialValue: clip.date)
     }
+
+    private var isReview: Bool { onAdd != nil }
 
     private var hasChanges: Bool {
         clip != original || editedDate.dayKey != original.date
@@ -212,6 +222,7 @@ struct TrimEditor: View {
                 duration: clip.durationSeconds,
                 inSeconds: $clip.inSeconds,
                 outSeconds: $clip.outSeconds,
+                playheadSeconds: playheadSeconds,
                 thumbnails: thumbnails,
                 onScrub: { seconds in seek(to: seconds) }
             )
@@ -277,20 +288,35 @@ struct TrimEditor: View {
                 }
                 .disabled(!hasChanges)
                 .help("Discard this clip's unsaved changes")
-                Button(role: .destructive) {
-                    stopPreview()
-                    store.delete(clip)
-                    dismiss()
-                } label: {
-                    Label("Delete Clip", systemImage: "trash")
+                if let onAdd {
+                    Button {
+                        stopPreview()
+                        var added = clip
+                        added.date = editedDate.dayKey
+                        onAdd(added)
+                    } label: {
+                        Label("Add to Clips", systemImage: "plus.circle.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .help("Add this trimmed segment to the day's clips (⌘↩)")
+                } else {
+                    Button(role: .destructive) {
+                        stopPreview()
+                        store.delete(clip)
+                        dismiss()
+                    } label: {
+                        Label("Delete Clip", systemImage: "trash")
+                    }
                 }
             }
         }
         .onAppear { setUp() }
         .onDisappear {
             // Auto-save so switching clips or closing the sheet keeps edits.
-            // No-op if the clip was just deleted.
-            saveEdits()
+            // No-op if the clip was just deleted. Review drafts aren't in the
+            // library, so there's nothing to save.
+            if !isReview { saveEdits() }
             tearDown()
         }
         .onChange(of: clip.inSeconds) { _, newValue in seek(to: newValue) }
@@ -338,7 +364,7 @@ struct TrimEditor: View {
     // MARK: - Player
 
     private func setUp() {
-        let url = store.fileURL(for: clip)
+        let url = sourceURL ?? store.fileURL(for: clip)
         let newPlayer = AVPlayer(url: url)
         player = newPlayer
         seek(to: clip.inSeconds)
@@ -346,6 +372,7 @@ struct TrimEditor: View {
         timeObserver = newPlayer.addPeriodicTimeObserver(
             forInterval: CMTime(value: 1, timescale: 30), queue: .main
         ) { time in
+            if time.seconds.isFinite { playheadSeconds = time.seconds }
             if isPlayingPreview && time.seconds >= clip.outSeconds {
                 stopPreview()
             }
@@ -404,6 +431,7 @@ struct TrimSlider: View {
     let duration: Double
     @Binding var inSeconds: Double
     @Binding var outSeconds: Double
+    var playheadSeconds: Double = 0
     let thumbnails: [NSImage]
     var onScrub: (Double) -> Void
 
@@ -444,6 +472,14 @@ struct TrimSlider: View {
                     .stroke(Color.yellow, lineWidth: 3)
                     .frame(width: max(handleWidth * 2, outX - inX), height: geo.size.height)
                     .offset(x: inX)
+
+                // Playhead (current playback position)
+                Rectangle()
+                    .fill(Color.white)
+                    .frame(width: 2, height: geo.size.height)
+                    .shadow(color: .black.opacity(0.6), radius: 1)
+                    .offset(x: position(of: playheadSeconds, width: width) - 1)
+                    .allowsHitTesting(false)
 
                 // In handle
                 handle()

@@ -20,12 +20,23 @@ final class LibraryStore: ObservableObject {
     /// file-accessing methods below are only reached with a project open.
     @Published private(set) var currentProjectURL: URL?
 
+    /// The project's source folders (review-window inventory) and the media
+    /// found inside them, sorted by capture time.
+    @Published private(set) var sourceFolders: [SourceFolder] = []
+    @Published private(set) var sourceItems: [SourceItem] = []
+    @Published private(set) var isScanningSources = false
+
     private var clipsDir: URL!
     private var metadataURL: URL!
+    private var sourcesURL: URL!
     /// The security-scoped URL we currently hold access to (released before we
     /// switch to another project). nil for open/save-panel URLs, which the
     /// sandbox keeps accessible for the whole process without start/stop.
     private var accessingScopedURL: URL?
+    /// Source folders we hold security-scoped access to (resolved from the
+    /// project's stored bookmarks; released on project switch).
+    private var accessingSourceURLs: [URL] = []
+    private var scanTask: Task<Void, Never>?
     private let thumbnailCache = NSCache<NSUUID, NSImage>()
 
     var currentProjectName: String? { currentProjectURL?.lastPathComponent }
@@ -137,9 +148,11 @@ final class LibraryStore: ObservableObject {
         currentProjectURL = url
         clipsDir = url.appendingPathComponent("Clips", isDirectory: true)
         metadataURL = url.appendingPathComponent("clips.json")
+        sourcesURL = url.appendingPathComponent("sources.json")
         try? FileManager.default.createDirectory(at: clipsDir, withIntermediateDirectories: true)
         thumbnailCache.removeAllObjects()
         load()
+        loadSources()
         rememberProject(url)
         return true
     }
@@ -147,6 +160,12 @@ final class LibraryStore: ObservableObject {
     private func releaseCurrentScope() {
         accessingScopedURL?.stopAccessingSecurityScopedResource()
         accessingScopedURL = nil
+        scanTask?.cancel()
+        accessingSourceURLs.forEach { $0.stopAccessingSecurityScopedResource() }
+        accessingSourceURLs = []
+        sourceFolders = []
+        sourceItems = []
+        isScanningSources = false
     }
 
     // MARK: - Recent projects (security-scoped bookmarks)
@@ -209,6 +228,93 @@ final class LibraryStore: ObservableObject {
             defaults.removeObject(forKey: Keys.lastBookmark)
         }
         defaults.set(storedRecentBookmarks().filter { $0 != data }, forKey: Keys.recentBookmarks)
+    }
+
+    // MARK: - Source folders
+
+    /// Loads `sources.json`, takes security-scoped access to each folder, and
+    /// kicks off a scan. Folders whose bookmarks no longer resolve are
+    /// dropped from view but kept on disk (the folder may reappear).
+    private func loadSources() {
+        var folders: [SourceFolder] = []
+        if let data = try? Data(contentsOf: sourcesURL),
+           let records = try? JSONDecoder().decode([SourceFolderRecord].self, from: data) {
+            for record in records {
+                var stale = false
+                guard let url = try? URL(resolvingBookmarkData: record.bookmark,
+                                         options: .withSecurityScope,
+                                         relativeTo: nil,
+                                         bookmarkDataIsStale: &stale)
+                else { continue }
+                if url.startAccessingSecurityScopedResource() {
+                    accessingSourceURLs.append(url)
+                }
+                folders.append(SourceFolder(url: url, bookmark: record.bookmark))
+            }
+        }
+        sourceFolders = folders
+        rescanSources()
+    }
+
+    private func saveSources() {
+        let records = sourceFolders.map {
+            SourceFolderRecord(bookmark: $0.bookmark, path: $0.url.path)
+        }
+        do {
+            let data = try JSONEncoder().encode(records)
+            try data.write(to: sourcesURL, options: .atomic)
+        } catch {
+            lastError = "Could not save source folders: \(error.localizedDescription)"
+        }
+    }
+
+    /// Adds a folder picked in an open panel (already accessible this launch;
+    /// the bookmark regains access on later launches).
+    func addSourceFolder(_ url: URL) {
+        guard hasProject else { return }
+        guard !sourceFolders.contains(where: { $0.id == url.standardizedFileURL.path }) else { return }
+        guard let bookmark = makeBookmark(for: url) else {
+            lastError = "Could not bookmark “\(url.lastPathComponent)” for future launches."
+            return
+        }
+        sourceFolders.append(SourceFolder(url: url, bookmark: bookmark))
+        saveSources()
+        rescanSources()
+    }
+
+    func removeSourceFolder(_ folder: SourceFolder) {
+        sourceFolders.removeAll { $0.id == folder.id }
+        if let idx = accessingSourceURLs.firstIndex(of: folder.url) {
+            accessingSourceURLs[idx].stopAccessingSecurityScopedResource()
+            accessingSourceURLs.remove(at: idx)
+        }
+        saveSources()
+        rescanSources()
+    }
+
+    /// Re-indexes the source folders' media in the background. Cancels and
+    /// replaces any scan already underway.
+    func rescanSources() {
+        scanTask?.cancel()
+        let folders = sourceFolders.map(\.url)
+        guard !folders.isEmpty else {
+            sourceItems = []
+            isScanningSources = false
+            return
+        }
+        isScanningSources = true
+        let projectURL = currentProjectURL
+        scanTask = Task { [weak self] in
+            let items = await SourceScanner.scan(folders: folders, excluding: projectURL)
+            guard !Task.isCancelled else { return }
+            self?.sourceItems = items
+            self?.isScanningSources = false
+        }
+    }
+
+    /// How many clips were picked from this source file ("Added ✓" badge).
+    func usageCount(of item: SourceItem) -> Int {
+        clips.filter { $0.sourcePath == item.url.path }.count
     }
 
     // MARK: - Queries
@@ -336,7 +442,7 @@ final class LibraryStore: ObservableObject {
             }
 
             var clipDate = Date()
-            if let taken = Self.exifCreationDate(of: source) {
+            if let taken = exifCreationDate(of: source) {
                 clipDate = taken
             } else if let attrs = try? FileManager.default.attributesOfItem(atPath: sourceURL.path),
                       let created = attrs[.creationDate] as? Date {
@@ -358,21 +464,34 @@ final class LibraryStore: ObservableObject {
         }
     }
 
-    /// "Date taken" from EXIF/TIFF metadata, e.g. "2026:06:07 18:21:05".
-    private static func exifCreationDate(of source: CGImageSource) -> Date? {
-        guard let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else {
-            return nil
+    /// Registers `draft` (trimmed/cropped/tagged in the review window) as a
+    /// clip picked from source `item`, copying the file into the library —
+    /// or reusing the existing copy when this source was picked before, so
+    /// several segments of one long video share one media file.
+    func pick(_ item: SourceItem, draft: Clip) {
+        guard hasProject else { return }
+        var clip = draft
+        clip.id = UUID()
+        clip.createdAt = Date()
+        clip.sourcePath = item.url.path
+        if let existing = clips.first(where: { $0.sourcePath == item.url.path }) {
+            clip.fileName = existing.fileName
+        } else {
+            let fallbackExt = item.kind == .photo ? "jpg" : "mov"
+            let ext = item.url.pathExtension.isEmpty ? fallbackExt : item.url.pathExtension
+            let newName = UUID().uuidString + "." + ext
+            do {
+                try FileManager.default.copyItem(
+                    at: item.url, to: clipsDir.appendingPathComponent(newName)
+                )
+            } catch {
+                lastError = "Could not copy \(item.url.lastPathComponent): \(error.localizedDescription)"
+                return
+            }
+            clip.fileName = newName
         }
-        let exif = props[kCGImagePropertyExifDictionary] as? [CFString: Any]
-        let tiff = props[kCGImagePropertyTIFFDictionary] as? [CFString: Any]
-        guard let string = exif?[kCGImagePropertyExifDateTimeOriginal] as? String
-                ?? tiff?[kCGImagePropertyTIFFDateTime] as? String else {
-            return nil
-        }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
-        return formatter.date(from: string)
+        clips.append(clip)
+        save()
     }
 
     func update(_ clip: Clip) {
@@ -382,9 +501,13 @@ final class LibraryStore: ObservableObject {
     }
 
     func delete(_ clip: Clip) {
-        try? FileManager.default.removeItem(at: fileURL(for: clip))
-        thumbnailCache.removeObject(forKey: clip.id as NSUUID)
         clips.removeAll { $0.id == clip.id }
+        // Clips picked twice from one source share a media file — only
+        // remove it when the last of them goes.
+        if !clips.contains(where: { $0.fileName == clip.fileName }) {
+            try? FileManager.default.removeItem(at: fileURL(for: clip))
+        }
+        thumbnailCache.removeObject(forKey: clip.id as NSUUID)
         save()
     }
 
@@ -441,6 +564,22 @@ struct RecentProject: Identifiable {
     let bookmark: Data
     var id: String { url.standardizedFileURL.path }
     var name: String { url.lastPathComponent }
+}
+
+/// A folder whose photos/videos feed the review window: resolved location
+/// plus the security-scoped bookmark that regains access across launches.
+struct SourceFolder: Identifiable {
+    let url: URL
+    let bookmark: Data
+    var id: String { url.standardizedFileURL.path }
+    var name: String { url.lastPathComponent }
+}
+
+/// On-disk form of a source folder (`sources.json` in the project root).
+/// Keeps the path alongside the bookmark for human readability.
+private struct SourceFolderRecord: Codable {
+    var bookmark: Data
+    var path: String
 }
 
 /// Save-panel flow for creating a new project folder (name + location).

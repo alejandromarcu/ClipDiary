@@ -19,12 +19,15 @@ Deliberate improvements over 1SE:
   Project… (⇧⌘O — plain ⌘O is the trim editor's Set Out), Open Recent ▸ submenu
   + Clear Menu.
 - `Models.swift` — `Clip` struct (id, fileName, date, inSeconds, outSeconds,
-  durationSeconds, createdAt, tags, kind, crop) + date/time helpers. A clip is
-  a video or a photo (`ClipKind`); photos store their display duration in
-  durationSeconds/outSeconds and an optional `CropRect` (unit coords, top-left
-  origin). Trim/crop are metadata only; media files are never modified
-  (non-destructive). Tags are free-form multi-word strings, deduped
-  case-insensitively.
+  durationSeconds, createdAt, tags, kind, crop, sourcePath) + date/time
+  helpers. A clip is a video or a photo (`ClipKind`); photos store their
+  display duration in durationSeconds/outSeconds and an optional `CropRect`
+  (unit coords, top-left origin). Trim/crop are metadata only; media files are
+  never modified (non-destructive). Tags are free-form multi-word strings,
+  deduped case-insensitively. `sourcePath` records which source-folder file a
+  clip was picked from: clips picked twice from one source (two segments of a
+  long video) **share one copied media file**, so `delete` only removes the
+  file when the last clip referencing it goes.
 - `LibraryStore.swift` — `@MainActor ObservableObject`. Owns the **currently
   open project**: a user-chosen directory (e.g. `~/MyClips/Amelie's life/`)
   holding `clips.json` (ISO-8601 dates) + a `Clips/` subfolder of copied media.
@@ -40,13 +43,43 @@ Deliberate improvements over 1SE:
   ImageIO (photos). `importMedia` routes by UTType. Imported clips default to the recording
   date (video creationDate / photo EXIF DateTimeOriginal, fallback file
   creation date). Also home of `loadOrientedCGImage` (EXIF orientation baked
-  in — crop coords are always relative to the oriented image).
+  in — crop coords are always relative to the oriented image). Owns the
+  project's **source folders** too: `sources.json` in the project root stores
+  security-scoped bookmarks (`SourceFolderRecord`), resolved/accessed on
+  project open and released on switch; `addSourceFolder`/`removeSourceFolder`/
+  `rescanSources` maintain `sourceFolders` + the scanned `sourceItems` index
+  (async `scanTask`, cancelled on changes). `pick(_:draft:)` copies a reviewed
+  source file into `Clips/` (reusing the copy if that source was picked
+  before) and registers the draft clip.
+- `SourceScanner.swift` — `SourceItem` (url, kind, optional `captureDate`)
+  and the recursive directory walk: sync enumeration by UTType (image/movie),
+  then an async pass loading capture times (EXIF DateTimeOriginal via the
+  shared `exifCreationDate`, video creationDate). **No filesystem-date
+  fallback**: files with no embedded date (chat apps strip metadata; FS dates
+  would equal the album's download day) get `captureDate == nil` and sort
+  into an "undated" bucket after all dated items. Skips hidden files,
+  duplicates from overlapping folders, and anything inside the project
+  folder itself.
+- `ReviewView.swift` — `ReviewWindow` (opened by clicking a calendar day):
+  steps through `sourceItems` in capture order starting at that day, ↑/↓ for
+  previous/next (flowing into following days and finally the undated
+  bucket), embeds `TrimEditor`/`PhotoEditor` in review mode on a per-item
+  draft clip, "Add to Clips" (⌘↩) calls `store.pick` and auto-advances;
+  "Added ✓ ×n" badge via `usageCount(of:)`. Undated items show an orange
+  "No capture date" badge, their drafts default to the clicked day, and an
+  "N undated" header button jumps to the bucket. Bottom strip shows the
+  day's picked clips and opens `DaySheet` to edit them. Also
+  `SourceFoldersSheet` (add/remove/rescan source folders; auto-presented
+  when a project has no clips and no sources) and
+  `presentAddSourceFolderPanel`.
 - `ContentView.swift` — month calendar grid (LazyVGrid, 7 columns, respects
-  `calendar.firstWeekday`), day cells with thumbnails and clip-count badges,
-  toolbar with an Import menu (Import Media… fileImporter multi-select,
-  Import 1SE Video…) and Export Month.
-  Also contains `ExportSheet` (portrait 1080×1920 / landscape 1920×1080
-  picker, NSSavePanel, progress bar).
+  `calendar.firstWeekday`), day cells with thumbnails and clip-count badges.
+  **Clicking a day opens the review window** (`ReviewRequest` via openWindow);
+  the per-day clip editor (`DaySheet`) is on the day cell's context menu and
+  in the review window's picked strip. Toolbar: Sources sheet, an Import menu
+  (Import Media… fileImporter multi-select, Import 1SE Video…) and Export
+  Month. Also contains `ExportSheet` (portrait 1080×1920 / landscape
+  1920×1080 picker, NSSavePanel, progress bar).
 - `TrimView.swift` — `DaySheet` (per-day editor, clip picker if a day has
   multiple clips, routes to `TrimEditor` or `PhotoEditor` by kind, date
   reassignment, delete), `TagRow` (shared tag chips + new-tag field + reuse
@@ -54,10 +87,14 @@ Deliberate improvements over 1SE:
   in/out handles, min gap 0.1s). Set In/Set Out buttons (⌘I/⌘O) mark trim
   points at the current playback time. "Preview Trim" plays exactly the
   in→out segment using a periodic time observer to pause at the out point.
+  `TrimEditor` has two modes: library (auto-saves on disappear, can delete)
+  and **review** (`sourceURL:` plays the original source file, `onAdd:` shows
+  an "Add to Clips" ⌘↩ button handing back the configured draft).
 - `PhotoView.swift` — `PhotoEditor` (crop, display-duration stepper, aspect
   lock picker Free/16:9/9:16, tags, date, delete) and `PhotoCropView`
   (aspect-fit photo, draggable yellow corner handles + move-inside gesture,
   min crop 5%; an aspect lock snaps the crop and constrains corner drags).
+  Same library/review modes as `TrimEditor`.
 - `MashImport.swift` — "Import 1SE Video": splits a mashed 1 Second Everyday
   export into per-day clips by OCR'ing (Vision) the date stamp burned into
   the bottom-left corner ("MAR 03 2026"). Coarse 0.3s sampling pass, then
@@ -103,6 +140,12 @@ editors); 1SE imports default it off (their frames are already stamped).
 Export burns it in via `AVVideoCompositionCoreAnimationTool`; the preview
 window draws the same stamp as a synced SwiftUI overlay, sized by the shared
 `DateStamp` constants in Models.swift.
+The primary population flow is **source folders + review**: each project
+lists folders (e.g. the month's photo dump) scanned recursively into a
+chronological index; clicking a day reviews that day's media one by one
+(↑/↓ navigate, crossing into later days; ⌘↩ adds the trimmed/cropped draft
+and advances). Source files are copied into `Clips/` only when picked. The
+old Import menu still works for one-off files.
 
 ## Roadmap ideas (not yet built)
 
