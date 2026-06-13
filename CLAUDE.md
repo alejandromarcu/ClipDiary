@@ -48,9 +48,12 @@ Deliberate improvements over 1SE:
   security-scoped bookmarks (`SourceFolderRecord`), resolved/accessed on
   project open and released on switch; `addSourceFolder`/`removeSourceFolder`/
   `rescanSources` maintain `sourceFolders` + the scanned `sourceItems` index
-  (async `scanTask`, cancelled on changes). `pick(_:draft:)` copies a reviewed
-  source file into `Clips/` (reusing the copy if that source was picked
-  before) and registers the draft clip.
+  (async `scanTask`, cancelled on changes). `pick(_:draft:from:)` copies a
+  reviewed source file into `Clips/` (reusing the copy if that source was
+  picked before) and registers the draft clip; `from:` chooses the still or a
+  Live Photo's motion video. `availability(on:)`/`availability(inMonthOf:)`
+  tally a day's/month's source videos (count + length) and photos for the
+  calendar, counting Live Photos as photos.
 - `SourceScanner.swift` — `SourceItem` (url, kind, optional `captureDate`)
   and the recursive directory walk: sync enumeration by UTType (image/movie),
   then an async pass loading capture times (EXIF DateTimeOriginal via the
@@ -59,7 +62,11 @@ Deliberate improvements over 1SE:
   would equal the album's download day) get `captureDate == nil` and sort
   into an "undated" bucket after all dated items. Skips hidden files,
   duplicates from overlapping folders, and anything inside the project
-  folder itself.
+  folder itself. **Live Photos** (a still + a same-folder, same-basename
+  video, e.g. `IMG_1234.JPG` + `IMG_1234.MOV/.MP4` from iPhone/Google
+  exports) are paired into one photo `SourceItem` carrying the motion clip in
+  `motionURL` (+ its `duration`); the motion file is not surfaced as its own
+  video, so a Live Photo counts as one photo, not a phantom extra video.
 - `ReviewView.swift` — `ReviewWindow` (opened by clicking a calendar day):
   steps through `sourceItems` in capture order starting at that day, ↑/↓ for
   previous/next (flowing into following days and finally the undated
@@ -67,13 +74,20 @@ Deliberate improvements over 1SE:
   draft clip, "Add to Clips" (⌘↩) calls `store.pick` and auto-advances;
   "Added ✓ ×n" badge via `usageCount(of:)`. Undated items show an orange
   "No capture date" badge, their drafts default to the clicked day, and an
-  "N undated" header button jumps to the bucket. Bottom strip shows the
+  "N undated" header button jumps to the bucket. A **Live Photo** shows a
+  "Photo / Video" segmented picker (`useMotion`): Photo embeds `PhotoEditor`
+  on the still, Video embeds `TrimEditor` on the motion clip; ⌘↩ then picks
+  whichever (copying the still or the motion file). Bottom strip shows the
   day's picked clips and opens `DaySheet` to edit them. Also
   `SourceFoldersSheet` (add/remove/rescan source folders; auto-presented
   when a project has no clips and no sources) and
   `presentAddSourceFolderPanel`.
-- `ContentView.swift` — month calendar grid (LazyVGrid, 7 columns, respects
-  `calendar.firstWeekday`), day cells with thumbnails and clip-count badges.
+- `ContentView.swift` — month calendar grid (week-row `VStack`/`HStack`s, 7
+  columns, respects `calendar.firstWeekday`) that fills the window height with
+  hairline cell borders so cells grow when the window does. Day cells show a
+  thumbnail + picked-clip badge and a source-availability footer (video count
+  + length, photo count from `store.availability(on:)`); the month header
+  carries the same month-wide tally.
   **Clicking a day opens the review window** (`ReviewRequest` via openWindow);
   the per-day clip editor (`DaySheet`) is on the day cell's context menu and
   in the review window's picked strip. Toolbar: Sources sheet, an Import menu

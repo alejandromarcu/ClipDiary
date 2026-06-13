@@ -36,6 +36,9 @@ struct ReviewWindow: View {
     /// clip (e.g. a photo saved as a video).
     @State private var draftItemID: String?
     @State private var draftError: String?
+    /// For a Live Photo, whether the user chose its motion video over the
+    /// still. Reset to the still each time a new item comes up.
+    @State private var useMotion = false
     /// Day whose picked clips are being edited in a sheet.
     @State private var editDay: DaySelection?
     @State private var showSources = false
@@ -95,7 +98,17 @@ struct ReviewWindow: View {
         }
         .onAppear { ensurePosition() }
         .onChange(of: store.sourceItems) { _, _ in ensurePosition() }
-        .task(id: currentID) { await buildDraft() }
+        // Rebuild when the item changes or the Live Photo still/motion choice
+        // flips — the draft is a photo or a video clip accordingly. Both state
+        // changes in one navigation batch into a single rebuild.
+        .task(id: DraftRequest(itemID: currentID, motion: useMotion)) { await buildDraft() }
+    }
+
+    /// Identity of the draft to build: which item, and (Live Photos) whether
+    /// to use the motion video instead of the still.
+    private struct DraftRequest: Hashable {
+        let itemID: String?
+        let motion: Bool
     }
 
     // MARK: - Subviews
@@ -119,6 +132,14 @@ struct ReviewWindow: View {
                         .padding(.horizontal, 8).padding(.vertical, 3)
                         .background(Capsule().fill(.orange.opacity(0.15)))
                         .help("This file carries no date (often stripped by chat apps) — pick the day below before adding")
+                }
+                if item.isLivePhoto {
+                    Label("Live Photo", systemImage: "livephoto")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Capsule().fill(Color.secondary.opacity(0.12)))
+                        .help("Add this as the still image, or switch to its short motion video below")
                 }
                 let used = store.usageCount(of: item)
                 if used > 0 {
@@ -204,14 +225,8 @@ struct ReviewWindow: View {
                     Button("Skip to Next") { next() }
                 }
             } else if let draft, draftItemID == item.id {
-                Group {
-                    if item.kind == .photo {
-                        PhotoEditor(clip: draft, sourceURL: item.url) { add($0) }
-                    } else {
-                        TrimEditor(clip: draft, sourceURL: item.url) { add($0) }
-                    }
-                }
-                .id(item.id)
+                editor(for: item, draft: draft)
+                    .id(useMotion ? "\(item.id)#motion" : item.id)
             } else {
                 ProgressView("Loading \(item.fileName)…")
             }
@@ -235,6 +250,41 @@ struct ReviewWindow: View {
         }
     }
 
+    /// The trim/photo editor for the current item. Live Photos get a
+    /// segmented control to choose the still or the motion video; the rest of
+    /// the editor (and the draft) follows that choice.
+    @ViewBuilder
+    private func editor(for item: SourceItem, draft: Clip) -> some View {
+        VStack(spacing: 10) {
+            if item.isLivePhoto {
+                Picker("", selection: $useMotion) {
+                    Text("Photo").tag(false)
+                    Text(motionLabel(for: item)).tag(true)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                .help("This is a Live Photo — add it as the still image, or use its short motion video")
+            }
+
+            if useMotion, let motion = item.motionURL {
+                TrimEditor(clip: draft, sourceURL: motion) { add($0) }
+            } else if item.kind == .photo {
+                PhotoEditor(clip: draft, sourceURL: item.url) { add($0) }
+            } else {
+                TrimEditor(clip: draft, sourceURL: item.url) { add($0) }
+            }
+        }
+    }
+
+    /// "Video · 0:03" when the motion length is known, else "Video".
+    private func motionLabel(for item: SourceItem) -> String {
+        if let duration = item.duration {
+            return "Video · \(formatDurationShort(duration))"
+        }
+        return "Video"
+    }
+
     // MARK: - Navigation
 
     /// Puts the cursor on the first item of `startDay` (or the next day that
@@ -253,12 +303,14 @@ struct ReviewWindow: View {
     /// Jumps to the first item of the undated bucket.
     private func jumpToUndated() {
         guard let id = items.first(where: \.isUndated)?.id else { return }
+        useMotion = false
         currentID = id
         reachedEnd = false
     }
 
     private func next() {
         guard let idx = currentIndex else { return }
+        useMotion = false
         if idx + 1 < items.count {
             currentID = items[idx + 1].id
         } else {
@@ -268,6 +320,7 @@ struct ReviewWindow: View {
     }
 
     private func previous() {
+        useMotion = false
         if reachedEnd {
             currentID = items.last?.id
             reachedEnd = false
@@ -279,7 +332,9 @@ struct ReviewWindow: View {
 
     private func add(_ clip: Clip) {
         guard let item = current else { return }
-        store.pick(item, draft: clip)
+        // A Live Photo added as its motion copies the video, not the still.
+        let source = (useMotion && item.isLivePhoto) ? item.motionURL : nil
+        store.pick(item, draft: clip, from: source)
         next()
     }
 
@@ -293,22 +348,18 @@ struct ReviewWindow: View {
         // Undated items default to the clicked day — the badge reminds the
         // user to set the real one in the editor's date picker.
         let day = (item.captureDate ?? startDay).dayKey
-        switch item.kind {
-        case .photo:
-            draft = Clip(
-                fileName: "",
-                date: day,
-                outSeconds: LibraryStore.defaultPhotoDuration,
-                durationSeconds: LibraryStore.defaultPhotoDuration,
-                kind: .photo
-            )
-            draftItemID = item.id
-        case .video:
-            let asset = AVURLAsset(url: item.url)
+
+        // A plain video, or a Live Photo the user switched to its motion clip,
+        // builds a video draft from that file; otherwise it's a photo draft.
+        let videoURL: URL? = item.kind == .video ? item.url
+            : (item.isLivePhoto && useMotion ? item.motionURL : nil)
+
+        if let videoURL {
+            let asset = AVURLAsset(url: videoURL)
             guard let duration = try? await asset.load(.duration).seconds,
                   duration.isFinite, duration > 0 else {
                 if !Task.isCancelled {
-                    draftError = "\(item.fileName) doesn't look like a playable video."
+                    draftError = "\(videoURL.lastPathComponent) doesn't look like a playable video."
                 }
                 return
             }
@@ -318,6 +369,15 @@ struct ReviewWindow: View {
                 date: day,
                 outSeconds: duration,
                 durationSeconds: duration
+            )
+            draftItemID = item.id
+        } else {
+            draft = Clip(
+                fileName: "",
+                date: day,
+                outSeconds: LibraryStore.defaultPhotoDuration,
+                durationSeconds: LibraryStore.defaultPhotoDuration,
+                kind: .photo
             )
             draftItemID = item.id
         }

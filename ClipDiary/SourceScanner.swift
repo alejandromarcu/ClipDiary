@@ -15,14 +15,20 @@ struct SourceItem: Identifiable, Hashable {
     /// day the album was downloaded. Undated items are reviewed in a bucket
     /// after all dated days instead of being placed on a guessed day.
     let captureDate: Date?
-    /// Video files only: full duration in seconds, loaded during the scan so
-    /// the calendar can show a day's available footage length. nil for photos
-    /// or when it can't be read.
+    /// Duration in seconds, loaded during the scan: a standalone video's
+    /// length, or — for a Live Photo — its motion clip's length. nil for plain
+    /// photos or when it can't be read. Lets the calendar show a day's
+    /// available footage length and the review window label the motion option.
     var duration: Double? = nil
+    /// Live Photos only: the paired motion video sitting next to the still
+    /// (same folder + basename). nil for everything else. When set, the item
+    /// is a photo that can optionally be added as its short video instead.
+    var motionURL: URL? = nil
 
     var id: String { url.path }
     var fileName: String { url.lastPathComponent }
     var isUndated: Bool { captureDate == nil }
+    var isLivePhoto: Bool { motionURL != nil }
 }
 
 extension URL {
@@ -43,12 +49,42 @@ enum SourceScanner {
     /// folder, whose `Clips/` holds copies — are ignored, as are duplicates
     /// when folders overlap.
     static func scan(folders: [URL], excluding excluded: URL?) async -> [SourceItem] {
+        let files = enumerateMedia(in: folders, excluding: excluded)
+
+        // Pair Live Photos: iPhone/Google exports write a still and its motion
+        // clip side by side with the same basename (IMG_1234.JPG +
+        // IMG_1234.MOV/.MP4). The still represents the moment; the video
+        // becomes its optional motion, so the pair counts as one photo rather
+        // than a phantom extra video. Indexes are built up front so the result
+        // doesn't depend on filesystem enumeration order.
+        var videoByStem: [String: URL] = [:]
+        var stemsWithStill = Set<String>()
+        for file in files {
+            switch file.kind {
+            case .video: videoByStem[stem(of: file.url)] = file.url
+            case .photo: stemsWithStill.insert(stem(of: file.url))
+            }
+        }
+
         var items: [SourceItem] = []
-        for file in enumerateMedia(in: folders, excluding: excluded) {
+        for file in files {
             if Task.isCancelled { return [] }
-            let meta = await metadata(of: file.url, kind: file.kind)
-            items.append(SourceItem(url: file.url, kind: file.kind,
-                                    captureDate: meta.date, duration: meta.duration))
+            switch file.kind {
+            case .photo:
+                let motion = videoByStem[stem(of: file.url)]
+                let motionDuration = motion == nil
+                    ? nil : await metadata(of: motion!, kind: .video).duration
+                let date = await metadata(of: file.url, kind: .photo).date
+                items.append(SourceItem(url: file.url, kind: .photo, captureDate: date,
+                                        duration: motionDuration, motionURL: motion))
+            case .video:
+                // A video paired with a still is that Live Photo's motion, not
+                // a standalone clip — it surfaces through the still instead.
+                if stemsWithStill.contains(stem(of: file.url)) { continue }
+                let meta = await metadata(of: file.url, kind: .video)
+                items.append(SourceItem(url: file.url, kind: .video,
+                                        captureDate: meta.date, duration: meta.duration))
+            }
         }
         return items.sorted { a, b in
             switch (a.captureDate, b.captureDate) {
@@ -92,6 +128,12 @@ enum SourceScanner {
             }
         }
         return found
+    }
+
+    /// Folder + basename without extension, lowercased — the key that pairs a
+    /// Live Photo's still with its motion clip regardless of extension casing.
+    private static func stem(of url: URL) -> String {
+        url.deletingPathExtension().path.lowercased()
     }
 
     private static func mediaKind(of type: UTType) -> ClipKind? {
