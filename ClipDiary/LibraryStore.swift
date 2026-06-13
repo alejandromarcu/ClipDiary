@@ -332,10 +332,12 @@ final class LibraryStore: ObservableObject {
         }
     }
 
-    /// How many clips were picked from this source file ("Added ✓" badge).
+    /// How many clips were picked from this source item ("Added ✓" badge) —
+    /// counting both the still and, for a Live Photo, its motion clip.
     func usageCount(of item: SourceItem) -> Int {
-        let path = item.url.canonicalSourcePath
-        return clips.filter { $0.sourcePath == path }.count
+        var paths: Set<String> = [item.url.canonicalSourcePath]
+        if let motion = item.motionURL { paths.insert(motion.canonicalSourcePath) }
+        return clips.filter { ($0.sourcePath).map(paths.contains) ?? false }.count
     }
 
     /// What's available to review for a day: how many source videos (and their
@@ -516,25 +518,30 @@ final class LibraryStore: ObservableObject {
     /// clip picked from source `item`, copying the file into the library —
     /// or reusing the existing copy when this source was picked before, so
     /// several segments of one long video share one media file.
-    func pick(_ item: SourceItem, draft: Clip) {
+    /// `from` selects which file to copy: the item's still by default, or its
+    /// Live Photo motion clip when the user chose to add that instead. The
+    /// still and the motion are distinct sources, so picking both yields two
+    /// clips (and two copies), while re-picking the same one reuses its copy.
+    func pick(_ item: SourceItem, draft: Clip, from sourceURL: URL? = nil) {
         guard hasProject else { return }
+        let source = sourceURL ?? item.url
         var clip = draft
         clip.id = UUID()
         clip.createdAt = Date()
-        let sourcePath = item.url.canonicalSourcePath
+        let sourcePath = source.canonicalSourcePath
         clip.sourcePath = sourcePath
         if let existing = clips.first(where: { $0.sourcePath == sourcePath }) {
             clip.fileName = existing.fileName
         } else {
-            let fallbackExt = item.kind == .photo ? "jpg" : "mov"
-            let ext = item.url.pathExtension.isEmpty ? fallbackExt : item.url.pathExtension
+            let fallbackExt = clip.kind == .photo ? "jpg" : "mov"
+            let ext = source.pathExtension.isEmpty ? fallbackExt : source.pathExtension
             let newName = UUID().uuidString + "." + ext
             do {
                 try FileManager.default.copyItem(
-                    at: item.url, to: clipsDir.appendingPathComponent(newName)
+                    at: source, to: clipsDir.appendingPathComponent(newName)
                 )
             } catch {
-                lastError = "Could not copy \(item.url.lastPathComponent): \(error.localizedDescription)"
+                lastError = "Could not copy \(source.lastPathComponent): \(error.localizedDescription)"
                 return
             }
             clip.fileName = newName
