@@ -99,6 +99,13 @@ struct PhotoEditor: View {
 
             TagRow(tags: $clip.tags)
 
+            HStack(spacing: 8) {
+                Image(systemName: "captions.bubble")
+                    .foregroundStyle(.secondary)
+                TextField("Caption (optional)", text: $clip.caption)
+                    .textFieldStyle(.roundedBorder)
+            }
+
             Divider()
 
             HStack {

@@ -570,6 +570,7 @@ struct PreviewWindow: View {
     @State private var player: AVPlayer?
     @State private var errorMessage: String?
     @State private var stampText: String?
+    @State private var captionText: String?
     @State private var stampObserver: Any?
 
     var body: some View {
@@ -600,23 +601,34 @@ struct PreviewWindow: View {
                 }
             }
             .aspectRatio(orientation.size, contentMode: .fit)
-            // Same date stamp the export burns in (the export's Core
-            // Animation overlay doesn't render through AVPlayer, so the
-            // preview draws it itself at matching proportions).
+            // Same date stamp and caption the export burns in (the export's
+            // Core Animation overlay doesn't render through AVPlayer, so the
+            // preview draws them itself at matching proportions).
             .overlay {
-                if let stampText {
+                if stampText != nil || captionText != nil {
                     GeometryReader { geo in
                         let base = min(geo.size.width, geo.size.height)
                         let fontSize = base * DateStamp.fontFraction
-                        Text(stampText)
-                            .font(.system(size: fontSize, weight: .bold))
-                            .kerning(fontSize * DateStamp.trackingFraction)
-                            .foregroundStyle(.white)
-                            .shadow(color: .black.opacity(0.6), radius: 2)
-                            .padding(.leading, base * DateStamp.leftMarginFraction)
-                            .padding(.bottom, base * DateStamp.bottomMarginFraction)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity,
-                                   alignment: .bottomLeading)
+                        VStack(alignment: .leading, spacing: fontSize * 0.15) {
+                            if let captionText {
+                                Text(captionText)
+                                    .font(.system(size: fontSize, weight: .bold))
+                                    .kerning(fontSize * DateStamp.trackingFraction)
+                                    .foregroundStyle(.white)
+                                    .shadow(color: .black.opacity(0.6), radius: 2)
+                            }
+                            if let stampText {
+                                Text(stampText)
+                                    .font(.system(size: fontSize, weight: .bold))
+                                    .kerning(fontSize * DateStamp.trackingFraction)
+                                    .foregroundStyle(.white)
+                                    .shadow(color: .black.opacity(0.6), radius: 2)
+                            }
+                        }
+                        .padding(.leading, base * DateStamp.leftMarginFraction)
+                        .padding(.bottom, base * DateStamp.bottomMarginFraction)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity,
+                               alignment: .bottomLeading)
                     }
                     .allowsHitTesting(false)
                 }
@@ -662,13 +674,18 @@ struct PreviewWindow: View {
             self.built = built
             self.player = player
 
-            // Track which clip is playing so the date stamp follows along.
+            // Track which clip is playing so the date stamp and caption follow along.
             let overlays = built.dateOverlays
-            stampText = overlays.first { $0.timeRange.containsTime(.zero) }?.text
+            func updateOverlay(at time: CMTime) {
+                let o = overlays.first { $0.timeRange.containsTime(time) }
+                stampText = o.flatMap { $0.text.isEmpty ? nil : $0.text }
+                captionText = o.flatMap { $0.caption.isEmpty ? nil : $0.caption }
+            }
+            updateOverlay(at: .zero)
             stampObserver = player.addPeriodicTimeObserver(
                 forInterval: CMTime(value: 1, timescale: 10), queue: .main
             ) { time in
-                stampText = overlays.first { $0.timeRange.containsTime(time) }?.text
+                updateOverlay(at: time)
             }
 
             player.play()
@@ -683,6 +700,7 @@ struct PreviewWindow: View {
         }
         stampObserver = nil
         stampText = nil
+        captionText = nil
         player?.pause()
         player = nil
     }
