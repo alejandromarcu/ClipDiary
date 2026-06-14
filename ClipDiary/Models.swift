@@ -18,6 +18,10 @@ struct ProjectSettings: Codable, Equatable {
     var fadeOutLastClip: Bool = false
     /// Length of that fade, in seconds (ignored when `fadeOutLastClip` is off).
     var fadeOutSeconds: Double = 1.0
+    /// The time range last chosen in the Create Video window, remembered per
+    /// project. `nil` means "never changed" — the window then defaults to the
+    /// current month, which keeps following the calendar instead of sticking.
+    var renderRange: RenderRange? = nil
 
     /// The fade length to actually apply, or nil when fading is disabled.
     var effectiveFadeOutSeconds: Double? {
@@ -39,7 +43,7 @@ struct ProjectSettings: Codable, Equatable {
     init() {}
 
     enum CodingKeys: String, CodingKey {
-        case orientation, fadeOutLastClip, fadeOutSeconds
+        case orientation, fadeOutLastClip, fadeOutSeconds, renderRange
     }
 
     init(from decoder: Decoder) throws {
@@ -47,7 +51,108 @@ struct ProjectSettings: Codable, Equatable {
         orientation = try c.decodeIfPresent(Orientation.self, forKey: .orientation) ?? .landscape
         fadeOutLastClip = try c.decodeIfPresent(Bool.self, forKey: .fadeOutLastClip) ?? false
         fadeOutSeconds = try c.decodeIfPresent(Double.self, forKey: .fadeOutSeconds) ?? 1.0
+        renderRange = try c.decodeIfPresent(RenderRange.self, forKey: .renderRange)
     }
+}
+
+/// A span of calendar days rendered into one video — a specific month, a
+/// specific year, the whole project, or an explicit start…end. Chosen in the
+/// Create Video window and used by both Preview and Export. Persists in
+/// `settings.json` and rides along as the Preview window's value, so it stays
+/// `Codable`/`Hashable` (both synthesized for enums with associated values).
+enum RenderRange: Codable, Hashable {
+    case month(Date)
+    case year(Date)
+    case all
+    case custom(start: Date, end: Date)
+
+    /// Whether `date`'s calendar day falls within the range (inclusive ends).
+    func contains(_ date: Date) -> Bool {
+        switch self {
+        case .month(let anchor):
+            return date.isSameMonth(as: anchor)
+        case .year(let anchor):
+            let cal = Calendar.current
+            return cal.component(.year, from: date) == cal.component(.year, from: anchor)
+        case .all:
+            return true
+        case .custom(let start, let end):
+            let day = date.dayKey
+            return day >= start.dayKey && day <= end.dayKey
+        }
+    }
+
+    /// Human-readable label for titles and summaries, e.g. "June 2026", "2026",
+    /// "All clips", "Jan 1, 2026 – Mar 31, 2026".
+    var label: String {
+        switch self {
+        case .month(let anchor):
+            return anchor.formatted(.dateTime.month(.wide).year())
+        case .year(let anchor):
+            return String(Calendar.current.component(.year, from: anchor))
+        case .all:
+            return "All clips"
+        case .custom(let start, let end):
+            let s = start.formatted(date: .abbreviated, time: .omitted)
+            let e = end.formatted(date: .abbreviated, time: .omitted)
+            return "\(s) – \(e)"
+        }
+    }
+
+    /// Filename-safe version of `label` for the export's default save name.
+    var fileNameLabel: String {
+        switch self {
+        case .month, .year:
+            return label
+        case .all:
+            return "All"
+        case .custom(let start, let end):
+            return "\(Self.fileDateFormatter.string(from: start))–\(Self.fileDateFormatter.string(from: end))"
+        }
+    }
+
+    /// The representative date a range hangs off — its month/year, the start of
+    /// a custom range, or today for `.all`. Used to seed the picker controls.
+    var anchorDate: Date {
+        switch self {
+        case .month(let anchor), .year(let anchor): return anchor
+        case .all: return Date()
+        case .custom(let start, _): return start
+        }
+    }
+
+    /// The same range with its year replaced (month and year cases only).
+    func withYear(_ year: Int) -> RenderRange {
+        let cal = Calendar.current
+        switch self {
+        case .month(let anchor):
+            var comps = cal.dateComponents([.year, .month], from: anchor)
+            comps.year = year
+            return .month(cal.date(from: comps) ?? anchor)
+        case .year(let anchor):
+            var comps = cal.dateComponents([.year], from: anchor)
+            comps.year = year
+            return .year(cal.date(from: comps) ?? anchor)
+        default:
+            return self
+        }
+    }
+
+    /// The same range with its month replaced (month case only).
+    func withMonth(_ month: Int) -> RenderRange {
+        guard case .month(let anchor) = self else { return self }
+        let cal = Calendar.current
+        var comps = cal.dateComponents([.year, .month], from: anchor)
+        comps.month = month
+        return .month(cal.date(from: comps) ?? anchor)
+    }
+
+    private static let fileDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
 }
 
 /// Crop rectangle in unit image coordinates (origin top-left, values 0…1).
