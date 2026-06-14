@@ -42,6 +42,9 @@ struct Clip: Identifiable, Codable, Equatable, Hashable {
     /// corner. Off by default for 1SE imports, whose frames already carry a
     /// stamp; also handy off for cover photos.
     var showsDateOverlay: Bool = true
+    /// Optional short caption rendered above the date stamp in the month video,
+    /// e.g. "first time skating". Empty string means no caption.
+    var caption: String = ""
     /// Path of the source-folder file this clip was picked from, if any.
     /// Several clips may share one source (and one copied media file), e.g.
     /// two segments cut from the same long video.
@@ -67,7 +70,7 @@ struct Clip: Identifiable, Codable, Equatable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id, fileName, date, inSeconds, outSeconds, durationSeconds, createdAt,
-             tags, kind, crop, showsDateOverlay, sourcePath
+             tags, kind, crop, showsDateOverlay, caption, sourcePath
     }
 }
 
@@ -86,6 +89,7 @@ extension Clip {
         kind = try container.decodeIfPresent(ClipKind.self, forKey: .kind) ?? .video
         crop = try container.decodeIfPresent(CropRect.self, forKey: .crop)
         showsDateOverlay = try container.decodeIfPresent(Bool.self, forKey: .showsDateOverlay) ?? true
+        caption = try container.decodeIfPresent(String.self, forKey: .caption) ?? ""
         sourcePath = try container.decodeIfPresent(String.self, forKey: .sourcePath)
     }
 }

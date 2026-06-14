@@ -18,10 +18,11 @@ enum ExportError: LocalizedError {
     }
 }
 
-/// One stretch of the stitched timeline that shows a date stamp.
+/// One stretch of the stitched timeline that shows a date stamp (and optional caption).
 struct DateOverlay {
     let timeRange: CMTimeRange
     let text: String
+    let caption: String
 }
 
 /// A stitched month ready to play or export. Photo clips live as rendered
@@ -182,10 +183,11 @@ struct Exporter {
             instruction.layerInstructions = [layer]
             instructions.append(instruction)
 
-            if clip.showsDateOverlay {
+            if clip.showsDateOverlay || !clip.caption.isEmpty {
                 overlays.append(DateOverlay(
                     timeRange: CMTimeRange(start: cursor, duration: range.duration),
-                    text: DateStamp.text(for: clip.date)
+                    text: clip.showsDateOverlay ? DateStamp.text(for: clip.date) : "",
+                    caption: clip.caption
                 ))
             }
 
@@ -227,40 +229,54 @@ struct Exporter {
         let leftMargin = base * DateStamp.leftMarginFraction
         let bottomMargin = base * DateStamp.bottomMarginFraction
 
+        let lineHeight = fontSize * 1.4
+        let lineGap = fontSize * 0.15
+
         for overlay in overlays {
-            let layer = CATextLayer()
-            layer.string = NSAttributedString(string: overlay.text, attributes: [
-                .font: NSFont.systemFont(ofSize: fontSize, weight: .bold),
-                .kern: fontSize * DateStamp.trackingFraction,
-                .foregroundColor: NSColor.white,
-            ])
-            layer.alignmentMode = .left
-            layer.contentsScale = 2
-            // The animation tool's coordinate space has a bottom-left origin.
-            layer.frame = CGRect(
-                x: leftMargin, y: bottomMargin,
-                width: renderSize.width - leftMargin, height: fontSize * 1.4
-            )
-            layer.shadowColor = CGColor(gray: 0, alpha: 1)
-            layer.shadowOpacity = 0.6
-            layer.shadowRadius = fontSize * 0.06
-            layer.shadowOffset = .zero
+            let beginTime = max(overlay.timeRange.start.seconds, AVCoreAnimationBeginTimeAtZero)
+            let duration = overlay.timeRange.duration.seconds
 
-            // Visible only during the clip's segment: a frozen opacity
-            // animation spans the time range (beginTime 0 means "now" to
-            // Core Animation, hence AVCoreAnimationBeginTimeAtZero).
-            layer.opacity = 0
-            let visible = CABasicAnimation(keyPath: "opacity")
-            visible.fromValue = 1.0
-            visible.toValue = 1.0
-            visible.beginTime = max(overlay.timeRange.start.seconds,
-                                    AVCoreAnimationBeginTimeAtZero)
-            visible.duration = overlay.timeRange.duration.seconds
-            visible.fillMode = .removed
-            visible.isRemovedOnCompletion = false
-            layer.add(visible, forKey: "visible")
+            func makeTextLayer(text: String, y: CGFloat) -> CATextLayer {
+                let layer = CATextLayer()
+                layer.string = NSAttributedString(string: text, attributes: [
+                    .font: NSFont.systemFont(ofSize: fontSize, weight: .bold),
+                    .kern: fontSize * DateStamp.trackingFraction,
+                    .foregroundColor: NSColor.white,
+                ])
+                layer.alignmentMode = .left
+                layer.contentsScale = 2
+                // The animation tool's coordinate space has a bottom-left origin.
+                layer.frame = CGRect(
+                    x: leftMargin, y: y,
+                    width: renderSize.width - leftMargin, height: lineHeight
+                )
+                layer.shadowColor = CGColor(gray: 0, alpha: 1)
+                layer.shadowOpacity = 0.6
+                layer.shadowRadius = fontSize * 0.06
+                layer.shadowOffset = .zero
 
-            parentLayer.addSublayer(layer)
+                // Visible only during the clip's segment: a frozen opacity
+                // animation spans the time range (beginTime 0 means "now" to
+                // Core Animation, hence AVCoreAnimationBeginTimeAtZero).
+                layer.opacity = 0
+                let visible = CABasicAnimation(keyPath: "opacity")
+                visible.fromValue = 1.0
+                visible.toValue = 1.0
+                visible.beginTime = beginTime
+                visible.duration = duration
+                visible.fillMode = .removed
+                visible.isRemovedOnCompletion = false
+                layer.add(visible, forKey: "visible")
+                return layer
+            }
+
+            if !overlay.text.isEmpty {
+                parentLayer.addSublayer(makeTextLayer(text: overlay.text, y: bottomMargin))
+            }
+            if !overlay.caption.isEmpty {
+                let captionY = bottomMargin + lineHeight + lineGap
+                parentLayer.addSublayer(makeTextLayer(text: overlay.caption, y: captionY))
+            }
         }
 
         return AVVideoCompositionCoreAnimationTool(
