@@ -13,6 +13,7 @@ struct ContentView: View {
     @State private var mashSource: MashSource?
     @State private var showExportSheet = false
     @State private var showSourcesSheet = false
+    @State private var showSettingsSheet = false
     @Environment(\.openWindow) private var openWindow
     @State private var tagFilter: String?
 
@@ -63,10 +64,11 @@ struct ContentView: View {
                 .disabled(store.allTags.isEmpty)
             }
             ToolbarItem(placement: .primaryAction) {
-                Button { showSourcesSheet = true } label: {
-                    Label("Sources", systemImage: "folder.badge.gearshape")
+                Button { showSettingsSheet = true } label: {
+                    Label("Project Settings", systemImage: "gearshape")
                 }
-                .help("Manage the folders scanned for this project's photos and videos")
+                .help("Project settings: video format, ending fade, and source folders")
+                .keyboardShortcut(",", modifiers: .command)
             }
             ToolbarItem(placement: .primaryAction) {
                 Menu {
@@ -127,6 +129,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showSourcesSheet) {
             SourceFoldersSheet().environmentObject(store)
+        }
+        .sheet(isPresented: $showSettingsSheet) {
+            ProjectSettingsSheet().environmentObject(store)
         }
         // A freshly created project has neither clips nor sources — offer the
         // source-folder setup right away. onAppear covers arriving from the
@@ -456,20 +461,9 @@ struct ExportSheet: View {
     let month: Date
     var tagFilter: String?
 
-    @State private var orientation: Orientation = .landscape
     @State private var isExporting = false
     @State private var progress: Double = 0
     @State private var errorMessage: String?
-
-    enum Orientation: String, CaseIterable, Identifiable {
-        case portrait = "Portrait (1080×1920)"
-        case landscape = "Landscape (1920×1080)"
-        var id: String { rawValue }
-        var size: CGSize {
-            self == .portrait ? CGSize(width: 1080, height: 1920)
-                              : CGSize(width: 1920, height: 1080)
-        }
-    }
 
     var body: some View {
         let clips = store.clips(inMonthOf: month, taggedWith: tagFilter)
@@ -487,11 +481,18 @@ struct ExportSheet: View {
             Text("\(clips.count) clips, total length \(formatTime(total)). Clips are stitched in date order using their trimmed in/out points.")
                 .foregroundStyle(.secondary)
 
-            Picker("Format", selection: $orientation) {
-                ForEach(Orientation.allCases) { Text($0.rawValue).tag($0) }
+            HStack(spacing: 6) {
+                Text("Format:").foregroundStyle(.secondary)
+                Text(store.settings.orientation.label)
+                if store.settings.fadeOutLastClip {
+                    Text("· fades out").foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text("Change in Project Settings (⌘,)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            .pickerStyle(.radioGroup)
-            .disabled(isExporting)
+            .font(.callout)
 
             if isExporting {
                 ProgressView(value: progress) {
@@ -529,13 +530,14 @@ struct ExportSheet: View {
         isExporting = true
         errorMessage = nil
         progress = 0
-        let renderSize = orientation.size
+        let renderSize = store.settings.orientation.size
+        let fadeOutSeconds = store.settings.effectiveFadeOutSeconds
 
         Task {
             do {
                 try await Exporter.exportMovie(
                     clips: clips, store: store, outputURL: url,
-                    renderSize: renderSize
+                    renderSize: renderSize, fadeOutSeconds: fadeOutSeconds
                 ) { value in
                     Task { @MainActor in progress = value }
                 }
@@ -547,6 +549,102 @@ struct ExportSheet: View {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+}
+
+// MARK: - Project settings
+
+/// Per-project preferences: video format, ending fade, and source folders.
+/// Orientation and fade here drive both Preview and Export, so neither asks
+/// for a format anymore. Changes persist immediately via `store.updateSettings`.
+struct ProjectSettingsSheet: View {
+    @EnvironmentObject var store: LibraryStore
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Project Settings")
+                .font(.title2.bold())
+
+            GroupBox("Video Format") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Picker("Orientation", selection: binding(\.orientation)) {
+                        ForEach(ProjectSettings.Orientation.allCases) { orientation in
+                            Text(orientation.label).tag(orientation)
+                        }
+                    }
+                    .pickerStyle(.radioGroup)
+                    Text("Used for both Preview and Export.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(6)
+            }
+
+            GroupBox("Ending") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle("Fade out the last clip", isOn: binding(\.fadeOutLastClip))
+                    HStack(spacing: 6) {
+                        Text("Fade duration")
+                        Spacer()
+                        TextField("Fade duration", value: fadeSecondsBinding,
+                                  format: .number.precision(.fractionLength(1)))
+                            .labelsHidden()
+                            .multilineTextAlignment(.trailing)
+                            .monospacedDigit()
+                            .frame(width: 44)
+                        Text("s")
+                        Stepper("Fade duration", value: fadeSecondsBinding,
+                                in: Self.fadeSecondsRange, step: 0.1)
+                            .labelsHidden()
+                    }
+                    .disabled(!store.settings.fadeOutLastClip)
+                    .foregroundStyle(store.settings.fadeOutLastClip ? .primary : .secondary)
+                    Text("Fades the video, audio and date stamp to black at the very end of the month.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(6)
+            }
+
+            GroupBox("Source Folders") {
+                SourceFoldersSection()
+                    .padding(6)
+            }
+
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(24)
+        .frame(width: 580)
+    }
+
+    private static let fadeSecondsRange: ClosedRange<Double> = 0.3...5.0
+
+    /// Fade-duration binding that clamps to the valid range — the `TextField`
+    /// lets the user type any number, so the bounds can't live on the `Stepper`
+    /// alone (those only limit its arrows).
+    private var fadeSecondsBinding: Binding<Double> {
+        Binding(
+            get: { store.settings.fadeOutSeconds },
+            set: { newValue in
+                let clamped = min(max(newValue, Self.fadeSecondsRange.lowerBound),
+                                  Self.fadeSecondsRange.upperBound)
+                store.updateSettings { $0.fadeOutSeconds = clamped }
+            }
+        )
+    }
+
+    /// A two-way binding into the open project's settings that persists on
+    /// every write (the store exposes `settings` read-only otherwise).
+    private func binding<V>(_ keyPath: WritableKeyPath<ProjectSettings, V>) -> Binding<V> {
+        Binding(
+            get: { store.settings[keyPath: keyPath] },
+            set: { newValue in store.updateSettings { $0[keyPath: keyPath] = newValue } }
+        )
     }
 }
 
@@ -565,13 +663,14 @@ struct PreviewWindow: View {
     let month: Date
     var tagFilter: String?
 
-    @State private var orientation: ExportSheet.Orientation = .landscape
     @State private var built: MonthComposition?
     @State private var player: AVPlayer?
     @State private var errorMessage: String?
     @State private var stampText: String?
     @State private var captionText: String?
     @State private var stampObserver: Any?
+    /// The date stamp's current opacity, dimmed in step with the ending fade.
+    @State private var stampOpacity: Double = 1
 
     var body: some View {
         VStack(spacing: 12) {
@@ -583,11 +682,9 @@ struct PreviewWindow: View {
                         .background(Capsule().fill(.yellow.opacity(0.25)))
                 }
                 Spacer()
-                Picker("Format", selection: $orientation) {
-                    ForEach(ExportSheet.Orientation.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.menu)
-                .fixedSize()
+                Text(store.settings.orientation.label)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             ZStack {
@@ -600,7 +697,7 @@ struct PreviewWindow: View {
                     ProgressView("Preparing preview…")
                 }
             }
-            .aspectRatio(orientation.size, contentMode: .fit)
+            .aspectRatio(store.settings.orientation.size, contentMode: .fit)
             // Same date stamp and caption the export burns in (the export's
             // Core Animation overlay doesn't render through AVPlayer, so the
             // preview draws them itself at matching proportions).
@@ -630,6 +727,7 @@ struct PreviewWindow: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity,
                                alignment: .bottomLeading)
                     }
+                    .opacity(stampOpacity)
                     .allowsHitTesting(false)
                 }
             }
@@ -637,11 +735,11 @@ struct PreviewWindow: View {
 
         }
         .padding(16)
-        .frame(minWidth: 480, idealWidth: orientation == .portrait ? 520 : 860,
+        .frame(minWidth: 480, idealWidth: store.settings.orientation == .portrait ? 520 : 860,
                maxWidth: .infinity,
                minHeight: 480, idealHeight: 720, maxHeight: .infinity)
         .navigationTitle("Preview \(month.formatted(.dateTime.month(.wide).year()))")
-        .task(id: orientation) {
+        .task(id: store.settings) {
             await rebuild()
         }
         .onDisappear {
@@ -660,26 +758,38 @@ struct PreviewWindow: View {
         let clips = store.clips(inMonthOf: month, taggedWith: tagFilter)
         do {
             let built = try await Exporter.buildComposition(
-                clips: clips, store: store, renderSize: orientation.size
+                clips: clips, store: store,
+                renderSize: store.settings.orientation.size,
+                fadeOutSeconds: store.settings.effectiveFadeOutSeconds
             )
-            // The orientation picker cancels and restarts this task; a stale
-            // build finishing late must not overwrite the newer one.
+            // A settings change cancels and restarts this task; a stale build
+            // finishing late must not overwrite the newer one.
             guard !Task.isCancelled else {
                 built.cleanUp()
                 return
             }
             let item = AVPlayerItem(asset: built.composition)
             item.videoComposition = built.videoComposition
+            item.audioMix = built.audioMix
             let player = AVPlayer(playerItem: item)
             self.built = built
             self.player = player
 
-            // Track which clip is playing so the date stamp and caption follow along.
+            // Track which clip is playing so the date stamp and caption follow
+            // along, and fade the stamp out over the ending fade (the export's
+            // Core Animation overlay does the same to the burned-in stamp).
             let overlays = built.dateOverlays
+            let fade = built.fadeRange
             func updateOverlay(at time: CMTime) {
                 let o = overlays.first { $0.timeRange.containsTime(time) }
                 stampText = o.flatMap { $0.text.isEmpty ? nil : $0.text }
                 captionText = o.flatMap { $0.caption.isEmpty ? nil : $0.caption }
+                if let fade, time >= fade.start {
+                    let remaining = (fade.end - time).seconds / fade.duration.seconds
+                    stampOpacity = min(max(remaining, 0), 1)
+                } else {
+                    stampOpacity = 1
+                }
             }
             updateOverlay(at: .zero)
             stampObserver = player.addPeriodicTimeObserver(
@@ -701,6 +811,7 @@ struct PreviewWindow: View {
         stampObserver = nil
         stampText = nil
         captionText = nil
+        stampOpacity = 1
         player?.pause()
         player = nil
     }

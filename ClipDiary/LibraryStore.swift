@@ -26,9 +26,14 @@ final class LibraryStore: ObservableObject {
     @Published private(set) var sourceItems: [SourceItem] = []
     @Published private(set) var isScanningSources = false
 
+    /// The open project's render preferences (orientation, ending fade).
+    /// Mutated only through `updateSettings`, which also persists.
+    @Published private(set) var settings = ProjectSettings()
+
     private var clipsDir: URL!
     private var metadataURL: URL!
     private var sourcesURL: URL!
+    private var settingsURL: URL!
     /// The security-scoped URL we currently hold access to (released before we
     /// switch to another project). nil for open/save-panel URLs, which the
     /// sandbox keeps accessible for the whole process without start/stop.
@@ -73,6 +78,34 @@ final class LibraryStore: ObservableObject {
         } catch {
             lastError = "Could not save library: \(error.localizedDescription)"
         }
+    }
+
+    /// Reads a project's `settings.json`, falling back to defaults when it's
+    /// missing or unreadable (older projects never wrote one).
+    private static func loadSettings(from url: URL) -> ProjectSettings {
+        guard let data = try? Data(contentsOf: url),
+              let decoded = try? JSONDecoder().decode(ProjectSettings.self, from: data)
+        else { return ProjectSettings() }
+        return decoded
+    }
+
+    private func saveSettings() {
+        guard let settingsURL else { return }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        do {
+            let data = try encoder.encode(settings)
+            try data.write(to: settingsURL, options: .atomic)
+        } catch {
+            lastError = "Could not save project settings: \(error.localizedDescription)"
+        }
+    }
+
+    /// Mutates the open project's settings and persists the result. The only
+    /// supported way to change `settings` (which is otherwise read-only).
+    func updateSettings(_ mutate: (inout ProjectSettings) -> Void) {
+        mutate(&settings)
+        saveSettings()
     }
 
     // MARK: - Projects
@@ -167,9 +200,11 @@ final class LibraryStore: ObservableObject {
         clipsDir = url.appendingPathComponent("Clips", isDirectory: true)
         metadataURL = metaURL
         sourcesURL = url.appendingPathComponent("sources.json")
+        settingsURL = url.appendingPathComponent("settings.json")
         try? FileManager.default.createDirectory(at: clipsDir, withIntermediateDirectories: true)
         thumbnailCache.removeAllObjects()
         clips = loadedClips
+        settings = Self.loadSettings(from: settingsURL)
         loadSources()
         rememberProject(url)
         return .opened
