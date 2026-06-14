@@ -425,6 +425,16 @@ final class LibraryStore: ObservableObject {
             }
     }
 
+    /// Clips whose day falls inside an arbitrary render range (month, year, all
+    /// or custom), tag-filtered, in the same date-then-createdAt order Preview
+    /// and Export stitch them.
+    func clips(in range: RenderRange, taggedWith tag: String? = nil) -> [Clip] {
+        clips.filter { range.contains($0.date) && $0.matches(tagFilter: tag) }
+            .sorted {
+                $0.date == $1.date ? $0.createdAt < $1.createdAt : $0.date < $1.date
+            }
+    }
+
     // MARK: - Mutations
 
     /// Copies the file into the library and registers a clip for it.

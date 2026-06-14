@@ -11,7 +11,7 @@ struct ContentView: View {
     @State private var showImporter = false
     @State private var importKind: ImportKind = .media
     @State private var mashSource: MashSource?
-    @State private var showExportSheet = false
+    @State private var showRenderSheet = false
     @State private var showSourcesSheet = false
     @State private var showSettingsSheet = false
     @Environment(\.openWindow) private var openWindow
@@ -79,18 +79,11 @@ struct ContentView: View {
                 }
             }
             ToolbarItem(placement: .primaryAction) {
-                Button {
-                    openWindow(value: PreviewRequest(month: displayedMonth, tagFilter: tagFilter))
-                } label: {
-                    Label("Preview Month", systemImage: "play.rectangle")
+                Button { showRenderSheet = true } label: {
+                    Label("Create Video…", systemImage: "film.stack")
                 }
-                .disabled(store.clips(inMonthOf: displayedMonth, taggedWith: tagFilter).isEmpty)
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button { showExportSheet = true } label: {
-                    Label("Export Month", systemImage: "film.stack")
-                }
-                .disabled(store.clips(inMonthOf: displayedMonth, taggedWith: tagFilter).isEmpty)
+                .help("Pick a time range, then preview it or save the video")
+                .disabled(store.clips(in: .all, taggedWith: tagFilter).isEmpty)
             }
         }
         .fileImporter(
@@ -124,8 +117,10 @@ struct ContentView: View {
         .sheet(item: $selectedDay) { selection in
             DaySheet(day: selection.day).environmentObject(store)
         }
-        .sheet(isPresented: $showExportSheet) {
-            ExportSheet(month: displayedMonth, tagFilter: tagFilter).environmentObject(store)
+        .sheet(isPresented: $showRenderSheet) {
+            RenderSheet(initialRange: store.settings.renderRange ?? .month(Date()),
+                        tagFilter: tagFilter)
+                .environmentObject(store)
         }
         .sheet(isPresented: $showSourcesSheet) {
             SourceFoldersSheet().environmentObject(store)
@@ -453,50 +448,115 @@ struct DayCell: View {
     }
 }
 
-// MARK: - Export sheet
+// MARK: - Create Video (range + preview + export)
 
-struct ExportSheet: View {
+/// How the Create Video window scopes which clips go into the video. Mirrors
+/// `RenderRange`'s cases as a flat, selectable value for the mode picker.
+enum RenderMode: String, CaseIterable, Identifiable {
+    case month, year, all, custom
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .month: return "Month"
+        case .year: return "Year"
+        case .all: return "All"
+        case .custom: return "Custom"
+        }
+    }
+
+    init(_ range: RenderRange) {
+        switch range {
+        case .month: self = .month
+        case .year: self = .year
+        case .all: self = .all
+        case .custom: self = .custom
+        }
+    }
+
+    /// A range for this mode seeded from whatever the user had selected, so
+    /// switching Month↔Year keeps the year and Custom starts on that month.
+    func seededRange(from current: RenderRange) -> RenderRange {
+        let cal = Calendar.current
+        let anchor = current.anchorDate
+        switch self {
+        case .month: return .month(anchor)
+        case .year: return .year(anchor)
+        case .all: return .all
+        case .custom:
+            let interval = cal.dateInterval(of: .month, for: anchor)
+            let start = interval?.start ?? anchor.dayKey
+            let end = interval.flatMap { cal.date(byAdding: .day, value: -1, to: $0.end) } ?? start
+            return .custom(start: start, end: end)
+        }
+    }
+}
+
+/// Single entry point for turning the project's clips into a video: pick a time
+/// range, then Preview it in a window or Save it to a file. Orientation and the
+/// ending fade come from Project Settings (shown read-only here). The chosen
+/// range is remembered per project via `store.settings.renderRange`.
+struct RenderSheet: View {
     @EnvironmentObject var store: LibraryStore
     @Environment(\.dismiss) private var dismiss
-    let month: Date
+    @Environment(\.openWindow) private var openWindow
     var tagFilter: String?
+
+    /// The active range, edited locally and persisted back to the project in
+    /// `onChange` (below). The controls deliberately touch only this `@State`:
+    /// writing to the store *during* a view update — which a Picker's setter
+    /// does — is what trips SwiftUI's "Publishing changes from within view
+    /// updates" warning, so the save is deferred to `onChange` instead.
+    @State private var range: RenderRange
 
     @State private var isExporting = false
     @State private var progress: Double = 0
     @State private var errorMessage: String?
 
+    /// Seeded from the project's remembered range (or the current month when it
+    /// was never changed). Seeding in `init` rather than a `@State` default
+    /// means `onChange` fires only on real edits, so an untouched window leaves
+    /// `settings.renderRange` nil and keeps defaulting to the current month.
+    init(initialRange: RenderRange, tagFilter: String?) {
+        _range = State(initialValue: initialRange)
+        self.tagFilter = tagFilter
+    }
+
+    private var calendar: Calendar { Calendar.current }
+
+    private func setRange(_ new: RenderRange) {
+        range = new
+    }
+
     var body: some View {
-        let clips = store.clips(inMonthOf: month, taggedWith: tagFilter)
+        let clips = store.clips(in: range, taggedWith: tagFilter)
         let total = clips.reduce(0) { $0 + $1.trimmedDuration }
+        let videoCount = clips.filter { $0.kind == .video }.count
+        let photoCount = clips.count - videoCount
 
         VStack(alignment: .leading, spacing: 16) {
-            Text("Export \(month.formatted(.dateTime.month(.wide).year()))")
+            Text("Create Video")
                 .font(.title3.bold())
+
+            rangePicker
 
             if let tagFilter {
                 Text("Only clips tagged “\(tagFilter)”.")
                     .font(.callout.bold())
             }
 
-            Text("\(clips.count) clips, total length \(formatTime(total)). Clips are stitched in date order using their trimmed in/out points.")
-                .foregroundStyle(.secondary)
-
-            HStack(spacing: 6) {
-                Text("Format:").foregroundStyle(.secondary)
-                Text(store.settings.orientation.label)
-                if store.settings.fadeOutLastClip {
-                    Text("· fades out").foregroundStyle(.secondary)
-                }
-                Spacer()
-                Text("Change in Project Settings (⌘,)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 16) {
+                Label("\(videoCount)", systemImage: "video.fill")
+                Label("\(photoCount)", systemImage: "photo.fill")
+                Label(formatDurationShort(total), systemImage: "clock")
             }
             .font(.callout)
+            .monospacedDigit()
+            .foregroundStyle(.secondary)
 
             if isExporting {
                 ProgressView(value: progress) {
-                    Text("Exporting… \(Int(progress * 100))%")
+                    Text("Saving… \(Int(progress * 100))%")
                 }
             }
 
@@ -505,26 +565,144 @@ struct ExportSheet: View {
             }
 
             HStack {
-                Spacer()
                 Button("Cancel") { dismiss() }.disabled(isExporting)
-                Button("Export…") { chooseDestinationAndExport(clips: clips) }
+                Spacer()
+                Button {
+                    openWindow(value: PreviewRequest(range: range, tagFilter: tagFilter))
+                } label: {
+                    Label("Preview", systemImage: "play.rectangle")
+                }
+                .disabled(isExporting || clips.isEmpty)
+                Button("Save…") { chooseDestinationAndExport(clips: clips) }
                     .buttonStyle(.borderedProminent)
                     .disabled(isExporting || clips.isEmpty)
             }
         }
         .padding(24)
-        .frame(width: 440)
+        .frame(width: 460)
         // Esc would otherwise close the sheet mid-export (the Cancel button
         // is already disabled while exporting).
         .interactiveDismissDisabled(isExporting)
+        // Persist the choice as a side effect, safely outside the view update.
+        .onChange(of: range) { _, newRange in
+            store.updateSettings { $0.renderRange = newRange }
+        }
     }
+
+    // MARK: Range controls
+
+    @ViewBuilder
+    private var rangePicker: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Picker("Range", selection: Binding(
+                get: { RenderMode(range) },
+                set: { setRange($0.seededRange(from: range)) }
+            )) {
+                ForEach(RenderMode.allCases) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            switch RenderMode(range) {
+            case .month:
+                HStack {
+                    Picker("Month", selection: monthBinding) {
+                        ForEach(1...12, id: \.self) { month in
+                            Text(calendar.monthSymbols[month - 1]).tag(month)
+                        }
+                    }
+                    .labelsHidden()
+                    Picker("Year", selection: yearBinding) {
+                        ForEach(availableYears, id: \.self) { year in
+                            Text(verbatim: String(year)).tag(year)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 90)
+                }
+            case .year:
+                Picker("Year", selection: yearBinding) {
+                    ForEach(availableYears, id: \.self) { year in
+                        Text(verbatim: String(year)).tag(year)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 90)
+            case .all:
+                Text("Every clip in the project, oldest first.")
+                    .font(.callout).foregroundStyle(.secondary)
+            case .custom:
+                HStack(spacing: 12) {
+                    DatePicker("From", selection: customStartBinding,
+                               displayedComponents: .date)
+                    DatePicker("To", selection: customEndBinding,
+                               in: customStart..., displayedComponents: .date)
+                }
+            }
+        }
+    }
+
+    /// Years offered in the month/year pickers: every year that has a clip, plus
+    /// the current year and the selected range's year, ascending.
+    private var availableYears: [Int] {
+        var years = Set(store.clips.map { calendar.component(.year, from: $0.date) })
+        years.insert(calendar.component(.year, from: Date()))
+        years.insert(calendar.component(.year, from: range.anchorDate))
+        return years.sorted()
+    }
+
+    // MARK: Bindings into the range (writes persist via setRange)
+
+    private var monthBinding: Binding<Int> {
+        Binding(
+            get: { calendar.component(.month, from: range.anchorDate) },
+            set: { setRange(range.withMonth($0)) }
+        )
+    }
+
+    private var yearBinding: Binding<Int> {
+        Binding(
+            get: { calendar.component(.year, from: range.anchorDate) },
+            set: { setRange(range.withYear($0)) }
+        )
+    }
+
+    private var customStart: Date {
+        if case .custom(let start, _) = range { return start }
+        return range.anchorDate
+    }
+
+    private var customStartBinding: Binding<Date> {
+        Binding(
+            get: { customStart },
+            set: { newStart in
+                if case .custom(_, let end) = range {
+                    setRange(.custom(start: newStart, end: max(newStart, end)))
+                }
+            }
+        )
+    }
+
+    private var customEndBinding: Binding<Date> {
+        Binding(
+            get: { if case .custom(_, let end) = range { return end } else { return customStart } },
+            set: { newEnd in
+                if case .custom(let start, _) = range {
+                    setRange(.custom(start: start, end: max(start, newEnd)))
+                }
+            }
+        )
+    }
+
+    // MARK: Export
 
     private func chooseDestinationAndExport(clips: [Clip]) {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.mpeg4Movie]
-        let monthName = month.formatted(.dateTime.month(.wide).year())
         let suffix = tagFilter.map { " – \($0)" } ?? ""
-        panel.nameFieldStringValue = "ClipDiary \(monthName)\(suffix).mp4"
+        panel.nameFieldStringValue = "ClipDiary \(range.fileNameLabel)\(suffix).mp4"
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
         isExporting = true
@@ -650,9 +828,9 @@ struct ProjectSettingsSheet: View {
 
 // MARK: - Preview window
 
-/// Identifies which month (and tag filter) a preview window shows.
+/// Identifies which time range (and tag filter) a preview window shows.
 struct PreviewRequest: Codable, Hashable {
-    let month: Date
+    var range: RenderRange
     var tagFilter: String?
 }
 
@@ -660,7 +838,7 @@ struct PreviewRequest: Codable, Hashable {
 /// letterboxing as the export, without writing a file.
 struct PreviewWindow: View {
     @EnvironmentObject var store: LibraryStore
-    let month: Date
+    let range: RenderRange
     var tagFilter: String?
 
     @State private var built: MonthComposition?
@@ -738,7 +916,7 @@ struct PreviewWindow: View {
         .frame(minWidth: 480, idealWidth: store.settings.orientation == .portrait ? 520 : 860,
                maxWidth: .infinity,
                minHeight: 480, idealHeight: 720, maxHeight: .infinity)
-        .navigationTitle("Preview \(month.formatted(.dateTime.month(.wide).year()))")
+        .navigationTitle("Preview \(range.label)")
         .task(id: store.settings) {
             await rebuild()
         }
@@ -755,7 +933,7 @@ struct PreviewWindow: View {
         built = nil
         errorMessage = nil
 
-        let clips = store.clips(inMonthOf: month, taggedWith: tagFilter)
+        let clips = store.clips(in: range, taggedWith: tagFilter)
         do {
             let built = try await Exporter.buildComposition(
                 clips: clips, store: store,

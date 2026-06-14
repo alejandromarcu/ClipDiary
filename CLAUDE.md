@@ -28,9 +28,12 @@ Deliberate improvements over 1SE:
   clip was picked from: clips picked twice from one source (two segments of a
   long video) **share one copied media file**, so `delete` only removes the
   file when the last clip referencing it goes. Also `ProjectSettings`
-  (orientation + ending-fade toggle/duration): a small per-project Codable
-  blob, every field defaulted via `decodeIfPresent` so old projects and future
-  options need no migration.
+  (orientation + ending-fade toggle/duration + the remembered Create Video
+  `renderRange`): a small per-project Codable blob, every field defaulted via
+  `decodeIfPresent` so old projects and future options need no migration. And
+  `RenderRange` (month / year / all / custom start–end): the time span a video
+  covers, with `contains`/`label`/`fileNameLabel` helpers, used by both Preview
+  and Export and persisted in `settings.json`.
 - `LibraryStore.swift` — `@MainActor ObservableObject`. Owns the **currently
   open project**: a user-chosen directory (e.g. `~/MyClips/Amelie's life/`)
   holding `clips.json` (ISO-8601 dates) + a `Clips/` subfolder of copied media.
@@ -99,10 +102,15 @@ Deliberate improvements over 1SE:
   the per-day clip editor (`DaySheet`) is on the day cell's context menu and
   in the review window's picked strip. Toolbar: a **Project Settings** gear
   (⌘,), an Import menu (Import Media… fileImporter multi-select, Import 1SE
-  Video…) and Export Month. Also contains `ProjectSettingsSheet` (orientation
-  radio group, ending-fade toggle + duration stepper, and a `SourceFoldersSection`)
-  and `ExportSheet` (NSSavePanel + progress bar; format/fade come from the
-  project settings, not asked here).
+  Video…) and a single **Create Video…** button. Also contains
+  `ProjectSettingsSheet` (orientation radio group, ending-fade toggle + duration
+  stepper, and a `SourceFoldersSection`) and `RenderSheet` — the unified
+  Preview/Export window: a time-range picker (`RenderMode` month/year/all/custom,
+  remembered in `settings.renderRange`, defaulting to the current month) with
+  **Preview** (opens `PreviewWindow`) and **Save…** (NSSavePanel + progress bar)
+  buttons, plus a video/photo count (calendar `video.fill`/`photo.fill` icons)
+  and total length for the chosen range; format/fade still come from Project
+  Settings (no longer surfaced in this window).
 - `TrimView.swift` — `DaySheet` (per-day editor, clip picker if a day has
   multiple clips, routes to `TrimEditor` or `PhotoEditor` by kind, date
   reassignment, delete), `TagRow` (shared tag chips + new-tag field + reuse
@@ -165,7 +173,11 @@ Per-project **settings** (`settings.json`) hold the render orientation
 an optional ending fade-to-black; the toolbar's **Project Settings** sheet (⌘,)
 edits them and also hosts source-folder management.
 The main screen has a tag filter (toolbar picker, single tag) that scopes the
-calendar thumbnails/counts and the month export.
+calendar thumbnails/counts and the rendered video. A single **Create Video…**
+toolbar button opens `RenderSheet`, where a time range (a specific month, a
+specific year, everything, or a custom start–end) is chosen — defaulting to the
+current month and remembered per project — then previewed in a window or saved
+to a file.
 The month render shows a 1SE-style date stamp ("MAR 03 2026") bottom-left,
 per-clip toggle (`Clip.showsDateOverlay`, "Date stamp" checkbox in both
 editors); 1SE imports default it off (their frames are already stamped).
