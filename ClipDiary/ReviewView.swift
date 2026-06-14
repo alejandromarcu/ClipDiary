@@ -449,14 +449,14 @@ private struct PickedThumb: View {
 
 /// Manage the project's source folders — the folders scanned recursively for
 /// the photos and videos offered in the review window.
-struct SourceFoldersSheet: View {
+/// The source-folder list with its add / rescan / status controls, without any
+/// surrounding chrome. Used both as a standalone sheet (`SourceFoldersSheet`,
+/// auto-presented for a fresh project) and as a section of Project Settings.
+struct SourceFoldersSection: View {
     @EnvironmentObject var store: LibraryStore
-    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Source Folders")
-                .font(.title3.bold())
             Text("ClipDiary scans these folders (subfolders included) for photos and videos. Click a calendar day to review them — a file is only copied into the project when you add it to your clips.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -520,10 +520,26 @@ struct SourceFoldersSheet: View {
                          : "\(store.sourceItems.count) photos & videos")
                         .foregroundStyle(.secondary)
                 }
+            }
+            .font(.callout)
+        }
+    }
+}
+
+struct SourceFoldersSheet: View {
+    @EnvironmentObject var store: LibraryStore
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Source Folders")
+                .font(.title3.bold())
+            SourceFoldersSection()
+            HStack {
+                Spacer()
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.defaultAction)
             }
-            .font(.callout)
         }
         .padding(20)
         .frame(width: 560)

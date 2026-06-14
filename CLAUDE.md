@@ -27,10 +27,16 @@ Deliberate improvements over 1SE:
   deduped case-insensitively. `sourcePath` records which source-folder file a
   clip was picked from: clips picked twice from one source (two segments of a
   long video) **share one copied media file**, so `delete` only removes the
-  file when the last clip referencing it goes.
+  file when the last clip referencing it goes. Also `ProjectSettings`
+  (orientation + ending-fade toggle/duration): a small per-project Codable
+  blob, every field defaulted via `decodeIfPresent` so old projects and future
+  options need no migration.
 - `LibraryStore.swift` — `@MainActor ObservableObject`. Owns the **currently
   open project**: a user-chosen directory (e.g. `~/MyClips/Amelie's life/`)
   holding `clips.json` (ISO-8601 dates) + a `Clips/` subfolder of copied media.
+  Per-project `ProjectSettings` persist in `settings.json` (loaded on project
+  open, defaults when absent); `updateSettings { … }` is the only mutator and
+  saves immediately.
   `currentProjectURL` is nil when no project is open (→ welcome screen).
   `createProject(at:)` / `openProject(at:)` switch projects; the last-used one
   reopens on launch via a **security-scoped bookmark** in UserDefaults
@@ -79,7 +85,8 @@ Deliberate improvements over 1SE:
   on the still, Video embeds `TrimEditor` on the motion clip; ⌘↩ then picks
   whichever (copying the still or the motion file). Bottom strip shows the
   day's picked clips and opens `DaySheet` to edit them. Also
-  `SourceFoldersSheet` (add/remove/rescan source folders; auto-presented
+  `SourceFoldersSheet` (a thin wrapper around the reusable
+  `SourceFoldersSection`: add/remove/rescan source folders; auto-presented
   when a project has no clips and no sources) and
   `presentAddSourceFolderPanel`.
 - `ContentView.swift` — month calendar grid (week-row `VStack`/`HStack`s, 7
@@ -90,10 +97,12 @@ Deliberate improvements over 1SE:
   carries the same month-wide tally.
   **Clicking a day opens the review window** (`ReviewRequest` via openWindow);
   the per-day clip editor (`DaySheet`) is on the day cell's context menu and
-  in the review window's picked strip. Toolbar: Sources sheet, an Import menu
-  (Import Media… fileImporter multi-select, Import 1SE Video…) and Export
-  Month. Also contains `ExportSheet` (portrait 1080×1920 / landscape
-  1920×1080 picker, NSSavePanel, progress bar).
+  in the review window's picked strip. Toolbar: a **Project Settings** gear
+  (⌘,), an Import menu (Import Media… fileImporter multi-select, Import 1SE
+  Video…) and Export Month. Also contains `ProjectSettingsSheet` (orientation
+  radio group, ending-fade toggle + duration stepper, and a `SourceFoldersSection`)
+  and `ExportSheet` (NSSavePanel + progress bar; format/fade come from the
+  project settings, not asked here).
 - `TrimView.swift` — `DaySheet` (per-day editor, clip picker if a day has
   multiple clips, routes to `TrimEditor` or `PhotoEditor` by kind, date
   reassignment, delete), `TagRow` (shared tag chips + new-tag field + reuse
@@ -124,7 +133,12 @@ Deliberate improvements over 1SE:
   segment `AVMutableVideoCompositionInstruction` aspect-fits each clip into
   the render size (handles preferredTransform / rotated iPhone video,
   letterboxes mixed orientations). Exports MP4 via `AVAssetExportSession`,
-  highest quality, 30fps frameDuration.
+  highest quality, 30fps frameDuration. An optional **ending fade**
+  (`fadeOutSeconds`, from project settings, clamped to the last clip) ramps the
+  last segment's opacity to black, the audio volume to 0 (`AVMutableAudioMix`)
+  and the date stamp to 0; `MonthComposition.fadeRange`/`audioMix` carry it so
+  preview and export stay in sync (the preview dims its SwiftUI stamp over the
+  same range).
 
 ## Conventions & constraints
 
@@ -146,6 +160,10 @@ v1 is working: import, calendar, trim, preview, month export all functional.
 The app is **project-based**: launching with no remembered project shows a
 welcome screen (New / Open / Recent); the last-used project reopens
 automatically. The calendar/import/export all operate on the open project.
+Per-project **settings** (`settings.json`) hold the render orientation
+(portrait/landscape — chosen once here, no longer asked per export/preview) and
+an optional ending fade-to-black; the toolbar's **Project Settings** sheet (⌘,)
+edits them and also hosts source-folder management.
 The main screen has a tag filter (toolbar picker, single tag) that scopes the
 calendar thumbnails/counts and the month export.
 The month render shows a 1SE-style date stamp ("MAR 03 2026") bottom-left,

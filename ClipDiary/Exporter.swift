@@ -31,10 +31,18 @@ struct DateOverlay {
 struct MonthComposition {
     let composition: AVMutableComposition
     let videoComposition: AVMutableVideoComposition
+    /// Volume ramp that fades the audio out at the end, or nil when the
+    /// project has no ending fade. Both the export session and the preview
+    /// player apply it (it can't be baked into the composition itself).
+    let audioMix: AVMutableAudioMix?
     /// Date stamps for clips with the overlay enabled. The export burns
     /// them in via Core Animation; the preview window draws them itself
     /// (the animation tool only works with export sessions, not AVPlayer).
     let dateOverlays: [DateOverlay]
+    /// The timeline stretch the ending fade covers (nil when disabled).
+    /// The video fade is baked into the composition; this lets the export's
+    /// date-stamp overlay and the preview's stamp fade in step with it.
+    let fadeRange: CMTimeRange?
     let tempDir: URL
 
     func cleanUp() {
@@ -51,9 +59,12 @@ struct Exporter {
         store: LibraryStore,
         outputURL: URL,
         renderSize: CGSize,
+        fadeOutSeconds: Double? = nil,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws {
-        let built = try await buildComposition(clips: clips, store: store, renderSize: renderSize)
+        let built = try await buildComposition(
+            clips: clips, store: store, renderSize: renderSize, fadeOutSeconds: fadeOutSeconds
+        )
         defer { built.cleanUp() }
 
         guard let session = AVAssetExportSession(
@@ -65,10 +76,11 @@ struct Exporter {
         session.outputFileType = .mp4
         if !built.dateOverlays.isEmpty {
             built.videoComposition.animationTool = makeDateOverlayTool(
-                overlays: built.dateOverlays, renderSize: renderSize
+                overlays: built.dateOverlays, renderSize: renderSize, fade: built.fadeRange
             )
         }
         session.videoComposition = built.videoComposition
+        session.audioMix = built.audioMix
 
         // Poll progress while exporting.
         let poller = Task {
@@ -93,7 +105,8 @@ struct Exporter {
     static func buildComposition(
         clips: [Clip],
         store: LibraryStore,
-        renderSize: CGSize
+        renderSize: CGSize,
+        fadeOutSeconds: Double? = nil
     ) async throws -> MonthComposition {
         guard !clips.isEmpty else { throw ExportError.noClips }
 
@@ -108,6 +121,13 @@ struct Exporter {
         var instructions: [AVMutableVideoCompositionInstruction] = []
         var overlays: [DateOverlay] = []
         var cursor = CMTime.zero
+        // The last successfully inserted clip's layer + timeline range, so an
+        // ending fade can ramp exactly that segment (never an earlier one).
+        var lastLayer: AVMutableVideoCompositionLayerInstruction?
+        var lastSegment: CMTimeRange?
+        // Whether any clip contributed audio (an all-photos month has none, so
+        // there's nothing for the ending fade's volume ramp to act on).
+        var insertedAudio = false
 
         // Collect clip file URLs on the main actor before doing AV work.
         let items: [(clip: Clip, url: URL)] = await MainActor.run {
@@ -154,6 +174,7 @@ struct Exporter {
             if let audioTrack,
                let srcAudio = try await asset.loadTracks(withMediaType: .audio).first {
                 try? audioTrack.insertTimeRange(range, of: srcAudio, at: cursor)
+                insertedAudio = true
             }
 
             // Aspect-fit transform for this segment.
@@ -182,6 +203,8 @@ struct Exporter {
             instruction.timeRange = CMTimeRange(start: cursor, duration: range.duration)
             instruction.layerInstructions = [layer]
             instructions.append(instruction)
+            lastLayer = layer
+            lastSegment = instruction.timeRange
 
             if clip.showsDateOverlay || !clip.caption.isEmpty {
                 overlays.append(DateOverlay(
@@ -195,6 +218,30 @@ struct Exporter {
         }
 
         guard cursor > .zero else { throw ExportError.noClips }
+        let totalDuration = cursor
+
+        // Optional ending fade to black: ramp the last clip's opacity (the
+        // composition behind it is black) and its audio volume to zero over
+        // the final stretch, clamped to that clip so earlier ones are untouched.
+        var fadeRange: CMTimeRange?
+        var audioMix: AVMutableAudioMix?
+        if let fadeOutSeconds, fadeOutSeconds > 0,
+           let lastLayer, let lastSegment {
+            let fadeSeconds = min(fadeOutSeconds, lastSegment.duration.seconds)
+            if fadeSeconds > 0 {
+                let fadeDuration = CMTime(seconds: fadeSeconds, preferredTimescale: 600)
+                let range = CMTimeRange(start: totalDuration - fadeDuration, duration: fadeDuration)
+                lastLayer.setOpacityRamp(fromStartOpacity: 1, toEndOpacity: 0, timeRange: range)
+                if let audioTrack, insertedAudio {
+                    let params = AVMutableAudioMixInputParameters(track: audioTrack)
+                    params.setVolumeRamp(fromStartVolume: 1, toEndVolume: 0, timeRange: range)
+                    let mix = AVMutableAudioMix()
+                    mix.inputParameters = [params]
+                    audioMix = mix
+                }
+                fadeRange = range
+            }
+        }
 
         let videoComposition = AVMutableVideoComposition()
         videoComposition.renderSize = renderSize
@@ -205,7 +252,9 @@ struct Exporter {
         return MonthComposition(
             composition: composition,
             videoComposition: videoComposition,
+            audioMix: audioMix,
             dateOverlays: overlays,
+            fadeRange: fadeRange,
             tempDir: tempDir
         )
     }
@@ -215,7 +264,7 @@ struct Exporter {
     /// Core Animation overlay that burns each clip's date stamp into the
     /// bottom-left corner during export, 1SE-style.
     private static func makeDateOverlayTool(
-        overlays: [DateOverlay], renderSize: CGSize
+        overlays: [DateOverlay], renderSize: CGSize, fade: CMTimeRange?
     ) -> AVVideoCompositionCoreAnimationTool {
         let frame = CGRect(origin: .zero, size: renderSize)
         let videoLayer = CALayer()
@@ -235,6 +284,19 @@ struct Exporter {
         for overlay in overlays {
             let beginTime = max(overlay.timeRange.start.seconds, AVCoreAnimationBeginTimeAtZero)
             let duration = overlay.timeRange.duration.seconds
+
+            // If the ending fade overlaps this clip's segment (it only ever
+            // does for the last one, being clamped to it), the fraction of the
+            // segment at which the stamp should start fading to 0.
+            var fadeFraction: Double?
+            if let fade {
+                let segStart = overlay.timeRange.start.seconds
+                let segEnd = segStart + duration
+                if fade.start.seconds < segEnd && fade.end.seconds > segStart {
+                    let point = max(fade.start.seconds, segStart)
+                    fadeFraction = min(max((point - segStart) / duration, 0), 1)
+                }
+            }
 
             func makeTextLayer(text: String, y: CGFloat) -> CATextLayer {
                 let layer = CATextLayer()
@@ -257,16 +319,28 @@ struct Exporter {
 
                 // Visible only during the clip's segment: a frozen opacity
                 // animation spans the time range (beginTime 0 means "now" to
-                // Core Animation, hence AVCoreAnimationBeginTimeAtZero).
+                // Core Animation, hence AVCoreAnimationBeginTimeAtZero). When
+                // the ending fade lands on this clip, hold at 1 until the fade
+                // point, then ramp to 0 so the stamp dims with the picture.
                 layer.opacity = 0
-                let visible = CABasicAnimation(keyPath: "opacity")
-                visible.fromValue = 1.0
-                visible.toValue = 1.0
-                visible.beginTime = beginTime
-                visible.duration = duration
-                visible.fillMode = .removed
-                visible.isRemovedOnCompletion = false
-                layer.add(visible, forKey: "visible")
+                let anim: CAPropertyAnimation
+                if let fadeFraction {
+                    let keyframe = CAKeyframeAnimation(keyPath: "opacity")
+                    keyframe.values = [NSNumber(value: 1.0), NSNumber(value: 1.0), NSNumber(value: 0.0)]
+                    keyframe.keyTimes = [NSNumber(value: 0.0), NSNumber(value: fadeFraction), NSNumber(value: 1.0)]
+                    keyframe.calculationMode = .linear
+                    anim = keyframe
+                } else {
+                    let basic = CABasicAnimation(keyPath: "opacity")
+                    basic.fromValue = 1.0
+                    basic.toValue = 1.0
+                    anim = basic
+                }
+                anim.beginTime = beginTime
+                anim.duration = duration
+                anim.fillMode = .removed
+                anim.isRemovedOnCompletion = false
+                layer.add(anim, forKey: "visible")
                 return layer
             }
 

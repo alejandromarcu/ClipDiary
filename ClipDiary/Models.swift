@@ -1,8 +1,53 @@
 import Foundation
+import CoreGraphics
 
 /// Whether a clip is a video file or a still photo.
 enum ClipKind: String, Codable {
     case video, photo
+}
+
+/// Per-project render preferences, persisted next to the clips in
+/// `settings.json`. Every field has a default and decodes with
+/// `decodeIfPresent`, so projects created before settings existed (no file) —
+/// and any future option added here — load cleanly with no migration.
+struct ProjectSettings: Codable, Equatable {
+    /// The month video's aspect/size, used for both Preview and Export.
+    var orientation: Orientation = .landscape
+    /// When true, the month video fades to black over its final
+    /// `fadeOutSeconds` (video, audio and the date stamp together).
+    var fadeOutLastClip: Bool = false
+    /// Length of that fade, in seconds (ignored when `fadeOutLastClip` is off).
+    var fadeOutSeconds: Double = 1.0
+
+    /// The fade length to actually apply, or nil when fading is disabled.
+    var effectiveFadeOutSeconds: Double? {
+        fadeOutLastClip && fadeOutSeconds > 0 ? fadeOutSeconds : nil
+    }
+
+    enum Orientation: String, Codable, CaseIterable, Identifiable {
+        case portrait, landscape
+        var id: String { rawValue }
+        var label: String {
+            self == .portrait ? "Portrait (1080×1920)" : "Landscape (1920×1080)"
+        }
+        var size: CGSize {
+            self == .portrait ? CGSize(width: 1080, height: 1920)
+                              : CGSize(width: 1920, height: 1080)
+        }
+    }
+
+    init() {}
+
+    enum CodingKeys: String, CodingKey {
+        case orientation, fadeOutLastClip, fadeOutSeconds
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        orientation = try c.decodeIfPresent(Orientation.self, forKey: .orientation) ?? .landscape
+        fadeOutLastClip = try c.decodeIfPresent(Bool.self, forKey: .fadeOutLastClip) ?? false
+        fadeOutSeconds = try c.decodeIfPresent(Double.self, forKey: .fadeOutSeconds) ?? 1.0
+    }
 }
 
 /// Crop rectangle in unit image coordinates (origin top-left, values 0…1).
