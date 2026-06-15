@@ -1,6 +1,7 @@
 import SwiftUI
 import AVKit
 import AVFoundation
+import UniformTypeIdentifiers
 
 /// Sheet for one calendar day: pick a clip (if several), preview it,
 /// drag the in/out handles to trim, change its date, or delete it.
@@ -24,12 +25,7 @@ struct DaySheet: View {
             }
 
             if dayClips.count > 1 {
-                Picker("Clip", selection: $selectedClipID) {
-                    ForEach(Array(dayClips.enumerated()), id: \.element.id) { index, clip in
-                        Text("Clip \(index + 1)").tag(Optional(clip.id))
-                    }
-                }
-                .pickerStyle(.segmented)
+                DayClipStrip(day: day, clips: dayClips, selectedClipID: $selectedClipID)
             }
 
             if let clip = dayClips.first(where: { $0.id == selectedClipID }) ?? dayClips.first {
@@ -75,6 +71,105 @@ private struct ResizableSheetSupport: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+/// Horizontal strip of the day's clips, in play order (left → right). Click a
+/// thumbnail to edit it; drag one onto another to reorder, so clips can run out
+/// of strict capture order when that makes for nicer transitions. Shown only
+/// when a day has more than one clip; replaces the old segmented clip picker.
+private struct DayClipStrip: View {
+    @EnvironmentObject var store: LibraryStore
+    let day: Date
+    let clips: [Clip]
+    @Binding var selectedClipID: UUID?
+
+    /// id of the clip currently being dragged (the drop target reads it to
+    /// compute the new order). Cleared on drop.
+    @State private var draggingID: UUID?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Drag to reorder · click to edit")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(Array(clips.enumerated()), id: \.element.id) { index, clip in
+                        cell(index: index, clip: clip)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            .animation(.snappy(duration: 0.2), value: clips.map(\.id))
+        }
+    }
+
+    private func cell(index: Int, clip: Clip) -> some View {
+        let isSelected = (selectedClipID ?? clips.first?.id) == clip.id
+        return VStack(spacing: 3) {
+            StripThumb(clip: clip)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(isSelected ? Color.accentColor : .clear, lineWidth: 3)
+                )
+            Text("Clip \(index + 1)")
+                .font(.caption2)
+                .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { selectedClipID = clip.id }
+        .onDrag {
+            draggingID = clip.id
+            return NSItemProvider(object: clip.id.uuidString as NSString)
+        }
+        .onDrop(of: [.text], isTargeted: nil) { _ in reorder(onto: clip) }
+        .help("Click to edit · drag to reorder")
+    }
+
+    /// Moves the dragged clip to where `target` sits and commits the new order.
+    private func reorder(onto target: Clip) -> Bool {
+        defer { draggingID = nil }
+        guard let draggingID, draggingID != target.id,
+              let from = clips.firstIndex(where: { $0.id == draggingID }),
+              let to = clips.firstIndex(where: { $0.id == target.id })
+        else { return false }
+        var order = clips
+        order.insert(order.remove(at: from), at: to)
+        store.reorderClips(on: day, orderedIDs: order.map(\.id))
+        return true
+    }
+}
+
+/// Fixed-size thumbnail of a clip (its in-point frame or the cropped photo)
+/// with its trimmed length, for the day editor's reorder strip.
+private struct StripThumb: View {
+    @EnvironmentObject var store: LibraryStore
+    let clip: Clip
+
+    @State private var image: NSImage?
+
+    var body: some View {
+        ZStack(alignment: .bottomTrailing) {
+            Group {
+                if let image {
+                    Image(nsImage: image).resizable().scaledToFill()
+                } else {
+                    Color.black.opacity(0.15)
+                }
+            }
+            .frame(width: 84, height: 52)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            HStack(spacing: 2) {
+                Image(systemName: clip.kind == .photo ? "photo" : "video")
+                Text(formatTime(clip.trimmedDuration))
+            }
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.white)
+            .shadow(color: .black.opacity(0.8), radius: 2)
+            .padding(3)
+        }
+        .task(id: clip.thumbnailKey) { image = await store.thumbnail(for: clip) }
+    }
 }
 
 /// Editable row of tag chips with a field for new tags and a menu to reuse
