@@ -115,9 +115,12 @@ Deliberate improvements over 1SE:
   buttons, plus a video/photo count (calendar `video.fill`/`photo.fill` icons)
   and total length for the chosen range; format/fade still come from Project
   Settings (no longer surfaced in this window).
-- `TrimView.swift` — `DaySheet` (per-day editor, clip picker if a day has
-  multiple clips, routes to `TrimEditor` or `PhotoEditor` by kind, date
-  reassignment, delete), `TagRow` (shared tag chips + new-tag field + reuse
+- `TrimView.swift` — `DaySheet` (per-day editor; when a day has multiple clips
+  a `DayClipStrip` shows them as a thumbnail row in play order — click to edit,
+  **drag one onto another to reorder** (via `LibraryStore.reorderClips`) so
+  clips can run out of chronological order for nicer transitions; routes to
+  `TrimEditor` or `PhotoEditor` by kind, date reassignment, delete), `TagRow`
+  (shared tag chips + new-tag field + reuse
   menu) and `TrimSlider` (filmstrip of 10 thumbnails with draggable yellow
   in/out handles, min gap 0.1s). Set In/Set Out buttons (⌘I/⌘O) mark trim
   points at the current playback time. "Preview Trim" plays exactly the

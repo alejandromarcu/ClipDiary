@@ -179,7 +179,10 @@ struct Clip: Identifiable, Codable, Equatable, Hashable {
     var outSeconds: Double
     /// Full duration of the source file, in seconds.
     var durationSeconds: Double
-    /// Used to keep a stable order when a day has several clips.
+    /// The sole sort key among a day's clips. Set to "now" at creation so new
+    /// clips land last, but reassigned by the day editor's drag-to-reorder
+    /// (`LibraryStore.reorderClips`) when the user wants a non-chronological
+    /// order for nicer transitions.
     var createdAt: Date = Date()
     /// User-assigned tags, e.g. "beach" or "Isaac's best".
     var tags: [String] = []

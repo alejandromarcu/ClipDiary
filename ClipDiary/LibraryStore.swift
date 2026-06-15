@@ -635,10 +635,37 @@ final class LibraryStore: ObservableObject {
 
     func update(_ clip: Clip) {
         guard let idx = clips.firstIndex(where: { $0.id == clip.id }) else { return }
+        var clip = clip
+        // Within-day order is managed solely through `reorderClips` (which
+        // reassigns `createdAt`). Editors snapshot a clip on open and write it
+        // back wholesale here, so preserve the stored `createdAt` — otherwise a
+        // reorder made while an editor is open would be clobbered by its stale
+        // snapshot on save.
+        clip.createdAt = clips[idx].createdAt
         if clips[idx].thumbnailKey != clip.thumbnailKey {
             thumbnailCache.removeObject(forKey: clip.id as NSUUID)
         }
         clips[idx] = clip
+        save()
+    }
+
+    /// Imposes a new within-day order on `day`'s clips, e.g. after a drag in
+    /// the day editor — letting clips run out of strict chronological order
+    /// when that makes for nicer transitions. Order within a day is keyed only
+    /// on `createdAt`, so this reassigns those timestamps to match `orderedIDs`:
+    /// strictly increasing, 1s apart, anchored at the day's earliest existing
+    /// `createdAt` so the values stay plausible. The calendar, preview and
+    /// export all already sort by `createdAt`, so they follow automatically.
+    /// `orderedIDs` must be exactly the day's clips, reordered.
+    func reorderClips(on day: Date, orderedIDs: [UUID]) {
+        let existing = clips(on: day)
+        guard orderedIDs.count == existing.count,
+              Set(orderedIDs) == Set(existing.map(\.id)) else { return }
+        let base = existing.map(\.createdAt).min() ?? Date()
+        for (offset, id) in orderedIDs.enumerated() {
+            guard let idx = clips.firstIndex(where: { $0.id == id }) else { continue }
+            clips[idx].createdAt = base.addingTimeInterval(Double(offset))
+        }
         save()
     }
 
