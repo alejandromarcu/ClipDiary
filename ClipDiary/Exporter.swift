@@ -60,6 +60,7 @@ struct Exporter {
         outputURL: URL,
         renderSize: CGSize,
         fadeOutSeconds: Double? = nil,
+        creationDate: Date? = nil,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws {
         let built = try await buildComposition(
@@ -81,6 +82,7 @@ struct Exporter {
         }
         session.videoComposition = built.videoComposition
         session.audioMix = built.audioMix
+        if let creationDate { session.metadata = creationMetadata(for: creationDate) }
 
         // Poll progress while exporting.
         let poller = Task {
@@ -97,6 +99,12 @@ struct Exporter {
             let reason = session.error?.localizedDescription ?? "Unknown error."
             throw ExportError.sessionFailed(reason)
         }
+
+        // AVAssetExportSession stamps the movie/track header atoms with the
+        // wall-clock export time, which is what tools (and Photos) report as
+        // the "Create Date" — `session.metadata` can't override it. So rewrite
+        // those atoms in the finished file to the requested capture date.
+        if let creationDate { stampHeaderDates(in: outputURL, to: creationDate) }
     }
 
     /// Builds the month composition without exporting it, for in-app preview
@@ -257,6 +265,110 @@ struct Exporter {
             fadeRange: fadeRange,
             tempDir: tempDir
         )
+    }
+
+    // MARK: - Metadata
+
+    /// Metadata items stamping `date` as the movie's creation date, written in
+    /// both the cross-format common space and the QuickTime space (the latter
+    /// is what Finder/Photos surface as "Date Created" for an .mp4).
+    private static func creationMetadata(for date: Date) -> [AVMetadataItem] {
+        let iso = ISO8601DateFormatter().string(from: date)
+        func item(_ identifier: AVMetadataIdentifier) -> AVMetadataItem {
+            let item = AVMutableMetadataItem()
+            item.identifier = identifier
+            item.value = iso as NSString
+            item.dataType = kCMMetadataBaseDataType_UTF8 as String
+            return item
+        }
+        return [
+            item(.commonIdentifierCreationDate),
+            item(.quickTimeMetadataCreationDate),
+        ]
+    }
+
+    /// Rewrites the creation/modification timestamps in the `mvhd`, `tkhd` and
+    /// `mdhd` header atoms (the ones reported as "Create Date") to `date`. The
+    /// wall-clock components of `date` are stored verbatim (QuickTime's 1904
+    /// epoch, no timezone shift) so a reader shows the same local time the user
+    /// chose, matching camera conventions. Best-effort: failures are ignored.
+    private static func stampHeaderDates(in url: URL, to date: Date) {
+        guard var data = try? Data(contentsOf: url) else { return }
+        // QuickTime counts seconds from 1904-01-01; store the wall clock as-is
+        // (treat the local time as if it were the stored epoch).
+        let epochOffset: TimeInterval = 2_082_844_800
+        let tzOffset = TimeInterval(TimeZone.current.secondsFromGMT(for: date))
+        let seconds = UInt64(date.timeIntervalSince1970 + tzOffset + epochOffset)
+        patchAtoms(&data, range: data.startIndex..<data.endIndex, seconds: seconds)
+        try? data.write(to: url, options: .atomic)
+    }
+
+    /// Recursively walks the QuickTime atom tree in `range`, descending into
+    /// the container atoms that hold headers and patching each header's dates.
+    private static func patchAtoms(_ data: inout Data, range: Range<Int>, seconds: UInt64) {
+        var offset = range.lowerBound
+        while offset + 8 <= range.upperBound {
+            let size32 = readUInt32(data, at: offset)
+            let type = atomType(data, at: offset + 4)
+            var headerSize = 8
+            var atomSize = Int(size32)
+            if size32 == 1 {                       // 64-bit extended size
+                atomSize = Int(readUInt64(data, at: offset + 8))
+                headerSize = 16
+            } else if size32 == 0 {                // extends to end of parent
+                atomSize = range.upperBound - offset
+            }
+            guard atomSize >= headerSize, offset + atomSize <= range.upperBound else { break }
+            let body = offset + headerSize
+            switch type {
+            case "moov", "trak", "mdia":
+                patchAtoms(&data, range: body..<(offset + atomSize), seconds: seconds)
+            case "mvhd", "tkhd", "mdhd":
+                patchHeaderDates(&data, at: body, seconds: seconds)
+            default:
+                break
+            }
+            offset += atomSize
+        }
+    }
+
+    /// Patches creation + modification times in a `*hd` atom body, which begins
+    /// with a 1-byte version (0 → 32-bit times, 1 → 64-bit) + 3 flag bytes.
+    private static func patchHeaderDates(_ data: inout Data, at body: Int, seconds: UInt64) {
+        guard body + 4 <= data.endIndex else { return }
+        if data[body] == 1 {
+            guard body + 4 + 16 <= data.endIndex else { return }
+            writeUInt64(&data, at: body + 4, value: seconds)
+            writeUInt64(&data, at: body + 12, value: seconds)
+        } else {
+            guard body + 4 + 8 <= data.endIndex else { return }
+            let secs32 = UInt32(truncatingIfNeeded: seconds)
+            writeUInt32(&data, at: body + 4, value: secs32)
+            writeUInt32(&data, at: body + 8, value: secs32)
+        }
+    }
+
+    private static func readUInt32(_ data: Data, at i: Int) -> UInt32 {
+        (UInt32(data[i]) << 24) | (UInt32(data[i + 1]) << 16)
+            | (UInt32(data[i + 2]) << 8) | UInt32(data[i + 3])
+    }
+
+    private static func readUInt64(_ data: Data, at i: Int) -> UInt64 {
+        var v: UInt64 = 0
+        for k in 0..<8 { v = (v << 8) | UInt64(data[i + k]) }
+        return v
+    }
+
+    private static func writeUInt32(_ data: inout Data, at i: Int, value: UInt32) {
+        for k in 0..<4 { data[i + k] = UInt8((value >> (8 * (3 - k))) & 0xff) }
+    }
+
+    private static func writeUInt64(_ data: inout Data, at i: Int, value: UInt64) {
+        for k in 0..<8 { data[i + k] = UInt8((value >> (8 * (7 - k))) & 0xff) }
+    }
+
+    private static func atomType(_ data: Data, at i: Int) -> String {
+        String(bytes: data[i..<(i + 4)], encoding: .ascii) ?? ""
     }
 
     // MARK: - Date stamps

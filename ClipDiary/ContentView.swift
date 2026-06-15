@@ -710,12 +710,14 @@ struct RenderSheet: View {
         progress = 0
         let renderSize = store.settings.orientation.size
         let fadeOutSeconds = store.settings.effectiveFadeOutSeconds
+        let creationDate = range.exportCreationDate(clips: clips)
 
         Task {
             do {
                 try await Exporter.exportMovie(
                     clips: clips, store: store, outputURL: url,
-                    renderSize: renderSize, fadeOutSeconds: fadeOutSeconds
+                    renderSize: renderSize, fadeOutSeconds: fadeOutSeconds,
+                    creationDate: creationDate
                 ) { value in
                     Task { @MainActor in progress = value }
                 }
