@@ -231,6 +231,10 @@ struct CardEditorView: View {
         }
         .padding(20)
         .onChange(of: doc, initial: true) { _, _ in rerender() }
+        // ⌘V pastes a clipboard image onto the card. Caught at the window level
+        // so it works without the canvas holding focus, but it defers to a
+        // focused text field (the name or a text element) for normal text paste.
+        .background(PasteImageCatcher(onPaste: pasteImage))
     }
 
     // MARK: Header
@@ -279,8 +283,6 @@ struct CardEditorView: View {
         HStack(spacing: 8) {
             Button { addText() } label: { Label("Add Text", systemImage: "textformat") }
             Button { addImageFromFile() } label: { Label("Add Image…", systemImage: "photo") }
-            Button { pasteImage() } label: { Label("Paste Image", systemImage: "doc.on.clipboard") }
-                .disabled(!pasteboardHasImage)
             Spacer()
             // Z-order + delete act on the selected element.
             Group {
@@ -413,10 +415,6 @@ struct CardEditorView: View {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         guard let assetID = store.importCardImage(from: url, into: doc) else { return }
         appendImage(assetID: assetID)
-    }
-
-    private var pasteboardHasImage: Bool {
-        NSPasteboard.general.canReadObject(forClasses: [NSImage.self], options: nil)
     }
 
     private func pasteImage() {
@@ -611,5 +609,46 @@ private struct CardCanvas: View {
     private func viewRect(_ f: CropRect, in fit: CGRect) -> CGRect {
         CGRect(x: fit.minX + f.x * fit.width, y: fit.minY + f.y * fit.height,
                width: f.width * fit.width, height: f.height * fit.height)
+    }
+}
+
+// MARK: - ⌘V paste
+
+/// Invisible helper that intercepts ⌘V at the window level so the card editor
+/// can paste a clipboard image without the canvas holding keyboard focus. It
+/// defers to a focused text field (whose field editor is the first responder)
+/// and only acts when the clipboard actually holds an image, so normal text
+/// paste is untouched.
+private struct PasteImageCatcher: NSViewRepresentable {
+    let onPaste: () -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = CatcherView()
+        view.onPaste = onPaste
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        (nsView as? CatcherView)?.onPaste = onPaste
+    }
+
+    final class CatcherView: NSView {
+        var onPaste: (() -> Void)?
+
+        // Stay out of the way of clicks; only the key-equivalent path matters.
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func performKeyEquivalent(with event: NSEvent) -> Bool {
+            let isCommandV = event.modifierFlags
+                .intersection(.deviceIndependentFlagsMask) == .command
+                && event.charactersIgnoringModifiers == "v"
+            guard isCommandV else { return false }
+            // A text field being edited owns paste (its field editor is NSText).
+            if window?.firstResponder is NSText { return false }
+            guard NSPasteboard.general.canReadObject(
+                forClasses: [NSImage.self], options: nil) else { return false }
+            onPaste?()
+            return true
+        }
     }
 }
