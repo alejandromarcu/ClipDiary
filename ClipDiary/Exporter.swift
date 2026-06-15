@@ -264,10 +264,17 @@ struct Exporter {
             let (fadeIn, fadeOut) = Self.applyOpacityFades(
                 clip.transition, to: layer, start: cursor, duration: range.duration
             )
-            if clipHasAudio, let audioParams, fadeIn > 0 || fadeOut > 0 {
-                Self.applyVolumeFades(fadeIn: fadeIn, fadeOut: fadeOut, to: audioParams,
-                                      start: cursor, duration: range.duration)
-                audioMixUsed = true
+            if clipHasAudio, let audioParams {
+                // The shared volume curve holds its last value, so an earlier
+                // clip's fade-out would otherwise silence every later clip.
+                // Reset the baseline to full at this clip's start (a fade-in
+                // ramp defines its own start, so it only matters without one).
+                if fadeIn <= 0 { audioParams.setVolume(1, at: cursor) }
+                if fadeIn > 0 || fadeOut > 0 {
+                    Self.applyVolumeFades(fadeIn: fadeIn, fadeOut: fadeOut, to: audioParams,
+                                          start: cursor, duration: range.duration)
+                    audioMixUsed = true
+                }
             }
 
             let instruction = AVMutableVideoCompositionInstruction()
