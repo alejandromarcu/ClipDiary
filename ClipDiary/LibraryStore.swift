@@ -31,10 +31,15 @@ final class LibraryStore: ObservableObject {
     /// Mutated only through `updateSettings`, which also persists.
     @Published private(set) var settings = ProjectSettings()
 
+    /// The project's designed title cards (gallery), sorted by name. Each lives
+    /// in its own folder under `Cards/` — see `Cards.swift`.
+    @Published private(set) var cards: [CardDocument] = []
+
     private var clipsDir: URL!
     private var metadataURL: URL!
     private var sourcesURL: URL!
     private var settingsURL: URL!
+    private var cardsDir: URL!
     /// The security-scoped URL we currently hold access to (released before we
     /// switch to another project). nil for open/save-panel URLs, which the
     /// sandbox keeps accessible for the whole process without start/stop.
@@ -202,10 +207,12 @@ final class LibraryStore: ObservableObject {
         metadataURL = metaURL
         sourcesURL = url.appendingPathComponent("sources.json")
         settingsURL = url.appendingPathComponent("settings.json")
+        cardsDir = url.appendingPathComponent("Cards", isDirectory: true)
         try? FileManager.default.createDirectory(at: clipsDir, withIntermediateDirectories: true)
         thumbnailCache.removeAllObjects()
         clips = loadedClips
         settings = Self.loadSettings(from: settingsURL)
+        cards = Self.loadCards(from: cardsDir)
         loadSources()
         rememberProject(url)
         return .opened
@@ -220,6 +227,7 @@ final class LibraryStore: ObservableObject {
         sourceFolders = []
         sourceItems = []
         isScanningSources = false
+        cards = []
     }
 
     // MARK: - Recent projects (security-scoped bookmarks)
@@ -677,6 +685,197 @@ final class LibraryStore: ObservableObject {
             try? FileManager.default.removeItem(at: fileURL(for: clip))
         }
         thumbnailCache.removeObject(forKey: clip.id as NSUUID)
+        save()
+    }
+
+    // MARK: - Cards
+
+    /// Loads every saved card by scanning `Cards/<id>/card.json`, sorted by
+    /// name. Unreadable folders are skipped rather than failing the load.
+    private static func loadCards(from dir: URL) -> [CardDocument] {
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: nil
+        ) else { return [] }
+        let decoder = JSONDecoder()
+        let docs = entries.compactMap { entry -> CardDocument? in
+            let url = entry.appendingPathComponent("card.json")
+            guard let data = try? Data(contentsOf: url) else { return nil }
+            return try? decoder.decode(CardDocument.self, from: data)
+        }
+        return docs.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// The folder holding a card's `card.json` and its image assets.
+    func cardDir(for doc: CardDocument) -> URL {
+        cardsDir.appendingPathComponent(doc.id.uuidString, isDirectory: true)
+    }
+
+    /// On-disk URL of one of a card's image assets.
+    func cardAssetURL(card: CardDocument, assetID: String) -> URL {
+        cardDir(for: card).appendingPathComponent(assetID)
+    }
+
+    /// Whether `name` (case-insensitively) is free for a card, ignoring the card
+    /// with `excluding` (so saving a card under its own name is allowed).
+    func cardNameAvailable(_ name: String, excluding id: UUID? = nil) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        return !cards.contains {
+            $0.id != id && $0.name.caseInsensitiveCompare(trimmed) == .orderedSame
+        }
+    }
+
+    /// A free card name based on `base`, appending "copy" / "copy N" as needed.
+    private func uniqueCardName(basedOn base: String) -> String {
+        var candidate = "\(base) copy"
+        var n = 2
+        while !cardNameAvailable(candidate) {
+            candidate = "\(base) copy \(n)"
+            n += 1
+        }
+        return candidate
+    }
+
+    /// Writes a card's `card.json` and registers it (or updates the existing
+    /// entry). The folder is created on demand, so a brand-new card's assets can
+    /// be stored before its first save.
+    func saveCard(_ doc: CardDocument) {
+        guard cardsDir != nil else { return }
+        let dir = cardDir(for: doc)
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(doc)
+            try data.write(to: dir.appendingPathComponent("card.json"), options: .atomic)
+        } catch {
+            lastError = "Could not save card “\(doc.name)”: \(error.localizedDescription)"
+            return
+        }
+        if let idx = cards.firstIndex(where: { $0.id == doc.id }) {
+            cards[idx] = doc
+        } else {
+            cards.append(doc)
+        }
+        cards.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// Copies a card's folder (assets included) under a new id + "copy" name.
+    @discardableResult
+    func duplicateCard(_ doc: CardDocument) -> CardDocument? {
+        guard cardsDir != nil else { return nil }
+        var copy = doc
+        copy.id = UUID()
+        copy.name = uniqueCardName(basedOn: doc.name)
+        do {
+            try FileManager.default.copyItem(at: cardDir(for: doc), to: cardDir(for: copy))
+        } catch {
+            lastError = "Could not duplicate card “\(doc.name)”: \(error.localizedDescription)"
+            return nil
+        }
+        // Overwrite the copied card.json with the new id/name (assets keep their
+        // names, and elements address them by name within this folder).
+        saveCard(copy)
+        return copy
+    }
+
+    func deleteCard(_ doc: CardDocument) {
+        try? FileManager.default.removeItem(at: cardDir(for: doc))
+        cards.removeAll { $0.id == doc.id }
+    }
+
+    /// Removes a never-saved card's folder (e.g. its pasted assets) when the
+    /// editor is cancelled, so trying out a new card leaves nothing behind.
+    func discardUnsavedCard(_ doc: CardDocument) {
+        guard !cards.contains(where: { $0.id == doc.id }) else { return }
+        try? FileManager.default.removeItem(at: cardDir(for: doc))
+    }
+
+    /// Copies an image file into a card's folder, returning the new asset id
+    /// (the stored file name) to reference from a `.image` element.
+    func importCardImage(from url: URL, into doc: CardDocument) -> String? {
+        let dir = cardDir(for: doc)
+        let didStart = url.startAccessingSecurityScopedResource()
+        defer { if didStart { url.stopAccessingSecurityScopedResource() } }
+        let ext = url.pathExtension.isEmpty ? "png" : url.pathExtension
+        let assetID = UUID().uuidString + "." + ext
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try FileManager.default.copyItem(at: url, to: dir.appendingPathComponent(assetID))
+            return assetID
+        } catch {
+            lastError = "Could not add image: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    /// Stores a pasted image as a PNG card asset, returning its asset id.
+    func importCardImage(_ image: NSImage, into doc: CardDocument) -> String? {
+        let dir = cardDir(for: doc)
+        guard let data = image.pngData() else {
+            lastError = "Could not read the pasted image."
+            return nil
+        }
+        let assetID = UUID().uuidString + ".png"
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try data.write(to: dir.appendingPathComponent(assetID), options: .atomic)
+            return assetID
+        } catch {
+            lastError = "Could not add the pasted image: \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    /// Renders a card to an image at `size`, loading its image assets from the
+    /// card's folder. The single rendering path for the editor canvas, gallery
+    /// thumbnails, day snapshots and cover/ending segments.
+    func renderCardImage(_ doc: CardDocument, size: CGSize) -> CGImage? {
+        let maxPixel = Int(max(size.width, size.height).rounded())
+        var assets: [String: CGImage] = [:]
+        for element in doc.elements {
+            if case .image(let assetID) = element.kind, assets[assetID] == nil {
+                if let cg = loadOrientedCGImage(from: cardAssetURL(card: doc, assetID: assetID),
+                                                maxPixel: maxPixel) {
+                    assets[assetID] = cg
+                }
+            }
+        }
+        return CardRenderer.drawCard(doc, assets: assets, size: size)
+    }
+
+    /// Snapshots `doc` to a PNG in `Clips/` and registers it as a photo clip on
+    /// `day` (date stamp off — cards are already composed). The card document is
+    /// left untouched; later edits won't change this clip.
+    func addCard(_ doc: CardDocument, to day: Date) {
+        guard hasProject else { return }
+        guard let cg = renderCardImage(doc, size: settings.orientation.size),
+              let data = cg.pngData() else {
+            lastError = "Could not render card “\(doc.name)”."
+            return
+        }
+        let newName = UUID().uuidString + ".png"
+        let destURL = clipsDir.appendingPathComponent(newName)
+        do {
+            try data.write(to: destURL, options: .atomic)
+        } catch {
+            lastError = "Could not add card “\(doc.name)”: \(error.localizedDescription)"
+            return
+        }
+        var clip = Clip(
+            fileName: newName,
+            date: day.dayKey,
+            inSeconds: 0,
+            outSeconds: doc.displaySeconds,
+            durationSeconds: doc.displaySeconds,
+            kind: .photo,
+            showsDateOverlay: false
+        )
+        if let digest = Self.contentDigest(of: destURL) {
+            clip.sourceHash = digest.hash
+            clip.sourceBytes = digest.bytes
+        }
+        clips.append(clip)
         save()
     }
 

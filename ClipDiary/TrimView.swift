@@ -12,6 +12,7 @@ struct DaySheet: View {
     let day: Date
 
     @State private var selectedClipID: UUID?
+    @State private var showCardPicker = false
 
     private var dayClips: [Clip] { store.clips(on: day) }
 
@@ -21,11 +22,17 @@ struct DaySheet: View {
                 Text(day.formatted(date: .complete, time: .omitted))
                     .font(.headline)
                 Spacer()
+                Button {
+                    showCardPicker = true
+                } label: {
+                    Label("Add Card…", systemImage: "rectangle.on.rectangle.angled")
+                }
+                .help("Add a designed title card as a clip on this day")
                 if !dayClips.isEmpty {
                     Button("Preview Day") {
                         openWindow(value: PreviewRequest(
                             range: .custom(start: day, end: day), tagFilter: nil,
-                            includeEndingFade: false))
+                            includeEndingFade: false, includeBookends: false))
                     }
                 }
                 Button("Done") { dismiss() }
@@ -58,6 +65,10 @@ struct DaySheet: View {
                minHeight: 560, idealHeight: 680, maxHeight: .infinity)
         .background(ResizableSheetSupport(minSize: NSSize(width: 640, height: 560)))
         .onAppear { selectedClipID = dayClips.first?.id }
+        .sheet(isPresented: $showCardPicker) {
+            CardsManagerView(onPick: { store.addCard($0, to: day) })
+                .environmentObject(store)
+        }
     }
 }
 

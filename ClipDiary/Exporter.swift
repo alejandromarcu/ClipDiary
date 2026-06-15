@@ -25,6 +25,13 @@ struct DateOverlay {
     let caption: String
 }
 
+/// A pre-rendered image (a Cover or Ending card) spliced onto the start or end
+/// of a render for `seconds`. Carries no date stamp of its own.
+struct Bookend {
+    let image: CGImage
+    let seconds: Double
+}
+
 /// A stitched month ready to play or export. Photo clips live as rendered
 /// MP4 segments in `tempDir`, so the composition is only valid until
 /// `cleanUp()` is called — the previewer owns it while the player is open.
@@ -61,10 +68,13 @@ struct Exporter {
         renderSize: CGSize,
         fadeOutSeconds: Double? = nil,
         creationDate: Date? = nil,
+        leading: Bookend? = nil,
+        trailing: Bookend? = nil,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws {
         let built = try await buildComposition(
-            clips: clips, store: store, renderSize: renderSize, fadeOutSeconds: fadeOutSeconds
+            clips: clips, store: store, renderSize: renderSize,
+            fadeOutSeconds: fadeOutSeconds, leading: leading, trailing: trailing
         )
         defer { built.cleanUp() }
 
@@ -114,7 +124,9 @@ struct Exporter {
         clips: [Clip],
         store: LibraryStore,
         renderSize: CGSize,
-        fadeOutSeconds: Double? = nil
+        fadeOutSeconds: Double? = nil,
+        leading: Bookend? = nil,
+        trailing: Bookend? = nil
     ) async throws -> MonthComposition {
         guard !clips.isEmpty else { throw ExportError.noClips }
 
@@ -149,6 +161,40 @@ struct Exporter {
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         var succeeded = false
         defer { if !succeeded { try? FileManager.default.removeItem(at: tempDir) } }
+
+        // Splices a Cover/Ending card image in as a full-frame segment (no date
+        // stamp), sharing the clip loop's aspect-fit + last-segment tracking so
+        // a trailing card naturally becomes what the ending fade ramps.
+        func insertBookend(_ bookend: Bookend, name: String) async throws {
+            let url = try await writeImageSegment(
+                image: bookend.image, seconds: bookend.seconds,
+                renderSize: renderSize, in: tempDir, name: name
+            )
+            let asset = AVURLAsset(url: url)
+            guard let srcVideo = try await asset.loadTracks(withMediaType: .video).first else {
+                throw ExportError.noVideoTrack(name)
+            }
+            let range = CMTimeRange(start: .zero, duration: try await asset.load(.duration))
+            guard range.duration > .zero else { return }
+            try videoTrack.insertTimeRange(range, of: srcVideo, at: cursor)
+
+            let naturalSize = try await srcVideo.load(.naturalSize)
+            let preferred = try await srcVideo.load(.preferredTransform)
+            let transform = Self.aspectFitTransform(
+                naturalSize: naturalSize, preferred: preferred, renderSize: renderSize
+            )
+            let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: videoTrack)
+            layer.setTransform(transform, at: cursor)
+            let instruction = AVMutableVideoCompositionInstruction()
+            instruction.timeRange = CMTimeRange(start: cursor, duration: range.duration)
+            instruction.layerInstructions = [layer]
+            instructions.append(instruction)
+            lastLayer = layer
+            lastSegment = instruction.timeRange
+            cursor = cursor + range.duration
+        }
+
+        if let leading { try await insertBookend(leading, name: "cover") }
 
         for (index, (clip, url)) in items.enumerated() {
             let assetURL: URL
@@ -188,21 +234,9 @@ struct Exporter {
             // Aspect-fit transform for this segment.
             let naturalSize = try await srcVideo.load(.naturalSize)
             let preferred = try await srcVideo.load(.preferredTransform)
-            let orientedRect = CGRect(origin: .zero, size: naturalSize)
-                .applying(preferred)
-            let orientedSize = CGSize(width: abs(orientedRect.width),
-                                      height: abs(orientedRect.height))
-
-            let scale = min(renderSize.width / orientedSize.width,
-                            renderSize.height / orientedSize.height)
-            let scaledSize = CGSize(width: orientedSize.width * scale,
-                                    height: orientedSize.height * scale)
-            let tx = (renderSize.width - scaledSize.width) / 2 - orientedRect.minX * scale
-            let ty = (renderSize.height - scaledSize.height) / 2 - orientedRect.minY * scale
-
-            var transform = preferred
-            transform = transform.concatenating(CGAffineTransform(scaleX: scale, y: scale))
-            transform = transform.concatenating(CGAffineTransform(translationX: tx, y: ty))
+            let transform = Self.aspectFitTransform(
+                naturalSize: naturalSize, preferred: preferred, renderSize: renderSize
+            )
 
             let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: videoTrack)
             layer.setTransform(transform, at: cursor)
@@ -224,6 +258,8 @@ struct Exporter {
 
             cursor = cursor + range.duration
         }
+
+        if let trailing { try await insertBookend(trailing, name: "ending") }
 
         guard cursor > .zero else { throw ExportError.noClips }
         let totalDuration = cursor
@@ -470,7 +506,29 @@ struct Exporter {
         )
     }
 
-    // MARK: - Photo segments
+    // MARK: - Aspect fit
+
+    /// The transform that aspect-fits a source track (honoring its
+    /// `preferredTransform`, e.g. rotated iPhone video) centered into
+    /// `renderSize`, letterboxing as needed. Shared by every stitched segment.
+    static func aspectFitTransform(
+        naturalSize: CGSize, preferred: CGAffineTransform, renderSize: CGSize
+    ) -> CGAffineTransform {
+        let orientedRect = CGRect(origin: .zero, size: naturalSize).applying(preferred)
+        let orientedSize = CGSize(width: abs(orientedRect.width), height: abs(orientedRect.height))
+        let scale = min(renderSize.width / orientedSize.width,
+                        renderSize.height / orientedSize.height)
+        let scaledSize = CGSize(width: orientedSize.width * scale,
+                                height: orientedSize.height * scale)
+        let tx = (renderSize.width - scaledSize.width) / 2 - orientedRect.minX * scale
+        let ty = (renderSize.height - scaledSize.height) / 2 - orientedRect.minY * scale
+        var transform = preferred
+        transform = transform.concatenating(CGAffineTransform(scaleX: scale, y: scale))
+        transform = transform.concatenating(CGAffineTransform(translationX: tx, y: ty))
+        return transform
+    }
+
+    // MARK: - Photo / image segments
 
     /// Renders a photo clip (with its crop applied) into a silent MP4 of the
     /// clip's display duration, sized to fit within `renderSize`.
@@ -485,16 +543,30 @@ struct Exporter {
         guard let oriented = loadOrientedCGImage(from: photoURL, maxPixel: maxPixel) else {
             throw ExportError.sessionFailed("Could not read photo \(clip.fileName).")
         }
-
         let image = clip.crop.map { croppedImage(oriented, to: $0) } ?? oriented
+        return try await writeImageSegment(
+            image: image, seconds: clip.trimmedDuration,
+            renderSize: renderSize, in: directory, name: "photo-\(index)"
+        )
+    }
 
+    /// Writes a still image into a silent MP4 of `seconds` (min 0.5), fit within
+    /// `renderSize` with even H.264 dimensions, never upscaled. Shared by photo
+    /// clips and Cover/Ending card segments.
+    private static func writeImageSegment(
+        image: CGImage,
+        seconds: Double,
+        renderSize: CGSize,
+        in directory: URL,
+        name: String
+    ) async throws -> URL {
         // Even dimensions for H.264, never upscaled beyond the source.
         let fitScale = min(1, min(renderSize.width / CGFloat(image.width),
                                   renderSize.height / CGFloat(image.height)))
         let width = max(2, Int(CGFloat(image.width) * fitScale / 2) * 2)
         let height = max(2, Int(CGFloat(image.height) * fitScale / 2) * 2)
 
-        let outputURL = directory.appendingPathComponent("photo-\(index).mp4")
+        let outputURL = directory.appendingPathComponent("\(name).mp4")
         let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
             AVVideoCodecKey: AVVideoCodecType.h264,
@@ -514,12 +586,12 @@ struct Exporter {
 
         guard writer.startWriting() else {
             throw ExportError.sessionFailed(
-                writer.error?.localizedDescription ?? "Could not write photo segment."
+                writer.error?.localizedDescription ?? "Could not write image segment."
             )
         }
         writer.startSession(atSourceTime: .zero)
 
-        let duration = CMTime(seconds: max(0.5, clip.trimmedDuration), preferredTimescale: 600)
+        let duration = CMTime(seconds: max(0.5, seconds), preferredTimescale: 600)
         let frameDuration = CMTime(value: 1, timescale: 30)
         var times = [CMTime.zero]
         let lastFrame = duration - frameDuration
@@ -532,7 +604,7 @@ struct Exporter {
             guard let pool = adaptor.pixelBufferPool,
                   let buffer = makePixelBuffer(from: image, pool: pool,
                                                width: width, height: height) else {
-                throw ExportError.sessionFailed("Could not render photo \(clip.fileName).")
+                throw ExportError.sessionFailed("Could not render image segment.")
             }
             adaptor.append(buffer, withPresentationTime: time)
         }
@@ -542,7 +614,7 @@ struct Exporter {
         await writer.finishWriting()
         guard writer.status == .completed else {
             throw ExportError.sessionFailed(
-                writer.error?.localizedDescription ?? "Could not write photo segment."
+                writer.error?.localizedDescription ?? "Could not write image segment."
             )
         }
         return outputURL

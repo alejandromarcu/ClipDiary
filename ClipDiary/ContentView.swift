@@ -79,6 +79,12 @@ struct ContentView: View {
                 }
             }
             ToolbarItem(placement: .primaryAction) {
+                Button { openWindow(id: "cards") } label: {
+                    Label("Cards", systemImage: "rectangle.on.rectangle.angled")
+                }
+                .help("Design and manage title cards (covers, endings, captioned slides)")
+            }
+            ToolbarItem(placement: .primaryAction) {
                 Button { showRenderSheet = true } label: {
                     Label("Create Video…", systemImage: "film.stack")
                 }
@@ -119,7 +125,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showRenderSheet) {
             RenderSheet(initialRange: store.settings.renderRange ?? .month(Date()),
-                        tagFilter: tagFilter)
+                        tagFilter: tagFilter,
+                        initialCover: store.settings.coverCardID,
+                        initialEnding: store.settings.endingCardID)
                 .environmentObject(store)
         }
         .sheet(isPresented: $showSourcesSheet) {
@@ -387,8 +395,9 @@ struct DayCell: View {
         .buttonStyle(.plain)
         .contextMenu {
             Button("Review Sources…", action: onTap)
-            Button("Edit Day's Clips…", action: onEdit)
-                .disabled(dayClips.isEmpty)
+            // Always reachable — the day editor is also where a card is added,
+            // so an empty day still needs a way in.
+            Button(dayClips.isEmpty ? "Edit Day…" : "Edit Day's Clips…", action: onEdit)
         }
         .task(id: dayClips.first?.thumbnailKey) {
             if let first = dayClips.first {
@@ -509,6 +518,11 @@ struct RenderSheet: View {
     /// updates" warning, so the save is deferred to `onChange` instead.
     @State private var range: RenderRange
 
+    /// Cover/Ending card selections, mirrored locally and persisted back to the
+    /// project in `onChange` (same deferred-save reason as `range` above).
+    @State private var coverCardID: UUID?
+    @State private var endingCardID: UUID?
+
     @State private var isExporting = false
     @State private var progress: Double = 0
     @State private var errorMessage: String?
@@ -517,8 +531,11 @@ struct RenderSheet: View {
     /// was never changed). Seeding in `init` rather than a `@State` default
     /// means `onChange` fires only on real edits, so an untouched window leaves
     /// `settings.renderRange` nil and keeps defaulting to the current month.
-    init(initialRange: RenderRange, tagFilter: String?) {
+    init(initialRange: RenderRange, tagFilter: String?,
+         initialCover: UUID? = nil, initialEnding: UUID? = nil) {
         _range = State(initialValue: initialRange)
+        _coverCardID = State(initialValue: initialCover)
+        _endingCardID = State(initialValue: initialEnding)
         self.tagFilter = tagFilter
     }
 
@@ -539,6 +556,8 @@ struct RenderSheet: View {
                 .font(.title3.bold())
 
             rangePicker
+
+            bookendPicker
 
             if let tagFilter {
                 Text("Only clips tagged “\(tagFilter)”.")
@@ -587,6 +606,48 @@ struct RenderSheet: View {
         .onChange(of: range) { _, newRange in
             store.updateSettings { $0.renderRange = newRange }
         }
+        .onChange(of: coverCardID) { _, new in
+            store.updateSettings { $0.coverCardID = new }
+        }
+        .onChange(of: endingCardID) { _, new in
+            store.updateSettings { $0.endingCardID = new }
+        }
+    }
+
+    // MARK: Cover / ending cards
+
+    /// Cover and Ending card selectors. Persisted per project (via `onChange`)
+    /// and rendered onto the start/end of both Preview and Export.
+    @ViewBuilder
+    private var bookendPicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Cover")
+                    .frame(width: 60, alignment: .leading)
+                cardMenu(selection: $coverCardID)
+            }
+            HStack {
+                Text("Ending")
+                    .frame(width: 60, alignment: .leading)
+                cardMenu(selection: $endingCardID)
+            }
+            if store.cards.isEmpty {
+                Text("No cards yet — design a cover or ending with the Cards button in the toolbar.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func cardMenu(selection: Binding<UUID?>) -> some View {
+        Picker("", selection: selection) {
+            Text("None").tag(UUID?.none)
+            ForEach(store.cards) { card in
+                Text(card.name).tag(UUID?.some(card.id))
+            }
+        }
+        .labelsHidden()
+        .disabled(store.cards.isEmpty)
     }
 
     // MARK: Range controls
@@ -711,13 +772,17 @@ struct RenderSheet: View {
         let renderSize = store.settings.orientation.size
         let fadeOutSeconds = store.settings.effectiveFadeOutSeconds
         let creationDate = range.exportCreationDate(clips: clips)
+        // Render the Cover/Ending cards now (on the main actor) so the export
+        // task just splices the finished images on.
+        let leading = bookend(for: coverCardID, renderSize: renderSize)
+        let trailing = bookend(for: endingCardID, renderSize: renderSize)
 
         Task {
             do {
                 try await Exporter.exportMovie(
                     clips: clips, store: store, outputURL: url,
                     renderSize: renderSize, fadeOutSeconds: fadeOutSeconds,
-                    creationDate: creationDate
+                    creationDate: creationDate, leading: leading, trailing: trailing
                 ) { value in
                     Task { @MainActor in progress = value }
                 }
@@ -730,6 +795,19 @@ struct RenderSheet: View {
             }
         }
     }
+
+    private func bookend(for id: UUID?, renderSize: CGSize) -> Bookend? {
+        cardBookend(id, store: store, renderSize: renderSize)
+    }
+}
+
+/// Resolves a settings card id to a rendered Cover/Ending segment (nil for
+/// "None" or a card that's since been deleted). Shared by Export and Preview.
+@MainActor
+func cardBookend(_ id: UUID?, store: LibraryStore, renderSize: CGSize) -> Bookend? {
+    guard let id, let doc = store.cards.first(where: { $0.id == id }),
+          let cg = store.renderCardImage(doc, size: renderSize) else { return nil }
+    return Bookend(image: cg, seconds: doc.displaySeconds)
 }
 
 // MARK: - Project settings
@@ -837,6 +915,9 @@ struct PreviewRequest: Codable, Hashable {
     /// The ending fade-to-black is meant for the very last clip of a full
     /// render, so the day editor's single-day preview opts out of it.
     var includeEndingFade: Bool = true
+    /// Whether to splice in the project's Cover/Ending cards. Off for the day
+    /// editor's single-day preview (those bookend a whole video, not one day).
+    var includeBookends: Bool = true
 }
 
 /// Plays the month's stitched composition in-app — same trims, ordering and
@@ -846,6 +927,7 @@ struct PreviewWindow: View {
     let range: RenderRange
     var tagFilter: String?
     var includeEndingFade: Bool = true
+    var includeBookends: Bool = true
 
     @State private var built: MonthComposition?
     @State private var player: AVPlayer?
@@ -940,11 +1022,15 @@ struct PreviewWindow: View {
         errorMessage = nil
 
         let clips = store.clips(in: range, taggedWith: tagFilter)
+        let renderSize = store.settings.orientation.size
+        let leading = includeBookends ? cardBookend(store.settings.coverCardID, store: store, renderSize: renderSize) : nil
+        let trailing = includeBookends ? cardBookend(store.settings.endingCardID, store: store, renderSize: renderSize) : nil
         do {
             let built = try await Exporter.buildComposition(
                 clips: clips, store: store,
-                renderSize: store.settings.orientation.size,
-                fadeOutSeconds: includeEndingFade ? store.settings.effectiveFadeOutSeconds : nil
+                renderSize: renderSize,
+                fadeOutSeconds: includeEndingFade ? store.settings.effectiveFadeOutSeconds : nil,
+                leading: leading, trailing: trailing
             )
             // A settings change cancels and restarts this task; a stale build
             // finishing late must not overwrite the newer one.

@@ -22,6 +22,11 @@ struct ProjectSettings: Codable, Equatable {
     /// project. `nil` means "never changed" — the window then defaults to the
     /// current month, which keeps following the calendar instead of sticking.
     var renderRange: RenderRange? = nil
+    /// The card shown at the very start of a rendered video, or nil for none.
+    /// Chosen in the Create Video window and remembered per project.
+    var coverCardID: UUID? = nil
+    /// The card shown at the very end of a rendered video, or nil for none.
+    var endingCardID: UUID? = nil
 
     /// The fade length to actually apply, or nil when fading is disabled.
     var effectiveFadeOutSeconds: Double? {
@@ -43,7 +48,8 @@ struct ProjectSettings: Codable, Equatable {
     init() {}
 
     enum CodingKeys: String, CodingKey {
-        case orientation, fadeOutLastClip, fadeOutSeconds, renderRange
+        case orientation, fadeOutLastClip, fadeOutSeconds, renderRange,
+             coverCardID, endingCardID
     }
 
     init(from decoder: Decoder) throws {
@@ -52,6 +58,8 @@ struct ProjectSettings: Codable, Equatable {
         fadeOutLastClip = try c.decodeIfPresent(Bool.self, forKey: .fadeOutLastClip) ?? false
         fadeOutSeconds = try c.decodeIfPresent(Double.self, forKey: .fadeOutSeconds) ?? 1.0
         renderRange = try c.decodeIfPresent(RenderRange.self, forKey: .renderRange)
+        coverCardID = try c.decodeIfPresent(UUID.self, forKey: .coverCardID)
+        endingCardID = try c.decodeIfPresent(UUID.self, forKey: .endingCardID)
     }
 }
 
