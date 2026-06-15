@@ -55,9 +55,11 @@ struct DaySheet: View {
                 ContentUnavailableView(
                     "No clip on this day",
                     systemImage: "video.slash",
-                    description: Text("Import a video and set its date to add one.")
+                    description: Text("Use “Add Card…” above to drop in a title slide, or review the day's photos and videos from your source folders.")
                 )
-                .frame(minHeight: 200)
+                // Fill the body so the header stays pinned to the top instead of
+                // the whole sheet centering on the short empty-state content.
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .padding(20)
