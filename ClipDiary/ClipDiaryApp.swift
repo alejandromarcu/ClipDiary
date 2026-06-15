@@ -33,7 +33,8 @@ struct ClipDiaryApp: App {
         // macOS can't be resized by the user.
         WindowGroup("Preview", for: PreviewRequest.self) { $request in
             if let request {
-                PreviewWindow(range: request.range, tagFilter: request.tagFilter)
+                PreviewWindow(range: request.range, tagFilter: request.tagFilter,
+                              includeEndingFade: request.includeEndingFade)
                     .environmentObject(store)
             }
         }

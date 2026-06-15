@@ -94,6 +94,9 @@ enum RenderRange: Codable, Hashable {
             return "All clips"
         case .custom(let start, let end):
             let s = start.formatted(date: .abbreviated, time: .omitted)
+            // A single-day range (e.g. the day editor's Preview Day) reads as
+            // one date, not "Jun 14, 2026 – Jun 14, 2026".
+            guard start.dayKey != end.dayKey else { return s }
             let e = end.formatted(date: .abbreviated, time: .omitted)
             return "\(s) – \(e)"
         }
@@ -107,7 +110,9 @@ enum RenderRange: Codable, Hashable {
         case .all:
             return "All"
         case .custom(let start, let end):
-            return "\(Self.fileDateFormatter.string(from: start))–\(Self.fileDateFormatter.string(from: end))"
+            let s = Self.fileDateFormatter.string(from: start)
+            guard start.dayKey != end.dayKey else { return s }
+            return "\(s)–\(Self.fileDateFormatter.string(from: end))"
         }
     }
 
