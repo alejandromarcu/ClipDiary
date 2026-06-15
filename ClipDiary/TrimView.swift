@@ -306,6 +306,7 @@ struct TrimEditor: View {
     @State private var isPlayingPreview = false
     @State private var playheadSeconds = 0.0
     @State private var editedDate: Date
+    @State private var showTransition = false
 
     /// Snapshot as the editor opened, for Revert.
     private let original: Clip
@@ -394,6 +395,8 @@ struct TrimEditor: View {
                     .textFieldStyle(.roundedBorder)
             }
 
+            TransitionRow(transition: clip.transition) { showTransition = true }
+
             Divider()
 
             HStack {
@@ -445,6 +448,9 @@ struct TrimEditor: View {
         }
         .onChange(of: clip.inSeconds) { _, newValue in seek(to: newValue) }
         .onChange(of: clip.outSeconds) { _, newValue in seek(to: newValue) }
+        .sheet(isPresented: $showTransition) {
+            TransitionEditorSheet(transition: $clip.transition, maxSeconds: clip.trimmedDuration)
+        }
     }
 
     private func saveEdits() {

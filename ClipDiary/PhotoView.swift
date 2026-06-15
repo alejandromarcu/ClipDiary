@@ -12,6 +12,7 @@ struct PhotoEditor: View {
     @State private var image: NSImage?
     @State private var editedDate: Date
     @State private var aspectLock: AspectLock = .free
+    @State private var showTransition = false
 
     /// Snapshot as the editor opened, for Revert.
     private let original: Clip
@@ -106,6 +107,8 @@ struct PhotoEditor: View {
                     .textFieldStyle(.roundedBorder)
             }
 
+            TransitionRow(transition: clip.transition) { showTransition = true }
+
             Divider()
 
             HStack {
@@ -148,6 +151,9 @@ struct PhotoEditor: View {
         // Auto-save so switching clips or closing the sheet keeps edits.
         // No-op if the clip was just deleted. Review drafts aren't saved.
         .onDisappear { if !isReview { saveEdits() } }
+        .sheet(isPresented: $showTransition) {
+            TransitionEditorSheet(transition: $clip.transition, maxSeconds: clip.trimmedDuration)
+        }
     }
 
     private func saveEdits() {
