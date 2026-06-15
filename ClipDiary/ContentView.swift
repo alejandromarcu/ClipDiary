@@ -832,6 +832,9 @@ struct ProjectSettingsSheet: View {
 struct PreviewRequest: Codable, Hashable {
     var range: RenderRange
     var tagFilter: String?
+    /// The ending fade-to-black is meant for the very last clip of a full
+    /// render, so the day editor's single-day preview opts out of it.
+    var includeEndingFade: Bool = true
 }
 
 /// Plays the month's stitched composition in-app — same trims, ordering and
@@ -840,6 +843,7 @@ struct PreviewWindow: View {
     @EnvironmentObject var store: LibraryStore
     let range: RenderRange
     var tagFilter: String?
+    var includeEndingFade: Bool = true
 
     @State private var built: MonthComposition?
     @State private var player: AVPlayer?
@@ -938,7 +942,7 @@ struct PreviewWindow: View {
             let built = try await Exporter.buildComposition(
                 clips: clips, store: store,
                 renderSize: store.settings.orientation.size,
-                fadeOutSeconds: store.settings.effectiveFadeOutSeconds
+                fadeOutSeconds: includeEndingFade ? store.settings.effectiveFadeOutSeconds : nil
             )
             // A settings change cancels and restarts this task; a stale build
             // finishing late must not overwrite the newer one.

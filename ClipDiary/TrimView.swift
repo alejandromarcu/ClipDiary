@@ -8,6 +8,7 @@ import UniformTypeIdentifiers
 struct DaySheet: View {
     @EnvironmentObject var store: LibraryStore
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openWindow) private var openWindow
     let day: Date
 
     @State private var selectedClipID: UUID?
@@ -20,6 +21,13 @@ struct DaySheet: View {
                 Text(day.formatted(date: .complete, time: .omitted))
                     .font(.headline)
                 Spacer()
+                if !dayClips.isEmpty {
+                    Button("Preview Day") {
+                        openWindow(value: PreviewRequest(
+                            range: .custom(start: day, end: day), tagFilter: nil,
+                            includeEndingFade: false))
+                    }
+                }
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.defaultAction)
             }
