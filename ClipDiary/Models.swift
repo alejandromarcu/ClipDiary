@@ -199,6 +199,15 @@ struct Clip: Identifiable, Codable, Equatable, Hashable {
     /// Several clips may share one source (and one copied media file), e.g.
     /// two segments cut from the same long video.
     var sourcePath: String? = nil
+    /// Lowercase-hex SHA-256 of the copied media file's bytes, recorded when the
+    /// clip is created. Lets the project be reconstructed if `Clips/` is lost:
+    /// source files can be re-found by content even after renames/moves, since
+    /// `sourcePath` (and file names) aren't reliable. nil for clips made before
+    /// this field existed.
+    var sourceHash: String? = nil
+    /// Byte size of that media file — a near-free pre-filter and sanity check
+    /// when matching `sourceHash` against source files. nil pre-this-field.
+    var sourceBytes: Int64? = nil
 
     var trimmedDuration: Double { max(0, outSeconds - inSeconds) }
 
@@ -220,7 +229,8 @@ struct Clip: Identifiable, Codable, Equatable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id, fileName, date, inSeconds, outSeconds, durationSeconds, createdAt,
-             tags, kind, crop, showsDateOverlay, caption, sourcePath
+             tags, kind, crop, showsDateOverlay, caption, sourcePath,
+             sourceHash, sourceBytes
     }
 }
 
@@ -241,6 +251,8 @@ extension Clip {
         showsDateOverlay = try container.decodeIfPresent(Bool.self, forKey: .showsDateOverlay) ?? true
         caption = try container.decodeIfPresent(String.self, forKey: .caption) ?? ""
         sourcePath = try container.decodeIfPresent(String.self, forKey: .sourcePath)
+        sourceHash = try container.decodeIfPresent(String.self, forKey: .sourceHash)
+        sourceBytes = try container.decodeIfPresent(Int64.self, forKey: .sourceBytes)
     }
 }
 

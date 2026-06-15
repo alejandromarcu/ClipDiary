@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import AppKit
 import Combine
+import CryptoKit
 import ImageIO
 import UniformTypeIdentifiers
 
@@ -478,13 +479,17 @@ final class LibraryStore: ObservableObject {
                 clipDate = created
             }
 
-            let clip = Clip(
+            var clip = Clip(
                 fileName: newName,
                 date: clipDate.dayKey,
                 inSeconds: 0,
                 outSeconds: duration,
                 durationSeconds: duration
             )
+            if let digest = Self.contentDigest(of: destURL) {
+                clip.sourceHash = digest.hash
+                clip.sourceBytes = digest.bytes
+            }
             clips.append(clip)
             save()
         } catch {
@@ -504,7 +509,7 @@ final class LibraryStore: ObservableObject {
             try FileManager.default.moveItem(at: tempURL, to: destURL)
             let asset = AVURLAsset(url: destURL)
             let duration = try await asset.load(.duration).seconds
-            let clip = Clip(
+            var clip = Clip(
                 fileName: newName,
                 date: date.dayKey,
                 inSeconds: 0,
@@ -512,11 +517,32 @@ final class LibraryStore: ObservableObject {
                 durationSeconds: duration,
                 showsDateOverlay: showsDateOverlay
             )
+            if let digest = Self.contentDigest(of: destURL) {
+                clip.sourceHash = digest.hash
+                clip.sourceBytes = digest.bytes
+            }
             clips.append(clip)
             save()
         } catch {
             lastError = "Import failed: \(error.localizedDescription)"
         }
+    }
+
+    /// SHA-256 (lowercase hex) and byte size of a file's contents, streamed in
+    /// 1 MB chunks so large videos aren't loaded into memory. Recorded on each
+    /// clip's copied media so the project can be reconstructed by content if
+    /// `Clips/` is lost. nil when the file can't be read.
+    static func contentDigest(of url: URL) -> (hash: String, bytes: Int64)? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        var bytes: Int64 = 0
+        while let chunk = try? handle.read(upToCount: 1 << 20), !chunk.isEmpty {
+            hasher.update(data: chunk)
+            bytes += Int64(chunk.count)
+        }
+        let hash = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        return (hash, bytes)
     }
 
     /// How long an imported photo is shown by default, in seconds.
@@ -544,7 +570,7 @@ final class LibraryStore: ObservableObject {
                 clipDate = created
             }
 
-            let clip = Clip(
+            var clip = Clip(
                 fileName: newName,
                 date: clipDate.dayKey,
                 inSeconds: 0,
@@ -552,6 +578,10 @@ final class LibraryStore: ObservableObject {
                 durationSeconds: Self.defaultPhotoDuration,
                 kind: .photo
             )
+            if let digest = Self.contentDigest(of: destURL) {
+                clip.sourceHash = digest.hash
+                clip.sourceBytes = digest.bytes
+            }
             clips.append(clip)
             save()
         } catch {
@@ -577,6 +607,10 @@ final class LibraryStore: ObservableObject {
         clip.sourcePath = sourcePath
         if let existing = clips.first(where: { $0.sourcePath == sourcePath }) {
             clip.fileName = existing.fileName
+            // Same bytes as the shared copy — reuse its digest instead of
+            // re-hashing (e.g. two segments cut from one long video).
+            clip.sourceHash = existing.sourceHash
+            clip.sourceBytes = existing.sourceBytes
         } else {
             let fallbackExt = clip.kind == .photo ? "jpg" : "mov"
             let ext = source.pathExtension.isEmpty ? fallbackExt : source.pathExtension
@@ -590,6 +624,10 @@ final class LibraryStore: ObservableObject {
                 return
             }
             clip.fileName = newName
+            if let digest = Self.contentDigest(of: source) {
+                clip.sourceHash = digest.hash
+                clip.sourceBytes = digest.bytes
+            }
         }
         clips.append(clip)
         save()
