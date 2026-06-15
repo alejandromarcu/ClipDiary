@@ -19,15 +19,19 @@ Deliberate improvements over 1SE:
   Project… (⇧⌘O — plain ⌘O is the trim editor's Set Out), Open Recent ▸ submenu
   + Clear Menu.
 - `Models.swift` — `Clip` struct (id, fileName, date, inSeconds, outSeconds,
-  durationSeconds, createdAt, tags, kind, crop, sourcePath) + date/time
-  helpers. A clip is a video or a photo (`ClipKind`); photos store their
+  durationSeconds, createdAt, tags, kind, crop, sourcePath, sourceHash,
+  sourceBytes) + date/time helpers. (`id` is a random `UUID`, not a content
+  hash.) A clip is a video or a photo (`ClipKind`); photos store their
   display duration in durationSeconds/outSeconds and an optional `CropRect`
   (unit coords, top-left origin). Trim/crop are metadata only; media files are
   never modified (non-destructive). Tags are free-form multi-word strings,
   deduped case-insensitively. `sourcePath` records which source-folder file a
   clip was picked from: clips picked twice from one source (two segments of a
   long video) **share one copied media file**, so `delete` only removes the
-  file when the last clip referencing it goes. Also `ProjectSettings`
+  file when the last clip referencing it goes. `sourceHash` (lowercase-hex
+  SHA-256 of the copied media bytes) + `sourceBytes` (file size) are recorded at
+  pick/import time so the project can be rebuilt by content if `Clips/` is lost
+  — see "Backup / reconstruction" below. Also `ProjectSettings`
   (orientation + ending-fade toggle/duration + the remembered Create Video
   `renderRange`): a small per-project Codable blob, every field defaulted via
   `decodeIfPresent` so old projects and future options need no migration. And
@@ -190,6 +194,20 @@ chronological index; clicking a day reviews that day's media one by one
 (↑/↓ navigate, crossing into later days; ⌘↩ adds the trimmed/cropped draft
 and advances). Source files are copied into `Clips/` only when picked. The
 old Import menu still works for one-off files.
+
+## Backup / reconstruction
+
+A clip's edits (trim/crop/tags/date/caption) all live in `clips.json` — the
+media files in `Clips/` are never modified. So backing up `clips.json` (plus
+`settings.json` / `sources.json`) captures everything except the raw media
+bytes. Each clip records `sourceHash` (SHA-256) + `sourceBytes` of its copied
+file (`LibraryStore.contentDigest`), so a lost `Clips/` folder can later be
+rebuilt: hash the user's source files, match each clip's `sourceHash`, and
+re-copy the match to `Clips/<fileName>`. **Reconstruction is not yet
+implemented** — only the data needed for it is stored, going forward (clips
+made before this field carry `sourceHash == nil`). Clips whose bytes have no
+source-folder counterpart — 1SE imports (re-encoded per-day MP4s) and one-off
+`importMedia` files — store a hash for integrity but can't be reconstructed.
 
 ## Roadmap ideas (not yet built)
 
