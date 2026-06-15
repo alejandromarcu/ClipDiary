@@ -116,6 +116,36 @@ enum RenderRange: Codable, Hashable {
         }
     }
 
+    /// The capture date stamped into an exported file's metadata: the last day
+    /// of the period at 11:59 pm (e.g. March 2026 → Mar 31, 2026 23:59). For
+    /// `.all`, there's no fixed period end, so the last day that has a clip is
+    /// used instead. Returns nil when there's nothing to anchor on.
+    func exportCreationDate(clips: [Clip]) -> Date? {
+        let cal = Calendar.current
+        let endDay: Date?
+        switch self {
+        case .month(let anchor):
+            if let dayRange = cal.range(of: .day, in: .month, for: anchor) {
+                var comps = cal.dateComponents([.year, .month], from: anchor)
+                comps.day = dayRange.count
+                endDay = cal.date(from: comps)
+            } else {
+                endDay = nil
+            }
+        case .year(let anchor):
+            var comps = cal.dateComponents([.year], from: anchor)
+            comps.month = 12
+            comps.day = 31
+            endDay = cal.date(from: comps)
+        case .custom(_, let end):
+            endDay = end
+        case .all:
+            endDay = clips.map(\.date).max()
+        }
+        guard let day = endDay else { return nil }
+        return cal.date(bySettingHour: 23, minute: 59, second: 0, of: day)
+    }
+
     /// The representative date a range hangs off — its month/year, the start of
     /// a custom range, or today for `.all`. Used to seed the picker controls.
     var anchorDate: Date {
