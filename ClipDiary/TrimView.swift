@@ -71,10 +71,12 @@ struct DaySheet: View {
 
             if let clip = dayClips.first(where: { $0.id == selectedClipID }) ?? dayClips.first {
                 if clip.kind == .photo {
-                    PhotoEditor(clip: clip, onLiveEdit: { liveEdits.clip = $0 })
+                    PhotoEditor(clip: clip, onLiveEdit: { liveEdits.clip = $0 },
+                                onDelete: { delete(clip) })
                         .id(clip.id)
                 } else {
-                    TrimEditor(clip: clip, onLiveEdit: { liveEdits.clip = $0 })
+                    TrimEditor(clip: clip, onLiveEdit: { liveEdits.clip = $0 },
+                               onDelete: { delete(clip) })
                         .id(clip.id)
                 }
             } else {
@@ -102,6 +104,28 @@ struct DaySheet: View {
         .sheet(isPresented: $showCardPicker) {
             CardsManagerView(onPick: { store.addCard($0, to: day) })
                 .environmentObject(store)
+        }
+    }
+
+    /// Deletes a clip but keeps the window open: select the previous clip if
+    /// there is one, else the next, and only close when it was the last clip.
+    private func delete(_ clip: Clip) {
+        let clips = dayClips
+        var neighborID: UUID?
+        if let idx = clips.firstIndex(where: { $0.id == clip.id }) {
+            if idx > 0 {
+                neighborID = clips[idx - 1].id
+            } else if idx + 1 < clips.count {
+                neighborID = clips[idx + 1].id
+            }
+        }
+        // Avoid re-flushing the just-deleted clip from the live-edit buffer.
+        if liveEdits.clip?.id == clip.id { liveEdits.clip = nil }
+        store.delete(clip)
+        if let neighborID {
+            selectedClipID = neighborID
+        } else {
+            dismiss()
         }
     }
 }
@@ -327,13 +351,18 @@ struct TrimEditor: View {
     /// Reports the working copy (date applied) on every change, so the day
     /// editor can persist it before previewing. Library mode only.
     private let onLiveEdit: ((Clip) -> Void)?
+    /// Called when the user deletes the clip. When set, the host owns the
+    /// deletion (and decides what to show next); otherwise the editor deletes
+    /// from the store and dismisses itself. Library mode only.
+    private let onDelete: (() -> Void)?
 
     init(clip: Clip, sourceURL: URL? = nil, onAdd: ((Clip) -> Void)? = nil,
-         onLiveEdit: ((Clip) -> Void)? = nil) {
+         onLiveEdit: ((Clip) -> Void)? = nil, onDelete: (() -> Void)? = nil) {
         original = clip
         self.sourceURL = sourceURL
         self.onAdd = onAdd
         self.onLiveEdit = onLiveEdit
+        self.onDelete = onDelete
         _clip = State(initialValue: clip)
         _editedDate = State(initialValue: clip.date)
     }
@@ -453,8 +482,12 @@ struct TrimEditor: View {
                 } else {
                     Button(role: .destructive) {
                         stopPreview()
-                        store.delete(clip)
-                        dismiss()
+                        if let onDelete {
+                            onDelete()
+                        } else {
+                            store.delete(clip)
+                            dismiss()
+                        }
                     } label: {
                         Label("Delete Clip", systemImage: "trash")
                     }

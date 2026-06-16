@@ -21,6 +21,10 @@ struct PhotoEditor: View {
     /// Reports the working copy (date applied) on every change, so the day
     /// editor can persist it before previewing. Library mode only.
     private let onLiveEdit: ((Clip) -> Void)?
+    /// Called when the user deletes the clip. When set, the host owns the
+    /// deletion (and decides what to show next); otherwise the editor deletes
+    /// from the store and dismisses itself. Library mode only.
+    private let onDelete: (() -> Void)?
 
     private var isReview: Bool { onAdd != nil }
 
@@ -52,11 +56,12 @@ struct PhotoEditor: View {
     }
 
     init(clip: Clip, sourceURL: URL? = nil, onAdd: ((Clip) -> Void)? = nil,
-         onLiveEdit: ((Clip) -> Void)? = nil) {
+         onLiveEdit: ((Clip) -> Void)? = nil, onDelete: (() -> Void)? = nil) {
         original = clip
         self.sourceURL = sourceURL
         self.onAdd = onAdd
         self.onLiveEdit = onLiveEdit
+        self.onDelete = onDelete
         _clip = State(initialValue: clip)
         _editedDate = State(initialValue: clip.date)
     }
@@ -151,8 +156,12 @@ struct PhotoEditor: View {
                     .help("Add this cropped photo to the day's clips (⌘↩)")
                 } else {
                     Button(role: .destructive) {
-                        store.delete(clip)
-                        dismiss()
+                        if let onDelete {
+                            onDelete()
+                        } else {
+                            store.delete(clip)
+                            dismiss()
+                        }
                     } label: {
                         Label("Delete Photo", systemImage: "trash")
                     }

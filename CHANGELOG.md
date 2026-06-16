@@ -18,6 +18,8 @@ and versions follow [Semantic Versioning](https://semver.org/)
   preview right away.
 - Video players no longer dim the picture when the playback controls appear on
   hover, so you can keep watching without moving the mouse away.
+- Deleting a clip in the day editor now keeps the window open and moves to the
+  previous clip (or the next one), closing only when the last clip is removed.
 
 ## [1.1.0] - 2026-06-16
 
