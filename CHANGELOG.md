@@ -7,6 +7,27 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.1.1] - 2026-06-16
+
+- The day editor now opens in its own window and remembers its position and
+  size between openings, matching the review window.
+- Press **Esc** to close the review window, like the app's other windows.
+- Renamed the card text "Colour" label to "Color".
+- Fixed "Preview Day" (and the month/year preview) not reflecting a clip's
+  unsaved edits — caption, transition, trim and the like now show up in the
+  preview right away.
+- Video players no longer dim the picture when the playback controls appear on
+  hover, so you can keep watching without moving the mouse away.
+- Deleting a clip in the day editor now keeps the window open and moves to the
+  previous clip (or the next one), closing only when the last clip is removed.
+- Photo display duration: the value can now be typed into a box, the **−** and
+  **+** keys adjust it, and a newly reviewed photo defaults to the duration you
+  last used (remembered per project).
+- Fixed the letterbox bars (e.g. beside a portrait photo) flashing green during
+  a clip's fade in/out — they now stay black throughout the transition.
+- Preview window: dropped the orientation label in the top-right corner, and
+  **Esc** now closes the window like the app's other windows.
+
 ## [1.1.0] - 2026-06-16
 
 - **Separate "review" and "edit" on each calendar day.** Hovering a day cell

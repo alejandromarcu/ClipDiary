@@ -18,8 +18,22 @@ struct PhotoEditor: View {
     private let original: Clip
     private let sourceURL: URL?
     private let onAdd: ((Clip) -> Void)?
+    /// Reports the working copy (date applied) on every change, so the day
+    /// editor can persist it before previewing. Library mode only.
+    private let onLiveEdit: ((Clip) -> Void)?
+    /// Called when the user deletes the clip. When set, the host owns the
+    /// deletion (and decides what to show next); otherwise the editor deletes
+    /// from the store and dismisses itself. Library mode only.
+    private let onDelete: (() -> Void)?
 
     private var isReview: Bool { onAdd != nil }
+
+    /// The working copy with the picked date applied — what would be saved.
+    private var editedClip: Clip {
+        var updated = clip
+        updated.date = editedDate.dayKey
+        return updated
+    }
 
     private var hasChanges: Bool {
         clip != original || editedDate.dayKey != original.date
@@ -41,10 +55,13 @@ struct PhotoEditor: View {
         }
     }
 
-    init(clip: Clip, sourceURL: URL? = nil, onAdd: ((Clip) -> Void)? = nil) {
+    init(clip: Clip, sourceURL: URL? = nil, onAdd: ((Clip) -> Void)? = nil,
+         onLiveEdit: ((Clip) -> Void)? = nil, onDelete: (() -> Void)? = nil) {
         original = clip
         self.sourceURL = sourceURL
         self.onAdd = onAdd
+        self.onLiveEdit = onLiveEdit
+        self.onDelete = onDelete
         _clip = State(initialValue: clip)
         _editedDate = State(initialValue: clip.date)
     }
@@ -56,15 +73,25 @@ struct PhotoEditor: View {
         )
     }
 
+    /// Allowed photo display durations and the +/- step.
+    private let durationRange = 0.5...30.0
+    private let durationStep = 0.5
+
     private var durationBinding: Binding<Double> {
         Binding(
             get: { clip.durationSeconds },
             set: { newValue in
-                clip.durationSeconds = newValue
+                let clamped = min(max(newValue, durationRange.lowerBound),
+                                  durationRange.upperBound)
+                clip.durationSeconds = clamped
                 clip.inSeconds = 0
-                clip.outSeconds = newValue
+                clip.outSeconds = clamped
             }
         )
+    }
+
+    private func adjustDuration(by delta: Double) {
+        durationBinding.wrappedValue = clip.durationSeconds + delta
     }
 
     var body: some View {
@@ -78,9 +105,30 @@ struct PhotoEditor: View {
             }
 
             HStack {
-                Stepper(value: durationBinding, in: 0.5...30, step: 0.5) {
-                    Text(String(format: "Show for %.1f s", clip.durationSeconds))
-                        .monospacedDigit()
+                Text("Show for")
+                TextField("", value: durationBinding,
+                          format: .number.precision(.fractionLength(1)))
+                    .labelsHidden()
+                    .frame(width: 48)
+                    .multilineTextAlignment(.trailing)
+                    .textFieldStyle(.roundedBorder)
+                    .monospacedDigit()
+                Text("s")
+                Stepper(value: durationBinding, in: durationRange, step: durationStep) {}
+                    .labelsHidden()
+                    .help("Adjust how long this photo is shown (− / + also work)")
+                // Hidden buttons so − and + adjust the duration via the keyboard.
+                // "=" is the unshifted "+" key, accepted as a convenience.
+                .background {
+                    HStack {
+                        Button("Longer") { adjustDuration(by: durationStep) }
+                            .keyboardShortcut("+", modifiers: [])
+                        Button("Longer") { adjustDuration(by: durationStep) }
+                            .keyboardShortcut("=", modifiers: [])
+                        Button("Shorter") { adjustDuration(by: -durationStep) }
+                            .keyboardShortcut("-", modifiers: [])
+                    }
+                    .hidden()
                 }
                 Spacer()
                 Picker("", selection: $aspectLock) {
@@ -139,18 +187,24 @@ struct PhotoEditor: View {
                     .help("Add this cropped photo to the day's clips (⌘↩)")
                 } else {
                     Button(role: .destructive) {
-                        store.delete(clip)
-                        dismiss()
+                        if let onDelete {
+                            onDelete()
+                        } else {
+                            store.delete(clip)
+                            dismiss()
+                        }
                     } label: {
                         Label("Delete Photo", systemImage: "trash")
                     }
                 }
             }
         }
-        .onAppear { load() }
+        .onAppear { load(); onLiveEdit?(editedClip) }
         // Auto-save so switching clips or closing the sheet keeps edits.
         // No-op if the clip was just deleted. Review drafts aren't saved.
         .onDisappear { if !isReview { saveEdits() } }
+        .onChange(of: clip) { _, _ in onLiveEdit?(editedClip) }
+        .onChange(of: editedDate) { _, _ in onLiveEdit?(editedClip) }
         .sheet(isPresented: $showTransition) {
             TransitionEditorSheet(transition: $clip.transition, maxSeconds: clip.trimmedDuration)
         }

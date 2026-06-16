@@ -49,6 +49,15 @@ struct ClipDiaryApp: App {
             }
         }
 
+        // Editing a calendar day opens its own window (instead of a sheet) so
+        // it remembers its position and size between openings, like Review.
+        WindowGroup("Edit Day", for: DayEditRequest.self) { $request in
+            if let request {
+                DaySheet(day: request.day)
+                    .environmentObject(store)
+            }
+        }
+
         // The Cards gallery + editor in its own resizable window (opened with
         // openWindow(id: "cards") from the calendar toolbar).
         WindowGroup("Cards", id: "cards") {

@@ -3,7 +3,23 @@ import AVKit
 import AVFoundation
 import UniformTypeIdentifiers
 
-/// Sheet for one calendar day: pick a clip (if several), preview it,
+/// Identifies which day the edit-day window shows. Opened with
+/// `openWindow(value:)` so the window (like Review) remembers its own
+/// position and size between openings.
+struct DayEditRequest: Codable, Hashable {
+    let day: Date
+}
+
+/// A mutable box for the day editor's in-flight clip edits. The embedded
+/// trim/photo editors keep their working copy in local `@State` and only write
+/// it back to the store on disappear; this lets the day editor grab the
+/// current copy to persist before opening a preview, without re-rendering on
+/// every keystroke.
+final class LiveEditBuffer {
+    var clip: Clip?
+}
+
+/// Editor window for one calendar day: pick a clip (if several), preview it,
 /// drag the in/out handles to trim, change its date, or delete it.
 struct DaySheet: View {
     @EnvironmentObject var store: LibraryStore
@@ -13,6 +29,13 @@ struct DaySheet: View {
 
     @State private var selectedClipID: UUID?
     @State private var showCardPicker = false
+
+    /// Holds the embedded editor's latest in-flight edit. The editors only
+    /// persist to the store on disappear, so without this "Preview Day" (and
+    /// the preview window it opens) would render the clip as it was before the
+    /// current edits. A reference type so the editor can keep it current on
+    /// every keystroke/drag without re-rendering this view.
+    @State private var liveEdits = LiveEditBuffer()
 
     private var dayClips: [Clip] { store.clips(on: day) }
 
@@ -30,6 +53,9 @@ struct DaySheet: View {
                 .help("Add a designed title card as a clip on this day")
                 if !dayClips.isEmpty {
                     Button("Preview Day") {
+                        // Flush the editor's unsaved edits first so the preview
+                        // reflects them (caption, transition, trim, …).
+                        if let edited = liveEdits.clip { store.update(edited) }
                         openWindow(value: PreviewRequest(
                             range: .custom(start: day, end: day), tagFilter: nil,
                             includeEndingFade: false, includeBookends: false))
@@ -45,10 +71,12 @@ struct DaySheet: View {
 
             if let clip = dayClips.first(where: { $0.id == selectedClipID }) ?? dayClips.first {
                 if clip.kind == .photo {
-                    PhotoEditor(clip: clip)
+                    PhotoEditor(clip: clip, onLiveEdit: { liveEdits.clip = $0 },
+                                onDelete: { delete(clip) })
                         .id(clip.id)
                 } else {
-                    TrimEditor(clip: clip)
+                    TrimEditor(clip: clip, onLiveEdit: { liveEdits.clip = $0 },
+                               onDelete: { delete(clip) })
                         .id(clip.id)
                 }
             } else {
@@ -65,33 +93,41 @@ struct DaySheet: View {
         .padding(20)
         .frame(minWidth: 640, idealWidth: 760, maxWidth: .infinity,
                minHeight: 560, idealHeight: 680, maxHeight: .infinity)
-        .background(ResizableSheetSupport(minSize: NSSize(width: 640, height: 560)))
+        // Esc closes the window, matching the app's other windows. Hidden, but
+        // still wired up for the keyboard shortcut.
+        .background {
+            Button("Close") { dismiss() }
+                .keyboardShortcut(.cancelAction)
+                .hidden()
+        }
         .onAppear { selectedClipID = dayClips.first?.id }
         .sheet(isPresented: $showCardPicker) {
             CardsManagerView(onPick: { store.addCard($0, to: day) })
                 .environmentObject(store)
         }
     }
-}
 
-/// SwiftUI sheets on macOS are created without the `.resizable` window style,
-/// so flexible frames alone don't let the user drag the sheet's edges. Once
-/// resizable, the window also stops honoring SwiftUI's min frame, so the
-/// minimum has to be set on the window itself.
-private struct ResizableSheetSupport: NSViewRepresentable {
-    let minSize: NSSize
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async {
-            guard let window = view.window else { return }
-            window.styleMask.insert(.resizable)
-            window.contentMinSize = minSize
+    /// Deletes a clip but keeps the window open: select the previous clip if
+    /// there is one, else the next, and only close when it was the last clip.
+    private func delete(_ clip: Clip) {
+        let clips = dayClips
+        var neighborID: UUID?
+        if let idx = clips.firstIndex(where: { $0.id == clip.id }) {
+            if idx > 0 {
+                neighborID = clips[idx - 1].id
+            } else if idx + 1 < clips.count {
+                neighborID = clips[idx + 1].id
+            }
         }
-        return view
+        // Avoid re-flushing the just-deleted clip from the live-edit buffer.
+        if liveEdits.clip?.id == clip.id { liveEdits.clip = nil }
+        store.delete(clip)
+        if let neighborID {
+            selectedClipID = neighborID
+        } else {
+            dismiss()
+        }
     }
-
-    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
 /// Horizontal strip of the day's clips, in play order (left → right). Click a
@@ -312,16 +348,33 @@ struct TrimEditor: View {
     private let original: Clip
     private let sourceURL: URL?
     private let onAdd: ((Clip) -> Void)?
+    /// Reports the working copy (date applied) on every change, so the day
+    /// editor can persist it before previewing. Library mode only.
+    private let onLiveEdit: ((Clip) -> Void)?
+    /// Called when the user deletes the clip. When set, the host owns the
+    /// deletion (and decides what to show next); otherwise the editor deletes
+    /// from the store and dismisses itself. Library mode only.
+    private let onDelete: (() -> Void)?
 
-    init(clip: Clip, sourceURL: URL? = nil, onAdd: ((Clip) -> Void)? = nil) {
+    init(clip: Clip, sourceURL: URL? = nil, onAdd: ((Clip) -> Void)? = nil,
+         onLiveEdit: ((Clip) -> Void)? = nil, onDelete: (() -> Void)? = nil) {
         original = clip
         self.sourceURL = sourceURL
         self.onAdd = onAdd
+        self.onLiveEdit = onLiveEdit
+        self.onDelete = onDelete
         _clip = State(initialValue: clip)
         _editedDate = State(initialValue: clip.date)
     }
 
     private var isReview: Bool { onAdd != nil }
+
+    /// The working copy with the picked date applied — what would be saved.
+    private var editedClip: Clip {
+        var updated = clip
+        updated.date = editedDate.dayKey
+        return updated
+    }
 
     private var hasChanges: Bool {
         clip != original || editedDate.dayKey != original.date
@@ -330,7 +383,7 @@ struct TrimEditor: View {
     var body: some View {
         VStack(spacing: 14) {
             if let player {
-                VideoPlayer(player: player)
+                PlayerView(player: player)
                     .frame(minHeight: 260)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
             }
@@ -429,15 +482,19 @@ struct TrimEditor: View {
                 } else {
                     Button(role: .destructive) {
                         stopPreview()
-                        store.delete(clip)
-                        dismiss()
+                        if let onDelete {
+                            onDelete()
+                        } else {
+                            store.delete(clip)
+                            dismiss()
+                        }
                     } label: {
                         Label("Delete Clip", systemImage: "trash")
                     }
                 }
             }
         }
-        .onAppear { setUp() }
+        .onAppear { setUp(); onLiveEdit?(editedClip) }
         .task { await loadThumbnails(url: sourceURL ?? store.fileURL(for: clip)) }
         .onDisappear {
             // Auto-save so switching clips or closing the sheet keeps edits.
@@ -446,6 +503,8 @@ struct TrimEditor: View {
             if !isReview { saveEdits() }
             tearDown()
         }
+        .onChange(of: clip) { _, _ in onLiveEdit?(editedClip) }
+        .onChange(of: editedDate) { _, _ in onLiveEdit?(editedClip) }
         .onChange(of: clip.inSeconds) { _, newValue in seek(to: newValue) }
         .onChange(of: clip.outSeconds) { _, newValue in seek(to: newValue) }
         .sheet(isPresented: $showTransition) {

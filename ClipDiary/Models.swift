@@ -31,6 +31,9 @@ struct ProjectSettings: Codable, Equatable {
     /// window (the cards themselves carry no transition).
     var coverTransition = SegmentTransition()
     var endingTransition = SegmentTransition()
+    /// The display duration last used for a photo, so the next photo reviewed
+    /// defaults to it instead of always restarting at the standard default.
+    var lastPhotoDuration: Double = LibraryStore.defaultPhotoDuration
 
     /// The fade length to actually apply, or nil when fading is disabled.
     var effectiveFadeOutSeconds: Double? {
@@ -53,7 +56,8 @@ struct ProjectSettings: Codable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case orientation, fadeOutLastClip, fadeOutSeconds, renderRange,
-             coverCardID, endingCardID, coverTransition, endingTransition
+             coverCardID, endingCardID, coverTransition, endingTransition,
+             lastPhotoDuration
     }
 
     init(from decoder: Decoder) throws {
@@ -66,6 +70,7 @@ struct ProjectSettings: Codable, Equatable {
         endingCardID = try c.decodeIfPresent(UUID.self, forKey: .endingCardID)
         coverTransition = try c.decodeIfPresent(SegmentTransition.self, forKey: .coverTransition) ?? SegmentTransition()
         endingTransition = try c.decodeIfPresent(SegmentTransition.self, forKey: .endingTransition) ?? SegmentTransition()
+        lastPhotoDuration = try c.decodeIfPresent(Double.self, forKey: .lastPhotoDuration) ?? LibraryStore.defaultPhotoDuration
     }
 }
 
@@ -340,13 +345,6 @@ struct DayAvailability {
     var photoCount = 0
 
     var isEmpty: Bool { videoCount == 0 && photoCount == 0 }
-}
-
-/// Wraps a day so it can drive `.sheet(item:)`, instead of retroactively
-/// conforming the system Date type to Identifiable.
-struct DaySelection: Identifiable {
-    let day: Date
-    var id: Date { day }
 }
 
 extension Date {

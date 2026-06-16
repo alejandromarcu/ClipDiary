@@ -6,7 +6,6 @@ struct ContentView: View {
     @EnvironmentObject var store: LibraryStore
 
     @State private var displayedMonth = Date().dayKey
-    @State private var selectedDay: DaySelection?
     private enum ImportKind { case media, mash }
     @State private var showImporter = false
     @State private var importKind: ImportKind = .media
@@ -120,9 +119,6 @@ struct ContentView: View {
                 self.tagFilter = nil
             }
         }
-        .sheet(item: $selectedDay) { selection in
-            DaySheet(day: selection.day).environmentObject(store)
-        }
         .sheet(isPresented: $showRenderSheet) {
             RenderSheet(initialRange: store.settings.renderRange ?? .month(Date()),
                         tagFilter: tagFilter,
@@ -225,7 +221,7 @@ struct ContentView: View {
                                     day: day,
                                     tagFilter: tagFilter,
                                     onReview: { openWindow(value: ReviewRequest(day: day)) },
-                                    onEdit: { selectedDay = DaySelection(day: day) }
+                                    onEdit: { openWindow(value: DayEditRequest(day: day)) }
                                 )
                                 .environmentObject(store)
                             } else {
@@ -1004,10 +1000,18 @@ struct PreviewRequest: Codable, Hashable {
     var includeBookends: Bool = true
 }
 
+/// Identity that drives a preview rebuild: the render settings plus the clips
+/// being rendered, so a preview refreshes when either changes.
+private struct PreviewBuildKey: Equatable {
+    let settings: ProjectSettings
+    let clips: [Clip]
+}
+
 /// Plays the month's stitched composition in-app — same trims, ordering and
 /// letterboxing as the export, without writing a file.
 struct PreviewWindow: View {
     @EnvironmentObject var store: LibraryStore
+    @Environment(\.dismiss) private var dismiss
     let range: RenderRange
     var tagFilter: String?
     var includeEndingFade: Bool = true
@@ -1024,23 +1028,20 @@ struct PreviewWindow: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            HStack {
-                if let tagFilter {
+            if let tagFilter {
+                HStack {
                     Text("Tag: \(tagFilter)")
                         .font(.callout.bold())
                         .padding(.horizontal, 8).padding(.vertical, 3)
                         .background(Capsule().fill(.yellow.opacity(0.25)))
+                    Spacer()
                 }
-                Spacer()
-                Text(store.settings.orientation.label)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             ZStack {
                 RoundedRectangle(cornerRadius: 8).fill(.black)
                 if let player {
-                    VideoPlayer(player: player)
+                    PlayerView(player: player)
                 } else if let errorMessage {
                     Text(errorMessage).foregroundStyle(.red).font(.callout)
                 } else {
@@ -1088,8 +1089,19 @@ struct PreviewWindow: View {
         .frame(minWidth: 480, idealWidth: store.settings.orientation == .portrait ? 520 : 860,
                maxWidth: .infinity,
                minHeight: 480, idealHeight: 720, maxHeight: .infinity)
+        // Esc closes the window, matching the app's other windows. Hidden, but
+        // still wired up for the keyboard shortcut.
+        .background {
+            Button("Close") { dismiss() }
+                .keyboardShortcut(.cancelAction)
+                .hidden()
+        }
         .navigationTitle("Preview \(range.label)")
-        .task(id: store.settings) {
+        // Rebuild when the settings or the clips in range change — the latter
+        // so edits made (and saved) while a preview window stays open, e.g. via
+        // the day editor's "Preview Day", are reflected on the next preview.
+        .task(id: PreviewBuildKey(settings: store.settings,
+                                  clips: store.clips(in: range, taggedWith: tagFilter))) {
             await rebuild()
         }
         .onDisappear {
