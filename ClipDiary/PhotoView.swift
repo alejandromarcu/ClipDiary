@@ -13,6 +13,9 @@ struct PhotoEditor: View {
     @State private var editedDate: Date
     @State private var aspectLock: AspectLock = .free
     @State private var showTransition = false
+    /// Width of the review metadata pane; shared with the video editor and
+    /// remembered across items and launches.
+    @AppStorage("reviewPaneWidth") private var paneWidth: Double = 280
 
     /// Snapshot as the editor opened, for Revert.
     private let original: Clip
@@ -25,6 +28,11 @@ struct PhotoEditor: View {
     /// deletion (and decides what to show next); otherwise the editor deletes
     /// from the store and dismisses itself. Library mode only.
     private let onDelete: (() -> Void)?
+    /// Day/file context shown atop the review pane. Review mode only.
+    private let reviewInfo: ReviewItemInfo?
+    /// Optional control shown above the media (the Live Photo still/motion
+    /// picker), kept in the media column so it doesn't push the pane down.
+    private let mediaAccessory: AnyView?
 
     private var isReview: Bool { onAdd != nil }
 
@@ -56,12 +64,15 @@ struct PhotoEditor: View {
     }
 
     init(clip: Clip, sourceURL: URL? = nil, onAdd: ((Clip) -> Void)? = nil,
-         onLiveEdit: ((Clip) -> Void)? = nil, onDelete: (() -> Void)? = nil) {
+         onLiveEdit: ((Clip) -> Void)? = nil, onDelete: (() -> Void)? = nil,
+         reviewInfo: ReviewItemInfo? = nil, mediaAccessory: AnyView? = nil) {
         original = clip
         self.sourceURL = sourceURL
         self.onAdd = onAdd
         self.onLiveEdit = onLiveEdit
         self.onDelete = onDelete
+        self.reviewInfo = reviewInfo
+        self.mediaAccessory = mediaAccessory
         _clip = State(initialValue: clip)
         _editedDate = State(initialValue: clip.date)
     }
@@ -95,108 +106,11 @@ struct PhotoEditor: View {
     }
 
     var body: some View {
-        VStack(spacing: 14) {
-            if let image {
-                PhotoCropView(image: image, crop: cropBinding, aspect: aspectLock.ratio)
-                    .frame(minHeight: 300)
+        Group {
+            if isReview {
+                reviewBody
             } else {
-                ProgressView()
-                    .frame(maxWidth: .infinity, minHeight: 300)
-            }
-
-            HStack {
-                Text("Show for")
-                TextField("", value: durationBinding,
-                          format: .number.precision(.fractionLength(1)))
-                    .labelsHidden()
-                    .frame(width: 48)
-                    .multilineTextAlignment(.trailing)
-                    .textFieldStyle(.roundedBorder)
-                    .monospacedDigit()
-                Text("s")
-                Stepper(value: durationBinding, in: durationRange, step: durationStep) {}
-                    .labelsHidden()
-                    .help("Adjust how long this photo is shown (− / + also work)")
-                // Hidden buttons so − and + adjust the duration via the keyboard.
-                // "=" is the unshifted "+" key, accepted as a convenience.
-                .background {
-                    HStack {
-                        Button("Longer") { adjustDuration(by: durationStep) }
-                            .keyboardShortcut("+", modifiers: [])
-                        Button("Longer") { adjustDuration(by: durationStep) }
-                            .keyboardShortcut("=", modifiers: [])
-                        Button("Shorter") { adjustDuration(by: -durationStep) }
-                            .keyboardShortcut("-", modifiers: [])
-                    }
-                    .hidden()
-                }
-                Spacer()
-                Picker("", selection: $aspectLock) {
-                    ForEach(AspectLock.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
-                .help("Lock the crop to an export aspect ratio (16:9 landscape, 9:16 portrait)")
-                Button("Reset Crop") {
-                    clip.crop = nil
-                    aspectLock = .free
-                }
-                .disabled(clip.crop == nil)
-            }
-            .font(.callout)
-
-            TagRow(tags: $clip.tags)
-
-            HStack(spacing: 8) {
-                Image(systemName: "captions.bubble")
-                    .foregroundStyle(.secondary)
-                TextField("Caption (optional)", text: $clip.caption)
-                    .textFieldStyle(.roundedBorder)
-            }
-
-            TransitionRow(transition: clip.transition) { showTransition = true }
-
-            Divider()
-
-            HStack {
-                DayPickerField(selection: $editedDate)
-                Toggle("Date stamp", isOn: $clip.showsDateOverlay)
-                    .toggleStyle(.checkbox)
-                    .help("Show this photo's date in the bottom-left corner of the month video. Turn off for cover photos.")
-                Spacer()
-                Button {
-                    clip = original
-                    editedDate = original.date
-                    aspectLock = .free
-                } label: {
-                    Label("Revert", systemImage: "arrow.uturn.backward")
-                }
-                .disabled(!hasChanges)
-                .help("Discard this photo's unsaved changes")
-                if let onAdd {
-                    Button {
-                        var added = clip
-                        added.date = editedDate.dayKey
-                        onAdd(added)
-                    } label: {
-                        Label("Add to Clips", systemImage: "plus.circle.fill")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.return, modifiers: .command)
-                    .help("Add this cropped photo to the day's clips (⌘↩)")
-                } else {
-                    Button(role: .destructive) {
-                        if let onDelete {
-                            onDelete()
-                        } else {
-                            store.delete(clip)
-                            dismiss()
-                        }
-                    } label: {
-                        Label("Delete Photo", systemImage: "trash")
-                    }
-                }
+                libraryBody
             }
         }
         .onAppear { load(); onLiveEdit?(editedClip) }
@@ -207,6 +121,182 @@ struct PhotoEditor: View {
         .onChange(of: editedDate) { _, _ in onLiveEdit?(editedClip) }
         .sheet(isPresented: $showTransition) {
             TransitionEditorSheet(transition: $clip.transition, maxSeconds: clip.trimmedDuration)
+        }
+    }
+
+    // MARK: - Layouts
+
+    /// Day-editor layout: photo, crop/duration controls and metadata stacked
+    /// top to bottom in one column.
+    private var libraryBody: some View {
+        VStack(spacing: 14) {
+            photoView
+            cropControls
+            TagRow(tags: $clip.tags)
+            captionField
+            TransitionRow(transition: clip.transition) { showTransition = true }
+            Divider()
+            HStack {
+                DayPickerField(selection: $editedDate)
+                dateStampToggle
+                Spacer()
+                revertButton
+                deleteButton
+            }
+        }
+    }
+
+    /// Review layout: the photo and crop controls take the whole left side so
+    /// the image is as big as possible; tags/caption/transition/day and the
+    /// add/revert actions live in a fixed-width pane on the right.
+    private var reviewBody: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(spacing: 14) {
+                mediaAccessory
+                photoView
+                cropControls
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            ResizablePaneDivider(width: $paneWidth)
+            sidePane
+                .frame(width: paneWidth)
+        }
+    }
+
+    /// Right-hand pane shown in review mode.
+    private var sidePane: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if let reviewInfo {
+                ReviewItemHeader(info: reviewInfo)
+                Divider()
+            }
+            TagRow(tags: $clip.tags)
+            captionField
+            TransitionRow(transition: clip.transition) { showTransition = true }
+            Divider()
+            DayPickerField(selection: $editedDate)
+            dateStampToggle
+            Spacer(minLength: 0)
+            HStack {
+                revertButton
+                Spacer()
+                addButton
+            }
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    // MARK: - Shared pieces
+
+    @ViewBuilder
+    private var photoView: some View {
+        if let image {
+            PhotoCropView(image: image, crop: cropBinding, aspect: aspectLock.ratio)
+                .frame(minHeight: 300, maxHeight: .infinity)
+        } else {
+            ProgressView()
+                .frame(maxWidth: .infinity, minHeight: 300, maxHeight: .infinity)
+        }
+    }
+
+    private var cropControls: some View {
+        HStack {
+            Text("Show for")
+            TextField("", value: durationBinding,
+                      format: .number.precision(.fractionLength(1)))
+                .labelsHidden()
+                .frame(width: 48)
+                .multilineTextAlignment(.trailing)
+                .textFieldStyle(.roundedBorder)
+                .monospacedDigit()
+            Text("s")
+            Stepper(value: durationBinding, in: durationRange, step: durationStep) {}
+                .labelsHidden()
+                .help("Adjust how long this photo is shown (− / + also work)")
+            // Hidden buttons so − and + adjust the duration via the keyboard.
+            // "=" is the unshifted "+" key, accepted as a convenience.
+            .background {
+                HStack {
+                    Button("Longer") { adjustDuration(by: durationStep) }
+                        .keyboardShortcut("+", modifiers: [])
+                    Button("Longer") { adjustDuration(by: durationStep) }
+                        .keyboardShortcut("=", modifiers: [])
+                    Button("Shorter") { adjustDuration(by: -durationStep) }
+                        .keyboardShortcut("-", modifiers: [])
+                }
+                .hidden()
+            }
+            Spacer()
+            Picker("", selection: $aspectLock) {
+                ForEach(AspectLock.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .help("Lock the crop to an export aspect ratio (16:9 landscape, 9:16 portrait)")
+            Button("Reset Crop") {
+                clip.crop = nil
+                aspectLock = .free
+            }
+            .disabled(clip.crop == nil)
+        }
+        .font(.callout)
+    }
+
+    private var captionField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "captions.bubble")
+                .foregroundStyle(.secondary)
+            TextField("Caption (optional)", text: $clip.caption)
+                .textFieldStyle(.roundedBorder)
+        }
+    }
+
+    private var dateStampToggle: some View {
+        Toggle("Date stamp", isOn: $clip.showsDateOverlay)
+            .toggleStyle(.checkbox)
+            .help("Show this photo's date in the bottom-left corner of the month video. Turn off for cover photos.")
+    }
+
+    private var revertButton: some View {
+        Button {
+            clip = original
+            editedDate = original.date
+            aspectLock = .free
+        } label: {
+            Label("Revert", systemImage: "arrow.uturn.backward")
+        }
+        .disabled(!hasChanges)
+        .help("Discard this photo's unsaved changes")
+    }
+
+    @ViewBuilder
+    private var addButton: some View {
+        if let onAdd {
+            Button {
+                var added = clip
+                added.date = editedDate.dayKey
+                onAdd(added)
+            } label: {
+                Label("Add to Clips", systemImage: "plus.circle.fill")
+            }
+            .buttonStyle(.borderedProminent)
+            .keyboardShortcut(.return, modifiers: .command)
+            .help("Add this cropped photo to the day's clips (⌘↩)")
+        }
+    }
+
+    private var deleteButton: some View {
+        Button(role: .destructive) {
+            if let onDelete {
+                onDelete()
+            } else {
+                store.delete(clip)
+                dismiss()
+            }
+        } label: {
+            Label("Delete Photo", systemImage: "trash")
         }
     }
 

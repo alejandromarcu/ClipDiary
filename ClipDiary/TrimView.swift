@@ -244,47 +244,52 @@ struct TagRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "tag")
-                .foregroundStyle(.secondary)
-            if tags.isEmpty {
-                Text("No tags")
-                    .foregroundStyle(.tertiary)
-            }
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(tags, id: \.self) { tag in
-                        HStack(spacing: 4) {
-                            Text(tag)
-                            Button {
-                                tags.removeAll { $0 == tag }
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .foregroundStyle(.secondary)
+        // Two rows so the chips and the new-tag field each get a full line —
+        // the single-row layout was cramped in the review window's narrow pane.
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "tag")
+                    .foregroundStyle(.secondary)
+                if tags.isEmpty {
+                    Text("No tags")
+                        .foregroundStyle(.tertiary)
+                }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(tags, id: \.self) { tag in
+                            HStack(spacing: 4) {
+                                Text(tag)
+                                Button {
+                                    tags.removeAll { $0 == tag }
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
+                            .font(.callout)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Capsule().fill(Color.accentColor.opacity(0.15)))
                         }
-                        .font(.callout)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Capsule().fill(Color.accentColor.opacity(0.15)))
                     }
                 }
             }
-            TextField("New tag", text: $newTag)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 150)
-                .onSubmit { addTag(newTag) }
-            Menu {
-                ForEach(reusableTags, id: \.self) { tag in
-                    Button(tag) { addTag(tag) }
+            HStack(spacing: 8) {
+                TextField("New tag", text: $newTag)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { addTag(newTag) }
+                Menu {
+                    ForEach(reusableTags, id: \.self) { tag in
+                        Button(tag) { addTag(tag) }
+                    }
+                } label: {
+                    Image(systemName: "plus")
                 }
-            } label: {
-                Image(systemName: "plus")
+                .fixedSize()
+                .disabled(reusableTags.isEmpty)
+                .help("Add an existing tag")
             }
-            .fixedSize()
-            .disabled(reusableTags.isEmpty)
-            .help("Add an existing tag")
         }
     }
 
@@ -327,6 +332,73 @@ struct DayPickerField: View {
     }
 }
 
+/// Context block shown atop the review pane: the source item's day plus a few
+/// detail lines (its position in the day, file name and time). Built by the
+/// review window and handed to the embedded editor so it can sit beside the
+/// editing controls instead of in the window's header.
+struct ReviewItemInfo: Equatable {
+    var title: String
+    var detailLines: [String]
+}
+
+struct ReviewItemHeader: View {
+    let info: ReviewItemInfo
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(info.title)
+                .font(.headline)
+            ForEach(info.detailLines, id: \.self) { line in
+                Text(line)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// A thin vertical divider that resizes the column to its right by dragging.
+/// Used between the media and the metadata pane in the review editors; the
+/// width it drives is stored in `@AppStorage` so it sticks across items and
+/// launches. The pane is on the right, so dragging left widens it.
+struct ResizablePaneDivider: View {
+    @Binding var width: Double
+    var range: ClosedRange<Double> = 220...500
+
+    @State private var startWidth: Double?
+
+    var body: some View {
+        Rectangle()
+            .fill(Color.secondary.opacity(0.25))
+            .frame(width: 1)
+            .frame(maxHeight: .infinity)
+            .overlay {
+                // Wider invisible hit area so the 1px line is easy to grab.
+                Color.clear
+                    .frame(width: 12)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                let base = startWidth ?? width
+                                if startWidth == nil { startWidth = width }
+                                width = min(max(range.lowerBound,
+                                                base - value.translation.width),
+                                            range.upperBound)
+                            }
+                            .onEnded { _ in startWidth = nil }
+                    )
+                    .onHover { inside in
+                        if inside { NSCursor.resizeLeftRight.push() }
+                        else { NSCursor.pop() }
+                    }
+            }
+    }
+}
+
 /// The actual trim UI for a single clip. Two modes: editing a library clip
 /// (auto-saves on disappear, can delete), or reviewing a source video — the
 /// clip is a draft, `sourceURL` points at the original file, and an "Add to
@@ -343,6 +415,9 @@ struct TrimEditor: View {
     @State private var playheadSeconds = 0.0
     @State private var editedDate: Date
     @State private var showTransition = false
+    /// Width of the review metadata pane; shared with the photo editor and
+    /// remembered across items and launches.
+    @AppStorage("reviewPaneWidth") private var paneWidth: Double = 280
 
     /// Snapshot as the editor opened, for Revert.
     private let original: Clip
@@ -355,14 +430,22 @@ struct TrimEditor: View {
     /// deletion (and decides what to show next); otherwise the editor deletes
     /// from the store and dismisses itself. Library mode only.
     private let onDelete: (() -> Void)?
+    /// Day/file context shown atop the review pane. Review mode only.
+    private let reviewInfo: ReviewItemInfo?
+    /// Optional control shown above the media (the Live Photo still/motion
+    /// picker), kept in the media column so it doesn't push the pane down.
+    private let mediaAccessory: AnyView?
 
     init(clip: Clip, sourceURL: URL? = nil, onAdd: ((Clip) -> Void)? = nil,
-         onLiveEdit: ((Clip) -> Void)? = nil, onDelete: (() -> Void)? = nil) {
+         onLiveEdit: ((Clip) -> Void)? = nil, onDelete: (() -> Void)? = nil,
+         reviewInfo: ReviewItemInfo? = nil, mediaAccessory: AnyView? = nil) {
         original = clip
         self.sourceURL = sourceURL
         self.onAdd = onAdd
         self.onLiveEdit = onLiveEdit
         self.onDelete = onDelete
+        self.reviewInfo = reviewInfo
+        self.mediaAccessory = mediaAccessory
         _clip = State(initialValue: clip)
         _editedDate = State(initialValue: clip.date)
     }
@@ -381,13 +464,107 @@ struct TrimEditor: View {
     }
 
     var body: some View {
-        VStack(spacing: 14) {
-            if let player {
-                PlayerView(player: player)
-                    .frame(minHeight: 260)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+        Group {
+            if isReview {
+                reviewBody
+            } else {
+                libraryBody
             }
+        }
+        .onAppear { setUp(); onLiveEdit?(editedClip) }
+        .task { await loadThumbnails(url: sourceURL ?? store.fileURL(for: clip)) }
+        .onDisappear {
+            // Auto-save so switching clips or closing the sheet keeps edits.
+            // No-op if the clip was just deleted. Review drafts aren't in the
+            // library, so there's nothing to save.
+            if !isReview { saveEdits() }
+            tearDown()
+        }
+        .onChange(of: clip) { _, _ in onLiveEdit?(editedClip) }
+        .onChange(of: editedDate) { _, _ in onLiveEdit?(editedClip) }
+        .onChange(of: clip.inSeconds) { _, newValue in seek(to: newValue) }
+        .onChange(of: clip.outSeconds) { _, newValue in seek(to: newValue) }
+        .sheet(isPresented: $showTransition) {
+            TransitionEditorSheet(transition: $clip.transition, maxSeconds: clip.trimmedDuration)
+        }
+    }
 
+    // MARK: - Layouts
+
+    /// Day-editor layout: media, trim controls and metadata stacked top to
+    /// bottom in one column.
+    private var libraryBody: some View {
+        VStack(spacing: 14) {
+            mediaView
+            trimControls
+            TagRow(tags: $clip.tags)
+            captionField
+            TransitionRow(transition: clip.transition) { showTransition = true }
+            Divider()
+            HStack {
+                DayPickerField(selection: $editedDate)
+                dateStampToggle
+                Spacer()
+                revertButton
+                deleteButton
+            }
+        }
+    }
+
+    /// Review layout: the media and trim controls take the whole left side so
+    /// the video is as big as possible; tags/caption/transition/day and the
+    /// add/revert actions live in a fixed-width pane on the right.
+    private var reviewBody: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(spacing: 14) {
+                mediaAccessory
+                mediaView
+                trimControls
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            ResizablePaneDivider(width: $paneWidth)
+            sidePane
+                .frame(width: paneWidth)
+        }
+    }
+
+    /// Right-hand pane shown in review mode.
+    private var sidePane: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if let reviewInfo {
+                ReviewItemHeader(info: reviewInfo)
+                Divider()
+            }
+            TagRow(tags: $clip.tags)
+            captionField
+            TransitionRow(transition: clip.transition) { showTransition = true }
+            Divider()
+            DayPickerField(selection: $editedDate)
+            dateStampToggle
+            Spacer(minLength: 0)
+            HStack {
+                revertButton
+                Spacer()
+                addButton
+            }
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    // MARK: - Shared pieces
+
+    @ViewBuilder
+    private var mediaView: some View {
+        if let player {
+            PlayerView(player: player)
+                .frame(minHeight: 260, maxHeight: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    private var trimControls: some View {
+        VStack(spacing: 14) {
             TrimSlider(
                 duration: clip.durationSeconds,
                 inSeconds: $clip.inSeconds,
@@ -438,77 +615,64 @@ struct TrimEditor: View {
                 }
                 .hidden()
             }
-
-            TagRow(tags: $clip.tags)
-
-            HStack(spacing: 8) {
-                Image(systemName: "captions.bubble")
-                    .foregroundStyle(.secondary)
-                TextField("Caption (optional)", text: $clip.caption)
-                    .textFieldStyle(.roundedBorder)
-            }
-
-            TransitionRow(transition: clip.transition) { showTransition = true }
-
-            Divider()
-
-            HStack {
-                DayPickerField(selection: $editedDate)
-                Toggle("Date stamp", isOn: $clip.showsDateOverlay)
-                    .toggleStyle(.checkbox)
-                    .help("Show this clip's date in the bottom-left corner of the month video. Turn off for 1SE imports (already stamped) or cover clips.")
-                Spacer()
-                Button {
-                    stopPreview()
-                    clip = original
-                    editedDate = original.date
-                } label: {
-                    Label("Revert", systemImage: "arrow.uturn.backward")
-                }
-                .disabled(!hasChanges)
-                .help("Discard this clip's unsaved changes")
-                if let onAdd {
-                    Button {
-                        stopPreview()
-                        var added = clip
-                        added.date = editedDate.dayKey
-                        onAdd(added)
-                    } label: {
-                        Label("Add to Clips", systemImage: "plus.circle.fill")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.return, modifiers: .command)
-                    .help("Add this trimmed segment to the day's clips (⌘↩)")
-                } else {
-                    Button(role: .destructive) {
-                        stopPreview()
-                        if let onDelete {
-                            onDelete()
-                        } else {
-                            store.delete(clip)
-                            dismiss()
-                        }
-                    } label: {
-                        Label("Delete Clip", systemImage: "trash")
-                    }
-                }
-            }
         }
-        .onAppear { setUp(); onLiveEdit?(editedClip) }
-        .task { await loadThumbnails(url: sourceURL ?? store.fileURL(for: clip)) }
-        .onDisappear {
-            // Auto-save so switching clips or closing the sheet keeps edits.
-            // No-op if the clip was just deleted. Review drafts aren't in the
-            // library, so there's nothing to save.
-            if !isReview { saveEdits() }
-            tearDown()
+    }
+
+    private var captionField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "captions.bubble")
+                .foregroundStyle(.secondary)
+            TextField("Caption (optional)", text: $clip.caption)
+                .textFieldStyle(.roundedBorder)
         }
-        .onChange(of: clip) { _, _ in onLiveEdit?(editedClip) }
-        .onChange(of: editedDate) { _, _ in onLiveEdit?(editedClip) }
-        .onChange(of: clip.inSeconds) { _, newValue in seek(to: newValue) }
-        .onChange(of: clip.outSeconds) { _, newValue in seek(to: newValue) }
-        .sheet(isPresented: $showTransition) {
-            TransitionEditorSheet(transition: $clip.transition, maxSeconds: clip.trimmedDuration)
+    }
+
+    private var dateStampToggle: some View {
+        Toggle("Date stamp", isOn: $clip.showsDateOverlay)
+            .toggleStyle(.checkbox)
+            .help("Show this clip's date in the bottom-left corner of the month video. Turn off for 1SE imports (already stamped) or cover clips.")
+    }
+
+    private var revertButton: some View {
+        Button {
+            stopPreview()
+            clip = original
+            editedDate = original.date
+        } label: {
+            Label("Revert", systemImage: "arrow.uturn.backward")
+        }
+        .disabled(!hasChanges)
+        .help("Discard this clip's unsaved changes")
+    }
+
+    @ViewBuilder
+    private var addButton: some View {
+        if let onAdd {
+            Button {
+                stopPreview()
+                var added = clip
+                added.date = editedDate.dayKey
+                onAdd(added)
+            } label: {
+                Label("Add to Clips", systemImage: "plus.circle.fill")
+            }
+            .buttonStyle(.borderedProminent)
+            .keyboardShortcut(.return, modifiers: .command)
+            .help("Add this trimmed segment to the day's clips (⌘↩)")
+        }
+    }
+
+    private var deleteButton: some View {
+        Button(role: .destructive) {
+            stopPreview()
+            if let onDelete {
+                onDelete()
+            } else {
+                store.delete(clip)
+                dismiss()
+            }
+        } label: {
+            Label("Delete Clip", systemImage: "trash")
         }
     }
 

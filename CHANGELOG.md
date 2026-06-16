@@ -7,6 +7,29 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.2.0] - 2026-06-16
+
+- Reworked the review window into two columns: the photo or video (with its
+  trim/crop controls) now fills the whole left side and is much larger, while
+  tags, caption, transition, the day picker, the date-stamp toggle and the
+  item's day/file context moved to a pane on the right. The context now reads
+  as a single line (e.g. "Thu, May 28, 2026 5:30 PM") above the position and
+  file name. Revert and Add to Clips sit at the bottom of that pane. Drag the
+  divider to resize the pane (the width is remembered). The per-day clip editor
+  keeps its single-column layout.
+- Moved the "undated" jump button out of the review window and onto the
+  calendar toolbar, where it opens the review window straight on the undated
+  photos and videos.
+- For Live Photos in review, the "Live Photo" label and the Photo/Video switch
+  now sit in the media column instead of a top bar, so the right pane lines up
+  with the top of the photo.
+- Added a "Preview Day" button to the review window's picked-clips strip (shown
+  when the day has clips) so you can play back the day without leaving review.
+- Each project now remembers the calendar month you were last viewing and
+  returns to it when reopened, instead of always jumping to the current month.
+- Made the clip caption in rendered videos a bit smaller (about 22% smaller
+  than the date stamp) so it sits less heavily over the footage.
+
 ## [1.1.1] - 2026-06-16
 
 - The day editor now opens in its own window and remembers its position and

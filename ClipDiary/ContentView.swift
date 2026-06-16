@@ -28,6 +28,14 @@ struct ContentView: View {
         }
         .frame(minWidth: 760, minHeight: 620)
         .navigationTitle(store.currentProjectName ?? "ClipDiary")
+        // Restore the last-viewed month for the open project, and follow along
+        // when the project changes. Saving happens on every navigation below.
+        .onAppear { restoreDisplayedMonth() }
+        .onChange(of: store.currentProjectURL) { _, _ in restoreDisplayedMonth() }
+        .onChange(of: displayedMonth) { _, newValue in
+            guard store.hasProject, store.settings.lastViewedMonth != newValue else { return }
+            store.updateSettings { $0.lastViewedMonth = newValue }
+        }
         .alert(
             "Something went wrong",
             isPresented: Binding(
@@ -61,6 +69,17 @@ struct ContentView: View {
                 }
                 .pickerStyle(.menu)
                 .disabled(store.allTags.isEmpty)
+            }
+            ToolbarItem(placement: .primaryAction) {
+                let undated = store.sourceItems.filter(\.isUndated).count
+                if undated > 0 {
+                    Button {
+                        openWindow(value: ReviewRequest(day: displayedMonth, startUndated: true))
+                    } label: {
+                        Label("\(undated) undated", systemImage: "calendar.badge.exclamationmark")
+                    }
+                    .help("Review the photos and videos without a capture date (they have no embedded day, often stripped by chat apps)")
+                }
             }
             ToolbarItem(placement: .primaryAction) {
                 Button { showSettingsSheet = true } label: {
@@ -260,6 +279,14 @@ struct ContentView: View {
         if let newMonth = calendar.date(byAdding: .month, value: delta, to: displayedMonth) {
             displayedMonth = newMonth
         }
+    }
+
+    /// Shows the open project's last-viewed month (falling back to the current
+    /// month). The `lastViewedMonth != displayedMonth` guard on the save side
+    /// keeps this from looping with the persistence onChange.
+    private func restoreDisplayedMonth() {
+        guard store.hasProject, let month = store.settings.lastViewedMonth else { return }
+        displayedMonth = month
     }
 
     /// The month laid out as week rows of 7 cells each; nil = padding cell
@@ -1059,9 +1086,10 @@ struct PreviewWindow: View {
                         let fontSize = base * DateStamp.fontFraction
                         VStack(alignment: .leading, spacing: fontSize * 0.15) {
                             if let captionText {
+                                let captionSize = fontSize * DateStamp.captionFontScale
                                 Text(captionText)
-                                    .font(.system(size: fontSize, weight: .bold))
-                                    .kerning(fontSize * DateStamp.trackingFraction)
+                                    .font(.system(size: captionSize, weight: .bold))
+                                    .kerning(captionSize * DateStamp.trackingFraction)
                                     .foregroundStyle(.white)
                                     .shadow(color: .black.opacity(0.6), radius: 2)
                             }
