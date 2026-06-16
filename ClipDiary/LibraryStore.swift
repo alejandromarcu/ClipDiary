@@ -639,6 +639,10 @@ final class LibraryStore: ObservableObject {
         }
         clips.append(clip)
         save()
+        // Remember a photo's duration so the next photo reviewed defaults to it.
+        if clip.kind == .photo, settings.lastPhotoDuration != clip.durationSeconds {
+            updateSettings { $0.lastPhotoDuration = clip.durationSeconds }
+        }
     }
 
     func update(_ clip: Clip) {

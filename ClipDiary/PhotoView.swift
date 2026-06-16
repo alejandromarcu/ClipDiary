@@ -73,15 +73,25 @@ struct PhotoEditor: View {
         )
     }
 
+    /// Allowed photo display durations and the +/- step.
+    private let durationRange = 0.5...30.0
+    private let durationStep = 0.5
+
     private var durationBinding: Binding<Double> {
         Binding(
             get: { clip.durationSeconds },
             set: { newValue in
-                clip.durationSeconds = newValue
+                let clamped = min(max(newValue, durationRange.lowerBound),
+                                  durationRange.upperBound)
+                clip.durationSeconds = clamped
                 clip.inSeconds = 0
-                clip.outSeconds = newValue
+                clip.outSeconds = clamped
             }
         )
+    }
+
+    private func adjustDuration(by delta: Double) {
+        durationBinding.wrappedValue = clip.durationSeconds + delta
     }
 
     var body: some View {
@@ -95,9 +105,30 @@ struct PhotoEditor: View {
             }
 
             HStack {
-                Stepper(value: durationBinding, in: 0.5...30, step: 0.5) {
-                    Text(String(format: "Show for %.1f s", clip.durationSeconds))
-                        .monospacedDigit()
+                Text("Show for")
+                TextField("", value: durationBinding,
+                          format: .number.precision(.fractionLength(1)))
+                    .labelsHidden()
+                    .frame(width: 48)
+                    .multilineTextAlignment(.trailing)
+                    .textFieldStyle(.roundedBorder)
+                    .monospacedDigit()
+                Text("s")
+                Stepper(value: durationBinding, in: durationRange, step: durationStep) {}
+                    .labelsHidden()
+                    .help("Adjust how long this photo is shown (− / + also work)")
+                // Hidden buttons so − and + adjust the duration via the keyboard.
+                // "=" is the unshifted "+" key, accepted as a convenience.
+                .background {
+                    HStack {
+                        Button("Longer") { adjustDuration(by: durationStep) }
+                            .keyboardShortcut("+", modifiers: [])
+                        Button("Longer") { adjustDuration(by: durationStep) }
+                            .keyboardShortcut("=", modifiers: [])
+                        Button("Shorter") { adjustDuration(by: -durationStep) }
+                            .keyboardShortcut("-", modifiers: [])
+                    }
+                    .hidden()
                 }
                 Spacer()
                 Picker("", selection: $aspectLock) {

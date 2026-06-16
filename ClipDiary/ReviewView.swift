@@ -376,11 +376,12 @@ struct ReviewWindow: View {
             )
             draftItemID = item.id
         } else {
+            let photoDuration = store.settings.lastPhotoDuration
             draft = Clip(
                 fileName: "",
                 date: day,
-                outSeconds: LibraryStore.defaultPhotoDuration,
-                durationSeconds: LibraryStore.defaultPhotoDuration,
+                outSeconds: photoDuration,
+                durationSeconds: photoDuration,
                 kind: .photo
             )
             draftItemID = item.id

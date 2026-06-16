@@ -20,6 +20,9 @@ and versions follow [Semantic Versioning](https://semver.org/)
   hover, so you can keep watching without moving the mouse away.
 - Deleting a clip in the day editor now keeps the window open and moves to the
   previous clip (or the next one), closing only when the last clip is removed.
+- Photo display duration: the value can now be typed into a box, the **−** and
+  **+** keys adjust it, and a newly reviewed photo defaults to the duration you
+  last used (remembered per project).
 
 ## [1.1.0] - 2026-06-16
 
