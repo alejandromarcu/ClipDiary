@@ -1043,7 +1043,7 @@ struct PreviewWindow: View {
             ZStack {
                 RoundedRectangle(cornerRadius: 8).fill(.black)
                 if let player {
-                    VideoPlayer(player: player)
+                    PlayerView(player: player)
                 } else if let errorMessage {
                     Text(errorMessage).foregroundStyle(.red).font(.callout)
                 } else {

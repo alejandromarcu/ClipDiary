@@ -354,7 +354,7 @@ struct TrimEditor: View {
     var body: some View {
         VStack(spacing: 14) {
             if let player {
-                VideoPlayer(player: player)
+                PlayerView(player: player)
                     .frame(minHeight: 260)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
             }

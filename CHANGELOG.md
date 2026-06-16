@@ -16,6 +16,8 @@ and versions follow [Semantic Versioning](https://semver.org/)
 - Fixed "Preview Day" (and the month/year preview) not reflecting a clip's
   unsaved edits — caption, transition, trim and the like now show up in the
   preview right away.
+- Video players no longer dim the picture when the playback controls appear on
+  hover, so you can keep watching without moving the mouse away.
 
 ## [1.1.0] - 2026-06-16
 
