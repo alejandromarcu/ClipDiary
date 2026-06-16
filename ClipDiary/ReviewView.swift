@@ -409,10 +409,11 @@ private struct PickedStrip: View {
                     }
                 }
             }
-            if !dayClips.isEmpty {
-                Button("Edit Day…") { onEdit(day) }
-                    .help("Open this day's clip editor")
-            }
+            if dayClips.isEmpty { Spacer() }
+            // Always available so an empty day can still open its editor — which
+            // is where a card is added.
+            Button(dayClips.isEmpty ? "Add Card…" : "Edit Day…") { onEdit(day) }
+                .help("Open this day's editor — add a card, or reorder and trim clips")
         }
         .frame(height: 44)
     }

@@ -34,7 +34,8 @@ struct ClipDiaryApp: App {
         WindowGroup("Preview", for: PreviewRequest.self) { $request in
             if let request {
                 PreviewWindow(range: request.range, tagFilter: request.tagFilter,
-                              includeEndingFade: request.includeEndingFade)
+                              includeEndingFade: request.includeEndingFade,
+                              includeBookends: request.includeBookends)
                     .environmentObject(store)
             }
         }
@@ -46,6 +47,13 @@ struct ClipDiaryApp: App {
                 ReviewWindow(startDay: request.day)
                     .environmentObject(store)
             }
+        }
+
+        // The Cards gallery + editor in its own resizable window (opened with
+        // openWindow(id: "cards") from the calendar toolbar).
+        WindowGroup("Cards", id: "cards") {
+            CardsManagerView()
+                .environmentObject(store)
         }
     }
 }

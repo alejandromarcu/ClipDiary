@@ -22,6 +22,15 @@ struct ProjectSettings: Codable, Equatable {
     /// project. `nil` means "never changed" — the window then defaults to the
     /// current month, which keeps following the calendar instead of sticking.
     var renderRange: RenderRange? = nil
+    /// The card shown at the very start of a rendered video, or nil for none.
+    /// Chosen in the Create Video window and remembered per project.
+    var coverCardID: UUID? = nil
+    /// The card shown at the very end of a rendered video, or nil for none.
+    var endingCardID: UUID? = nil
+    /// Fade in/out for the cover and ending cards, set in the Create Video
+    /// window (the cards themselves carry no transition).
+    var coverTransition = SegmentTransition()
+    var endingTransition = SegmentTransition()
 
     /// The fade length to actually apply, or nil when fading is disabled.
     var effectiveFadeOutSeconds: Double? {
@@ -43,7 +52,8 @@ struct ProjectSettings: Codable, Equatable {
     init() {}
 
     enum CodingKeys: String, CodingKey {
-        case orientation, fadeOutLastClip, fadeOutSeconds, renderRange
+        case orientation, fadeOutLastClip, fadeOutSeconds, renderRange,
+             coverCardID, endingCardID, coverTransition, endingTransition
     }
 
     init(from decoder: Decoder) throws {
@@ -52,6 +62,10 @@ struct ProjectSettings: Codable, Equatable {
         fadeOutLastClip = try c.decodeIfPresent(Bool.self, forKey: .fadeOutLastClip) ?? false
         fadeOutSeconds = try c.decodeIfPresent(Double.self, forKey: .fadeOutSeconds) ?? 1.0
         renderRange = try c.decodeIfPresent(RenderRange.self, forKey: .renderRange)
+        coverCardID = try c.decodeIfPresent(UUID.self, forKey: .coverCardID)
+        endingCardID = try c.decodeIfPresent(UUID.self, forKey: .endingCardID)
+        coverTransition = try c.decodeIfPresent(SegmentTransition.self, forKey: .coverTransition) ?? SegmentTransition()
+        endingTransition = try c.decodeIfPresent(SegmentTransition.self, forKey: .endingTransition) ?? SegmentTransition()
     }
 }
 
@@ -246,6 +260,9 @@ struct Clip: Identifiable, Codable, Equatable, Hashable {
     /// Byte size of that media file — a near-free pre-filter and sanity check
     /// when matching `sourceHash` against source files. nil pre-this-field.
     var sourceBytes: Int64? = nil
+    /// Optional fade in/out applied to this clip's segment in the rendered
+    /// video. Edited in the day editor and review window.
+    var transition = SegmentTransition()
 
     var trimmedDuration: Double { max(0, outSeconds - inSeconds) }
 
@@ -268,7 +285,7 @@ struct Clip: Identifiable, Codable, Equatable, Hashable {
     enum CodingKeys: String, CodingKey {
         case id, fileName, date, inSeconds, outSeconds, durationSeconds, createdAt,
              tags, kind, crop, showsDateOverlay, caption, sourcePath,
-             sourceHash, sourceBytes
+             sourceHash, sourceBytes, transition
     }
 }
 
@@ -291,6 +308,7 @@ extension Clip {
         sourcePath = try container.decodeIfPresent(String.self, forKey: .sourcePath)
         sourceHash = try container.decodeIfPresent(String.self, forKey: .sourceHash)
         sourceBytes = try container.decodeIfPresent(Int64.self, forKey: .sourceBytes)
+        transition = try container.decodeIfPresent(SegmentTransition.self, forKey: .transition) ?? SegmentTransition()
     }
 }
 

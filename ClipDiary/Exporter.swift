@@ -18,11 +18,24 @@ enum ExportError: LocalizedError {
     }
 }
 
-/// One stretch of the stitched timeline that shows a date stamp (and optional caption).
+/// One stretch of the stitched timeline that shows a date stamp (and optional
+/// caption). `fadeIn/OutSeconds` make the stamp fade in step with its clip's
+/// transition (and the project ending fade for the last clip).
 struct DateOverlay {
     let timeRange: CMTimeRange
     let text: String
     let caption: String
+    var fadeInSeconds: Double = 0
+    var fadeOutSeconds: Double = 0
+}
+
+/// A pre-rendered image (a Cover or Ending card) spliced onto the start or end
+/// of a render for `seconds`. Carries no date stamp of its own, but may fade in
+/// from / out to black via its `transition`.
+struct Bookend {
+    let image: CGImage
+    let seconds: Double
+    var transition = SegmentTransition()
 }
 
 /// A stitched month ready to play or export. Photo clips live as rendered
@@ -39,10 +52,6 @@ struct MonthComposition {
     /// them in via Core Animation; the preview window draws them itself
     /// (the animation tool only works with export sessions, not AVPlayer).
     let dateOverlays: [DateOverlay]
-    /// The timeline stretch the ending fade covers (nil when disabled).
-    /// The video fade is baked into the composition; this lets the export's
-    /// date-stamp overlay and the preview's stamp fade in step with it.
-    let fadeRange: CMTimeRange?
     let tempDir: URL
 
     func cleanUp() {
@@ -61,10 +70,13 @@ struct Exporter {
         renderSize: CGSize,
         fadeOutSeconds: Double? = nil,
         creationDate: Date? = nil,
+        leading: Bookend? = nil,
+        trailing: Bookend? = nil,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws {
         let built = try await buildComposition(
-            clips: clips, store: store, renderSize: renderSize, fadeOutSeconds: fadeOutSeconds
+            clips: clips, store: store, renderSize: renderSize,
+            fadeOutSeconds: fadeOutSeconds, leading: leading, trailing: trailing
         )
         defer { built.cleanUp() }
 
@@ -77,7 +89,7 @@ struct Exporter {
         session.outputFileType = .mp4
         if !built.dateOverlays.isEmpty {
             built.videoComposition.animationTool = makeDateOverlayTool(
-                overlays: built.dateOverlays, renderSize: renderSize, fade: built.fadeRange
+                overlays: built.dateOverlays, renderSize: renderSize
             )
         }
         session.videoComposition = built.videoComposition
@@ -114,7 +126,9 @@ struct Exporter {
         clips: [Clip],
         store: LibraryStore,
         renderSize: CGSize,
-        fadeOutSeconds: Double? = nil
+        fadeOutSeconds: Double? = nil,
+        leading: Bookend? = nil,
+        trailing: Bookend? = nil
     ) async throws -> MonthComposition {
         guard !clips.isEmpty else { throw ExportError.noClips }
 
@@ -133,9 +147,17 @@ struct Exporter {
         // ending fade can ramp exactly that segment (never an earlier one).
         var lastLayer: AVMutableVideoCompositionLayerInstruction?
         var lastSegment: CMTimeRange?
+        // True when the last inserted segment already faded itself to black (an
+        // ending card with its own fade-out), so the project ending-fade below
+        // doesn't ramp the same segment a second time.
+        var lastSegmentFadedOut = false
         // Whether any clip contributed audio (an all-photos month has none, so
         // there's nothing for the ending fade's volume ramp to act on).
         var insertedAudio = false
+        // One set of input parameters collects every per-clip and ending volume
+        // ramp; the mix is only attached if at least one ramp was added.
+        let audioParams = audioTrack.map { AVMutableAudioMixInputParameters(track: $0) }
+        var audioMixUsed = false
 
         // Collect clip file URLs on the main actor before doing AV work.
         let items: [(clip: Clip, url: URL)] = await MainActor.run {
@@ -149,6 +171,47 @@ struct Exporter {
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         var succeeded = false
         defer { if !succeeded { try? FileManager.default.removeItem(at: tempDir) } }
+
+        // Splices a Cover/Ending card image in as a full-frame segment (no date
+        // stamp), sharing the clip loop's aspect-fit + last-segment tracking so
+        // a trailing card naturally becomes what the ending fade ramps.
+        func insertBookend(_ bookend: Bookend, name: String) async throws {
+            let url = try await writeImageSegment(
+                image: bookend.image, seconds: bookend.seconds,
+                renderSize: renderSize, in: tempDir, name: name
+            )
+            let asset = AVURLAsset(url: url)
+            guard let srcVideo = try await asset.loadTracks(withMediaType: .video).first else {
+                throw ExportError.noVideoTrack(name)
+            }
+            let range = CMTimeRange(start: .zero, duration: try await asset.load(.duration))
+            guard range.duration > .zero else { return }
+            try videoTrack.insertTimeRange(range, of: srcVideo, at: cursor)
+
+            let naturalSize = try await srcVideo.load(.naturalSize)
+            let preferred = try await srcVideo.load(.preferredTransform)
+            let transform = Self.aspectFitTransform(
+                naturalSize: naturalSize, preferred: preferred, renderSize: renderSize
+            )
+            let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: videoTrack)
+            layer.setTransform(transform, at: cursor)
+
+            // Card fades to/from black (cards are silent, so no audio ramp).
+            let (_, fadeOut) = Self.applyOpacityFades(
+                bookend.transition, to: layer, start: cursor, duration: range.duration
+            )
+
+            let instruction = AVMutableVideoCompositionInstruction()
+            instruction.timeRange = CMTimeRange(start: cursor, duration: range.duration)
+            instruction.layerInstructions = [layer]
+            instructions.append(instruction)
+            lastLayer = layer
+            lastSegment = instruction.timeRange
+            lastSegmentFadedOut = fadeOut > 0
+            cursor = cursor + range.duration
+        }
+
+        if let leading { try await insertBookend(leading, name: "cover") }
 
         for (index, (clip, url)) in items.enumerated() {
             let assetURL: URL
@@ -179,33 +242,40 @@ struct Exporter {
 
             try videoTrack.insertTimeRange(range, of: srcVideo, at: cursor)
 
+            var clipHasAudio = false
             if let audioTrack,
                let srcAudio = try await asset.loadTracks(withMediaType: .audio).first {
                 try? audioTrack.insertTimeRange(range, of: srcAudio, at: cursor)
                 insertedAudio = true
+                clipHasAudio = true
             }
 
             // Aspect-fit transform for this segment.
             let naturalSize = try await srcVideo.load(.naturalSize)
             let preferred = try await srcVideo.load(.preferredTransform)
-            let orientedRect = CGRect(origin: .zero, size: naturalSize)
-                .applying(preferred)
-            let orientedSize = CGSize(width: abs(orientedRect.width),
-                                      height: abs(orientedRect.height))
-
-            let scale = min(renderSize.width / orientedSize.width,
-                            renderSize.height / orientedSize.height)
-            let scaledSize = CGSize(width: orientedSize.width * scale,
-                                    height: orientedSize.height * scale)
-            let tx = (renderSize.width - scaledSize.width) / 2 - orientedRect.minX * scale
-            let ty = (renderSize.height - scaledSize.height) / 2 - orientedRect.minY * scale
-
-            var transform = preferred
-            transform = transform.concatenating(CGAffineTransform(scaleX: scale, y: scale))
-            transform = transform.concatenating(CGAffineTransform(translationX: tx, y: ty))
+            let transform = Self.aspectFitTransform(
+                naturalSize: naturalSize, preferred: preferred, renderSize: renderSize
+            )
 
             let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: videoTrack)
             layer.setTransform(transform, at: cursor)
+
+            // Per-clip fade in/out: opacity on the picture, volume on its audio.
+            let (fadeIn, fadeOut) = Self.applyOpacityFades(
+                clip.transition, to: layer, start: cursor, duration: range.duration
+            )
+            if clipHasAudio, let audioParams {
+                // The shared volume curve holds its last value, so an earlier
+                // clip's fade-out would otherwise silence every later clip.
+                // Reset the baseline to full at this clip's start (a fade-in
+                // ramp defines its own start, so it only matters without one).
+                if fadeIn <= 0 { audioParams.setVolume(1, at: cursor) }
+                if fadeIn > 0 || fadeOut > 0 {
+                    Self.applyVolumeFades(fadeIn: fadeIn, fadeOut: fadeOut, to: audioParams,
+                                          start: cursor, duration: range.duration)
+                    audioMixUsed = true
+                }
+            }
 
             let instruction = AVMutableVideoCompositionInstruction()
             instruction.timeRange = CMTimeRange(start: cursor, duration: range.duration)
@@ -213,42 +283,54 @@ struct Exporter {
             instructions.append(instruction)
             lastLayer = layer
             lastSegment = instruction.timeRange
+            lastSegmentFadedOut = fadeOut > 0
 
             if clip.showsDateOverlay || !clip.caption.isEmpty {
                 overlays.append(DateOverlay(
                     timeRange: CMTimeRange(start: cursor, duration: range.duration),
                     text: clip.showsDateOverlay ? DateStamp.text(for: clip.date) : "",
-                    caption: clip.caption
+                    caption: clip.caption,
+                    fadeInSeconds: fadeIn,
+                    fadeOutSeconds: fadeOut
                 ))
             }
 
             cursor = cursor + range.duration
         }
 
+        if let trailing { try await insertBookend(trailing, name: "ending") }
+
         guard cursor > .zero else { throw ExportError.noClips }
         let totalDuration = cursor
 
-        // Optional ending fade to black: ramp the last clip's opacity (the
-        // composition behind it is black) and its audio volume to zero over
-        // the final stretch, clamped to that clip so earlier ones are untouched.
-        var fadeRange: CMTimeRange?
-        var audioMix: AVMutableAudioMix?
+        // Optional project ending fade to black: ramp the last segment's
+        // opacity (the composition behind it is black) and its audio volume to
+        // zero over the final stretch — but only when that segment didn't
+        // already fade itself (a clip/ending card with its own fade-out wins).
         if let fadeOutSeconds, fadeOutSeconds > 0,
+           !lastSegmentFadedOut,
            let lastLayer, let lastSegment {
             let fadeSeconds = min(fadeOutSeconds, lastSegment.duration.seconds)
             if fadeSeconds > 0 {
                 let fadeDuration = CMTime(seconds: fadeSeconds, preferredTimescale: 600)
                 let range = CMTimeRange(start: totalDuration - fadeDuration, duration: fadeDuration)
                 lastLayer.setOpacityRamp(fromStartOpacity: 1, toEndOpacity: 0, timeRange: range)
-                if let audioTrack, insertedAudio {
-                    let params = AVMutableAudioMixInputParameters(track: audioTrack)
-                    params.setVolumeRamp(fromStartVolume: 1, toEndVolume: 0, timeRange: range)
-                    let mix = AVMutableAudioMix()
-                    mix.inputParameters = [params]
-                    audioMix = mix
+                if let audioParams, insertedAudio {
+                    audioParams.setVolumeRamp(fromStartVolume: 1, toEndVolume: 0, timeRange: range)
+                    audioMixUsed = true
                 }
-                fadeRange = range
+                // Fade the last segment's date stamp with it, if it has one.
+                if let idx = overlays.firstIndex(where: { $0.timeRange.start == lastSegment.start }) {
+                    overlays[idx].fadeOutSeconds = fadeSeconds
+                }
             }
+        }
+
+        var audioMix: AVMutableAudioMix?
+        if audioMixUsed, let audioParams {
+            let mix = AVMutableAudioMix()
+            mix.inputParameters = [audioParams]
+            audioMix = mix
         }
 
         let videoComposition = AVMutableVideoComposition()
@@ -262,7 +344,6 @@ struct Exporter {
             videoComposition: videoComposition,
             audioMix: audioMix,
             dateOverlays: overlays,
-            fadeRange: fadeRange,
             tempDir: tempDir
         )
     }
@@ -376,7 +457,7 @@ struct Exporter {
     /// Core Animation overlay that burns each clip's date stamp into the
     /// bottom-left corner during export, 1SE-style.
     private static func makeDateOverlayTool(
-        overlays: [DateOverlay], renderSize: CGSize, fade: CMTimeRange?
+        overlays: [DateOverlay], renderSize: CGSize
     ) -> AVVideoCompositionCoreAnimationTool {
         let frame = CGRect(origin: .zero, size: renderSize)
         let videoLayer = CALayer()
@@ -397,18 +478,22 @@ struct Exporter {
             let beginTime = max(overlay.timeRange.start.seconds, AVCoreAnimationBeginTimeAtZero)
             let duration = overlay.timeRange.duration.seconds
 
-            // If the ending fade overlaps this clip's segment (it only ever
-            // does for the last one, being clamped to it), the fraction of the
-            // segment at which the stamp should start fading to 0.
-            var fadeFraction: Double?
-            if let fade {
-                let segStart = overlay.timeRange.start.seconds
-                let segEnd = segStart + duration
-                if fade.start.seconds < segEnd && fade.end.seconds > segStart {
-                    let point = max(fade.start.seconds, segStart)
-                    fadeFraction = min(max((point - segStart) / duration, 0), 1)
-                }
+            // Opacity keyframe for this clip's stamp: fade up from 0, hold at 1,
+            // fade down to 0 — matching the clip's transition (and the project
+            // ending fade for the last clip). No fades collapses to a constant 1.
+            let fi = duration > 0 ? min(max(overlay.fadeInSeconds / duration, 0), 1) : 0
+            let fo = duration > 0 ? min(max(overlay.fadeOutSeconds / duration, 0), 1) : 0
+            var points: [(t: Double, v: Double)] = [(0, fi > 0 ? 0 : 1)]
+            if fi > 0 { points.append((fi, 1)) }
+            if fo > 0 {
+                let foStart = 1 - fo
+                if foStart > points.last!.t { points.append((foStart, 1)) }
+                points.append((1, 0))
+            } else {
+                points.append((1, 1))
             }
+            let opacityValues = points.map { NSNumber(value: $0.v) }
+            let opacityKeyTimes = points.map { NSNumber(value: $0.t) }
 
             func makeTextLayer(text: String, y: CGFloat) -> CATextLayer {
                 let layer = CATextLayer()
@@ -429,25 +514,14 @@ struct Exporter {
                 layer.shadowRadius = fontSize * 0.06
                 layer.shadowOffset = .zero
 
-                // Visible only during the clip's segment: a frozen opacity
-                // animation spans the time range (beginTime 0 means "now" to
-                // Core Animation, hence AVCoreAnimationBeginTimeAtZero). When
-                // the ending fade lands on this clip, hold at 1 until the fade
-                // point, then ramp to 0 so the stamp dims with the picture.
+                // Visible only during the clip's segment, following the opacity
+                // keyframe computed above (beginTime 0 means "now" to Core
+                // Animation, hence AVCoreAnimationBeginTimeAtZero).
                 layer.opacity = 0
-                let anim: CAPropertyAnimation
-                if let fadeFraction {
-                    let keyframe = CAKeyframeAnimation(keyPath: "opacity")
-                    keyframe.values = [NSNumber(value: 1.0), NSNumber(value: 1.0), NSNumber(value: 0.0)]
-                    keyframe.keyTimes = [NSNumber(value: 0.0), NSNumber(value: fadeFraction), NSNumber(value: 1.0)]
-                    keyframe.calculationMode = .linear
-                    anim = keyframe
-                } else {
-                    let basic = CABasicAnimation(keyPath: "opacity")
-                    basic.fromValue = 1.0
-                    basic.toValue = 1.0
-                    anim = basic
-                }
+                let anim = CAKeyframeAnimation(keyPath: "opacity")
+                anim.values = opacityValues
+                anim.keyTimes = opacityKeyTimes
+                anim.calculationMode = .linear
                 anim.beginTime = beginTime
                 anim.duration = duration
                 anim.fillMode = .removed
@@ -470,7 +544,85 @@ struct Exporter {
         )
     }
 
-    // MARK: - Photo segments
+    // MARK: - Aspect fit
+
+    /// The transform that aspect-fits a source track (honoring its
+    /// `preferredTransform`, e.g. rotated iPhone video) centered into
+    /// `renderSize`, letterboxing as needed. Shared by every stitched segment.
+    static func aspectFitTransform(
+        naturalSize: CGSize, preferred: CGAffineTransform, renderSize: CGSize
+    ) -> CGAffineTransform {
+        let orientedRect = CGRect(origin: .zero, size: naturalSize).applying(preferred)
+        let orientedSize = CGSize(width: abs(orientedRect.width), height: abs(orientedRect.height))
+        let scale = min(renderSize.width / orientedSize.width,
+                        renderSize.height / orientedSize.height)
+        let scaledSize = CGSize(width: orientedSize.width * scale,
+                                height: orientedSize.height * scale)
+        let tx = (renderSize.width - scaledSize.width) / 2 - orientedRect.minX * scale
+        let ty = (renderSize.height - scaledSize.height) / 2 - orientedRect.minY * scale
+        var transform = preferred
+        transform = transform.concatenating(CGAffineTransform(scaleX: scale, y: scale))
+        transform = transform.concatenating(CGAffineTransform(translationX: tx, y: ty))
+        return transform
+    }
+
+    // MARK: - Fades
+
+    /// Applies a segment's fade in/out as opacity ramps on its layer (ramping
+    /// from/to black, since the composition behind is black). Returns the fade
+    /// lengths actually used (clamped so the two ramps can't overlap), so the
+    /// audio and date stamp can fade over exactly the same spans.
+    static func applyOpacityFades(
+        _ transition: SegmentTransition,
+        to layer: AVMutableVideoCompositionLayerInstruction,
+        start: CMTime, duration: CMTime
+    ) -> (fadeIn: Double, fadeOut: Double) {
+        let dur = duration.seconds
+        let fadeIn = transition.hasFadeIn ? min(transition.fadeInSeconds, dur) : 0
+        if fadeIn > 0 {
+            layer.setOpacityRamp(
+                fromStartOpacity: 0, toEndOpacity: 1,
+                timeRange: CMTimeRange(start: start,
+                                       duration: CMTime(seconds: fadeIn, preferredTimescale: 600))
+            )
+        }
+        let fadeOut = transition.hasFadeOut ? min(transition.fadeOutSeconds, dur - fadeIn) : 0
+        if fadeOut > 0 {
+            let s = start + CMTime(seconds: dur - fadeOut, preferredTimescale: 600)
+            layer.setOpacityRamp(
+                fromStartOpacity: 1, toEndOpacity: 0,
+                timeRange: CMTimeRange(start: s,
+                                       duration: CMTime(seconds: fadeOut, preferredTimescale: 600))
+            )
+        }
+        return (fadeIn, fadeOut)
+    }
+
+    /// Adds matching audio volume ramps for a segment's fades onto the shared
+    /// audio-mix parameters (no-op when both fades are 0).
+    static func applyVolumeFades(
+        fadeIn: Double, fadeOut: Double,
+        to params: AVMutableAudioMixInputParameters,
+        start: CMTime, duration: CMTime
+    ) {
+        if fadeIn > 0 {
+            params.setVolumeRamp(
+                fromStartVolume: 0, toEndVolume: 1,
+                timeRange: CMTimeRange(start: start,
+                                       duration: CMTime(seconds: fadeIn, preferredTimescale: 600))
+            )
+        }
+        if fadeOut > 0 {
+            let s = start + CMTime(seconds: duration.seconds - fadeOut, preferredTimescale: 600)
+            params.setVolumeRamp(
+                fromStartVolume: 1, toEndVolume: 0,
+                timeRange: CMTimeRange(start: s,
+                                       duration: CMTime(seconds: fadeOut, preferredTimescale: 600))
+            )
+        }
+    }
+
+    // MARK: - Photo / image segments
 
     /// Renders a photo clip (with its crop applied) into a silent MP4 of the
     /// clip's display duration, sized to fit within `renderSize`.
@@ -485,16 +637,30 @@ struct Exporter {
         guard let oriented = loadOrientedCGImage(from: photoURL, maxPixel: maxPixel) else {
             throw ExportError.sessionFailed("Could not read photo \(clip.fileName).")
         }
-
         let image = clip.crop.map { croppedImage(oriented, to: $0) } ?? oriented
+        return try await writeImageSegment(
+            image: image, seconds: clip.trimmedDuration,
+            renderSize: renderSize, in: directory, name: "photo-\(index)"
+        )
+    }
 
+    /// Writes a still image into a silent MP4 of `seconds` (min 0.5), fit within
+    /// `renderSize` with even H.264 dimensions, never upscaled. Shared by photo
+    /// clips and Cover/Ending card segments.
+    private static func writeImageSegment(
+        image: CGImage,
+        seconds: Double,
+        renderSize: CGSize,
+        in directory: URL,
+        name: String
+    ) async throws -> URL {
         // Even dimensions for H.264, never upscaled beyond the source.
         let fitScale = min(1, min(renderSize.width / CGFloat(image.width),
                                   renderSize.height / CGFloat(image.height)))
         let width = max(2, Int(CGFloat(image.width) * fitScale / 2) * 2)
         let height = max(2, Int(CGFloat(image.height) * fitScale / 2) * 2)
 
-        let outputURL = directory.appendingPathComponent("photo-\(index).mp4")
+        let outputURL = directory.appendingPathComponent("\(name).mp4")
         let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
             AVVideoCodecKey: AVVideoCodecType.h264,
@@ -514,12 +680,12 @@ struct Exporter {
 
         guard writer.startWriting() else {
             throw ExportError.sessionFailed(
-                writer.error?.localizedDescription ?? "Could not write photo segment."
+                writer.error?.localizedDescription ?? "Could not write image segment."
             )
         }
         writer.startSession(atSourceTime: .zero)
 
-        let duration = CMTime(seconds: max(0.5, clip.trimmedDuration), preferredTimescale: 600)
+        let duration = CMTime(seconds: max(0.5, seconds), preferredTimescale: 600)
         let frameDuration = CMTime(value: 1, timescale: 30)
         var times = [CMTime.zero]
         let lastFrame = duration - frameDuration
@@ -532,7 +698,7 @@ struct Exporter {
             guard let pool = adaptor.pixelBufferPool,
                   let buffer = makePixelBuffer(from: image, pool: pool,
                                                width: width, height: height) else {
-                throw ExportError.sessionFailed("Could not render photo \(clip.fileName).")
+                throw ExportError.sessionFailed("Could not render image segment.")
             }
             adaptor.append(buffer, withPresentationTime: time)
         }
@@ -542,7 +708,7 @@ struct Exporter {
         await writer.finishWriting()
         guard writer.status == .completed else {
             throw ExportError.sessionFailed(
-                writer.error?.localizedDescription ?? "Could not write photo segment."
+                writer.error?.localizedDescription ?? "Could not write image segment."
             )
         }
         return outputURL

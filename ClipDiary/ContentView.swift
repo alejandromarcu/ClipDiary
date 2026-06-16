@@ -79,6 +79,12 @@ struct ContentView: View {
                 }
             }
             ToolbarItem(placement: .primaryAction) {
+                Button { openWindow(id: "cards") } label: {
+                    Label("Cards", systemImage: "rectangle.on.rectangle.angled")
+                }
+                .help("Design and manage title cards (covers, endings, captioned slides)")
+            }
+            ToolbarItem(placement: .primaryAction) {
                 Button { showRenderSheet = true } label: {
                     Label("Create Video…", systemImage: "film.stack")
                 }
@@ -119,7 +125,11 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showRenderSheet) {
             RenderSheet(initialRange: store.settings.renderRange ?? .month(Date()),
-                        tagFilter: tagFilter)
+                        tagFilter: tagFilter,
+                        initialCover: store.settings.coverCardID,
+                        initialEnding: store.settings.endingCardID,
+                        initialCoverTransition: store.settings.coverTransition,
+                        initialEndingTransition: store.settings.endingTransition)
                 .environmentObject(store)
         }
         .sheet(isPresented: $showSourcesSheet) {
@@ -387,8 +397,9 @@ struct DayCell: View {
         .buttonStyle(.plain)
         .contextMenu {
             Button("Review Sources…", action: onTap)
-            Button("Edit Day's Clips…", action: onEdit)
-                .disabled(dayClips.isEmpty)
+            // Always reachable — the day editor is also where a card is added,
+            // so an empty day still needs a way in.
+            Button(dayClips.isEmpty ? "Edit Day…" : "Edit Day's Clips…", action: onEdit)
         }
         .task(id: dayClips.first?.thumbnailKey) {
             if let first = dayClips.first {
@@ -509,6 +520,18 @@ struct RenderSheet: View {
     /// updates" warning, so the save is deferred to `onChange` instead.
     @State private var range: RenderRange
 
+    /// Cover/Ending card selections + their fades, mirrored locally and
+    /// persisted back to the project in `onChange` (same deferred-save reason as
+    /// `range` above).
+    @State private var coverCardID: UUID?
+    @State private var endingCardID: UUID?
+    @State private var coverTransition = SegmentTransition()
+    @State private var endingTransition = SegmentTransition()
+    @State private var editingBookendFade: BookendFade?
+
+    /// Which bookend's fade sheet is open.
+    private enum BookendFade: String, Identifiable { case cover, ending; var id: String { rawValue } }
+
     @State private var isExporting = false
     @State private var progress: Double = 0
     @State private var errorMessage: String?
@@ -517,8 +540,15 @@ struct RenderSheet: View {
     /// was never changed). Seeding in `init` rather than a `@State` default
     /// means `onChange` fires only on real edits, so an untouched window leaves
     /// `settings.renderRange` nil and keeps defaulting to the current month.
-    init(initialRange: RenderRange, tagFilter: String?) {
+    init(initialRange: RenderRange, tagFilter: String?,
+         initialCover: UUID? = nil, initialEnding: UUID? = nil,
+         initialCoverTransition: SegmentTransition = SegmentTransition(),
+         initialEndingTransition: SegmentTransition = SegmentTransition()) {
         _range = State(initialValue: initialRange)
+        _coverCardID = State(initialValue: initialCover)
+        _endingCardID = State(initialValue: initialEnding)
+        _coverTransition = State(initialValue: initialCoverTransition)
+        _endingTransition = State(initialValue: initialEndingTransition)
         self.tagFilter = tagFilter
     }
 
@@ -539,6 +569,8 @@ struct RenderSheet: View {
                 .font(.title3.bold())
 
             rangePicker
+
+            bookendPicker
 
             if let tagFilter {
                 Text("Only clips tagged “\(tagFilter)”.")
@@ -587,6 +619,80 @@ struct RenderSheet: View {
         .onChange(of: range) { _, newRange in
             store.updateSettings { $0.renderRange = newRange }
         }
+        .onChange(of: coverCardID) { _, new in
+            store.updateSettings { $0.coverCardID = new }
+        }
+        .onChange(of: endingCardID) { _, new in
+            store.updateSettings { $0.endingCardID = new }
+        }
+        .onChange(of: coverTransition) { _, new in
+            store.updateSettings { $0.coverTransition = new }
+        }
+        .onChange(of: endingTransition) { _, new in
+            store.updateSettings { $0.endingTransition = new }
+        }
+        .sheet(item: $editingBookendFade) { which in
+            let isCover = which == .cover
+            TransitionEditorSheet(
+                transition: isCover ? $coverTransition : $endingTransition,
+                maxSeconds: cardDuration(isCover ? coverCardID : endingCardID)
+            )
+        }
+    }
+
+    // MARK: Cover / ending cards
+
+    /// Cover and Ending card selectors, each with a fade control. Persisted per
+    /// project (via `onChange`) and rendered onto the start/end of Preview/Export.
+    @ViewBuilder
+    private var bookendPicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Cover")
+                    .frame(width: 60, alignment: .leading)
+                cardMenu(selection: $coverCardID)
+                fadeButton(coverTransition, enabled: coverCardID != nil) { editingBookendFade = .cover }
+            }
+            HStack {
+                Text("Ending")
+                    .frame(width: 60, alignment: .leading)
+                cardMenu(selection: $endingCardID)
+                fadeButton(endingTransition, enabled: endingCardID != nil) { editingBookendFade = .ending }
+            }
+            if store.cards.isEmpty {
+                Text("No cards yet — design a cover or ending with the Cards button in the toolbar.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func cardMenu(selection: Binding<UUID?>) -> some View {
+        Picker("", selection: selection) {
+            Text("None").tag(UUID?.none)
+            ForEach(store.cards) { card in
+                Text(card.name).tag(UUID?.some(card.id))
+            }
+        }
+        .labelsHidden()
+        .disabled(store.cards.isEmpty)
+    }
+
+    private func fadeButton(_ transition: SegmentTransition, enabled: Bool,
+                            _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(transition.isEmpty ? "Fade…" : transition.summary,
+                  systemImage: "circle.lefthalf.filled")
+        }
+        .disabled(!enabled)
+        .help("Fade this card in and/or out")
+        .fixedSize()
+    }
+
+    /// The chosen card's display length, used to cap its fades (default if none).
+    private func cardDuration(_ id: UUID?) -> Double {
+        id.flatMap { cid in store.cards.first(where: { $0.id == cid })?.displaySeconds }
+            ?? Card.defaultDisplaySeconds
     }
 
     // MARK: Range controls
@@ -711,13 +817,17 @@ struct RenderSheet: View {
         let renderSize = store.settings.orientation.size
         let fadeOutSeconds = store.settings.effectiveFadeOutSeconds
         let creationDate = range.exportCreationDate(clips: clips)
+        // Render the Cover/Ending cards now (on the main actor) so the export
+        // task just splices the finished images on.
+        let leading = bookend(for: coverCardID, transition: coverTransition, renderSize: renderSize)
+        let trailing = bookend(for: endingCardID, transition: endingTransition, renderSize: renderSize)
 
         Task {
             do {
                 try await Exporter.exportMovie(
                     clips: clips, store: store, outputURL: url,
                     renderSize: renderSize, fadeOutSeconds: fadeOutSeconds,
-                    creationDate: creationDate
+                    creationDate: creationDate, leading: leading, trailing: trailing
                 ) { value in
                     Task { @MainActor in progress = value }
                 }
@@ -730,6 +840,20 @@ struct RenderSheet: View {
             }
         }
     }
+
+    private func bookend(for id: UUID?, transition: SegmentTransition, renderSize: CGSize) -> Bookend? {
+        cardBookend(id, transition: transition, store: store, renderSize: renderSize)
+    }
+}
+
+/// Resolves a settings card id to a rendered Cover/Ending segment (nil for
+/// "None" or a card that's since been deleted). Shared by Export and Preview.
+@MainActor
+func cardBookend(_ id: UUID?, transition: SegmentTransition,
+                 store: LibraryStore, renderSize: CGSize) -> Bookend? {
+    guard let id, let doc = store.cards.first(where: { $0.id == id }),
+          let cg = store.renderCardImage(doc, size: renderSize) else { return nil }
+    return Bookend(image: cg, seconds: doc.displaySeconds, transition: transition)
 }
 
 // MARK: - Project settings
@@ -837,6 +961,9 @@ struct PreviewRequest: Codable, Hashable {
     /// The ending fade-to-black is meant for the very last clip of a full
     /// render, so the day editor's single-day preview opts out of it.
     var includeEndingFade: Bool = true
+    /// Whether to splice in the project's Cover/Ending cards. Off for the day
+    /// editor's single-day preview (those bookend a whole video, not one day).
+    var includeBookends: Bool = true
 }
 
 /// Plays the month's stitched composition in-app — same trims, ordering and
@@ -846,6 +973,7 @@ struct PreviewWindow: View {
     let range: RenderRange
     var tagFilter: String?
     var includeEndingFade: Bool = true
+    var includeBookends: Bool = true
 
     @State private var built: MonthComposition?
     @State private var player: AVPlayer?
@@ -940,11 +1068,15 @@ struct PreviewWindow: View {
         errorMessage = nil
 
         let clips = store.clips(in: range, taggedWith: tagFilter)
+        let renderSize = store.settings.orientation.size
+        let leading = includeBookends ? cardBookend(store.settings.coverCardID, transition: store.settings.coverTransition, store: store, renderSize: renderSize) : nil
+        let trailing = includeBookends ? cardBookend(store.settings.endingCardID, transition: store.settings.endingTransition, store: store, renderSize: renderSize) : nil
         do {
             let built = try await Exporter.buildComposition(
                 clips: clips, store: store,
-                renderSize: store.settings.orientation.size,
-                fadeOutSeconds: includeEndingFade ? store.settings.effectiveFadeOutSeconds : nil
+                renderSize: renderSize,
+                fadeOutSeconds: includeEndingFade ? store.settings.effectiveFadeOutSeconds : nil,
+                leading: leading, trailing: trailing
             )
             // A settings change cancels and restarts this task; a stale build
             // finishing late must not overwrite the newer one.
@@ -960,17 +1092,24 @@ struct PreviewWindow: View {
             self.player = player
 
             // Track which clip is playing so the date stamp and caption follow
-            // along, and fade the stamp out over the ending fade (the export's
-            // Core Animation overlay does the same to the burned-in stamp).
+            // along, fading the stamp in step with that clip's transition (the
+            // export's Core Animation overlay does the same to the burned-in one).
             let overlays = built.dateOverlays
-            let fade = built.fadeRange
             func updateOverlay(at time: CMTime) {
                 let o = overlays.first { $0.timeRange.containsTime(time) }
                 stampText = o.flatMap { $0.text.isEmpty ? nil : $0.text }
                 captionText = o.flatMap { $0.caption.isEmpty ? nil : $0.caption }
-                if let fade, time >= fade.start {
-                    let remaining = (fade.end - time).seconds / fade.duration.seconds
-                    stampOpacity = min(max(remaining, 0), 1)
+                if let o {
+                    let t = (time - o.timeRange.start).seconds
+                    let dur = o.timeRange.duration.seconds
+                    var opacity = 1.0
+                    if o.fadeInSeconds > 0, t < o.fadeInSeconds {
+                        opacity = min(opacity, t / o.fadeInSeconds)
+                    }
+                    if o.fadeOutSeconds > 0, t > dur - o.fadeOutSeconds {
+                        opacity = min(opacity, (dur - t) / o.fadeOutSeconds)
+                    }
+                    stampOpacity = min(max(opacity, 0), 1)
                 } else {
                     stampOpacity = 1
                 }

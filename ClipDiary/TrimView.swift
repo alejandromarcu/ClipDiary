@@ -12,6 +12,7 @@ struct DaySheet: View {
     let day: Date
 
     @State private var selectedClipID: UUID?
+    @State private var showCardPicker = false
 
     private var dayClips: [Clip] { store.clips(on: day) }
 
@@ -21,11 +22,17 @@ struct DaySheet: View {
                 Text(day.formatted(date: .complete, time: .omitted))
                     .font(.headline)
                 Spacer()
+                Button {
+                    showCardPicker = true
+                } label: {
+                    Label("Add Card…", systemImage: "rectangle.on.rectangle.angled")
+                }
+                .help("Add a designed title card as a clip on this day")
                 if !dayClips.isEmpty {
                     Button("Preview Day") {
                         openWindow(value: PreviewRequest(
                             range: .custom(start: day, end: day), tagFilter: nil,
-                            includeEndingFade: false))
+                            includeEndingFade: false, includeBookends: false))
                     }
                 }
                 Button("Done") { dismiss() }
@@ -48,9 +55,11 @@ struct DaySheet: View {
                 ContentUnavailableView(
                     "No clip on this day",
                     systemImage: "video.slash",
-                    description: Text("Import a video and set its date to add one.")
+                    description: Text("Use “Add Card…” above to drop in a title slide, or review the day's photos and videos from your source folders.")
                 )
-                .frame(minHeight: 200)
+                // Fill the body so the header stays pinned to the top instead of
+                // the whole sheet centering on the short empty-state content.
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .padding(20)
@@ -58,6 +67,10 @@ struct DaySheet: View {
                minHeight: 560, idealHeight: 680, maxHeight: .infinity)
         .background(ResizableSheetSupport(minSize: NSSize(width: 640, height: 560)))
         .onAppear { selectedClipID = dayClips.first?.id }
+        .sheet(isPresented: $showCardPicker) {
+            CardsManagerView(onPick: { store.addCard($0, to: day) })
+                .environmentObject(store)
+        }
     }
 }
 
@@ -293,6 +306,7 @@ struct TrimEditor: View {
     @State private var isPlayingPreview = false
     @State private var playheadSeconds = 0.0
     @State private var editedDate: Date
+    @State private var showTransition = false
 
     /// Snapshot as the editor opened, for Revert.
     private let original: Clip
@@ -381,6 +395,8 @@ struct TrimEditor: View {
                     .textFieldStyle(.roundedBorder)
             }
 
+            TransitionRow(transition: clip.transition) { showTransition = true }
+
             Divider()
 
             HStack {
@@ -432,6 +448,9 @@ struct TrimEditor: View {
         }
         .onChange(of: clip.inSeconds) { _, newValue in seek(to: newValue) }
         .onChange(of: clip.outSeconds) { _, newValue in seek(to: newValue) }
+        .sheet(isPresented: $showTransition) {
+            TransitionEditorSheet(transition: $clip.transition, maxSeconds: clip.trimmedDuration)
+        }
     }
 
     private func saveEdits() {
