@@ -184,6 +184,7 @@ struct CardEditorView: View {
     @State private var editedName: String
     @State private var selectedID: UUID?
     @State private var canvasImage: NSImage?
+    @State private var showGrid = false
 
     private let isNew: Bool
     private let onClose: () -> Void
@@ -223,6 +224,7 @@ struct CardEditorView: View {
             elementToolbar
             HStack(alignment: .top, spacing: 16) {
                 CardCanvas(image: canvasImage, canvasSize: doc.canvasSize,
+                           showGrid: showGrid,
                            elements: $doc.elements, selectedID: $selectedID)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 inspector
@@ -284,6 +286,11 @@ struct CardEditorView: View {
             Button { addText() } label: { Label("Add Text", systemImage: "textformat") }
             Button { addImageFromFile() } label: { Label("Add Image…", systemImage: "photo") }
             Spacer()
+            // View aid — show an alignment grid over the card (not saved).
+            Toggle(isOn: $showGrid) { Label("Grid", systemImage: "grid") }
+                .toggleStyle(.button)
+                .help("Show an alignment grid over the card")
+            Divider().frame(height: 16)
             // Z-order + delete act on the selected element.
             Group {
                 Button { moveSelected(.back) } label: { Image(systemName: "square.3.layers.3d.bottom.filled") }
@@ -336,9 +343,16 @@ struct CardEditorView: View {
                                     Text(font.label).tag(font.name)
                                 }
                             }
-                            HStack {
+                            HStack(spacing: 6) {
                                 Text("Size")
-                                Slider(value: textStyle.sizeFraction, in: 0.03...0.4)
+                                TextField("", value: sizePercent(textStyle), format: .number)
+                                    .textFieldStyle(.roundedBorder)
+                                    .multilineTextAlignment(.trailing)
+                                    .frame(width: 48)
+                                Text("%").foregroundStyle(.secondary)
+                                Stepper("Size", value: sizePercent(textStyle), in: 3...40)
+                                    .labelsHidden()
+                                Spacer()
                             }
                             ColorPicker("Color", selection: bind(textStyle.color), supportsOpacity: true)
                             Picker("Align", selection: textStyle.alignment) {
@@ -389,6 +403,15 @@ struct CardEditorView: View {
     /// Bridges a `CardColor` binding to the `Color` the SwiftUI pickers use.
     private func bind(_ source: Binding<CardColor>) -> Binding<Color> {
         Binding(get: { source.wrappedValue.color }, set: { source.wrappedValue = CardColor($0) })
+    }
+
+    /// Exposes `sizeFraction` (a fraction of the card height) as a whole-number
+    /// percent for the size field/stepper, clamped to the rendered 3…40% range.
+    private func sizePercent(_ style: Binding<TextStyle>) -> Binding<Int> {
+        Binding(
+            get: { Int((style.wrappedValue.sizeFraction * 100).rounded()) },
+            set: { style.wrappedValue.sizeFraction = min(0.40, max(0.03, Double($0) / 100)) }
+        )
     }
 
     // MARK: Rendering
@@ -477,6 +500,7 @@ struct CardEditorView: View {
 private struct CardCanvas: View {
     let image: NSImage?
     let canvasSize: CGSize
+    var showGrid: Bool = false
     @Binding var elements: [CardElement]
     @Binding var selectedID: UUID?
 
@@ -508,6 +532,27 @@ private struct CardCanvas: View {
                         .resizable()
                         .frame(width: fit.width, height: fit.height)
                         .offset(x: fit.minX, y: fit.minY)
+                }
+
+                // Card bounds: a hairline frame so a card whose background
+                // matches the window (e.g. white) is still distinguishable.
+                Rectangle()
+                    .stroke(Color.primary.opacity(0.25), lineWidth: 1)
+                    .frame(width: fit.width, height: fit.height)
+                    .offset(x: fit.minX, y: fit.minY)
+                    .allowsHitTesting(false)
+
+                // Optional alignment grid: evenly spaced dotted lines (10
+                // columns × 6 rows), drawn with a difference blend so they stay
+                // visible over any card colour (white, black or a photo).
+                if showGrid {
+                    RegularGrid(columns: 10, rows: 6)
+                        .stroke(Color.white,
+                                style: StrokeStyle(lineWidth: 1.5, lineCap: .round, dash: [1, 5]))
+                        .blendMode(.difference)
+                        .frame(width: fit.width, height: fit.height)
+                        .offset(x: fit.minX, y: fit.minY)
+                        .allowsHitTesting(false)
                 }
 
                 // Hit targets per element (back→front so the front wins taps).
@@ -603,12 +648,38 @@ private struct CardCanvas: View {
         let scale = min(size.width / canvasSize.width, size.height / canvasSize.height)
         let w = canvasSize.width * scale
         let h = canvasSize.height * scale
-        return CGRect(x: (size.width - w) / 2, y: (size.height - h) / 2, width: w, height: h)
+        // Top-align: pin the card under the toolbar and let any extra height
+        // fall away below it, so it lines up with the inspector on the right.
+        return CGRect(x: (size.width - w) / 2, y: 0, width: w, height: h)
     }
 
     private func viewRect(_ f: CropRect, in fit: CGRect) -> CGRect {
         CGRect(x: fit.minX + f.x * fit.width, y: fit.minY + f.y * fit.height,
                width: f.width * fit.width, height: f.height * fit.height)
+    }
+}
+
+// MARK: - Alignment grid shape
+
+/// Evenly spaced internal grid lines: `columns - 1` verticals and `rows - 1`
+/// horizontals, dividing the rect into `columns` × `rows` equal cells.
+private struct RegularGrid: Shape {
+    let columns: Int
+    let rows: Int
+
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        for i in 1..<max(columns, 1) {
+            let x = rect.minX + rect.width * CGFloat(i) / CGFloat(columns)
+            p.move(to: CGPoint(x: x, y: rect.minY))
+            p.addLine(to: CGPoint(x: x, y: rect.maxY))
+        }
+        for j in 1..<max(rows, 1) {
+            let y = rect.minY + rect.height * CGFloat(j) / CGFloat(rows)
+            p.move(to: CGPoint(x: rect.minX, y: y))
+            p.addLine(to: CGPoint(x: rect.maxX, y: y))
+        }
+        return p
     }
 }
 
