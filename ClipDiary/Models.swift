@@ -34,6 +34,9 @@ struct ProjectSettings: Codable, Equatable {
     /// The display duration last used for a photo, so the next photo reviewed
     /// defaults to it instead of always restarting at the standard default.
     var lastPhotoDuration: Double = LibraryStore.defaultPhotoDuration
+    /// The calendar month last shown for this project, so reopening it returns
+    /// to that month instead of the current one. `nil` → never navigated.
+    var lastViewedMonth: Date? = nil
 
     /// The fade length to actually apply, or nil when fading is disabled.
     var effectiveFadeOutSeconds: Double? {
@@ -57,7 +60,7 @@ struct ProjectSettings: Codable, Equatable {
     enum CodingKeys: String, CodingKey {
         case orientation, fadeOutLastClip, fadeOutSeconds, renderRange,
              coverCardID, endingCardID, coverTransition, endingTransition,
-             lastPhotoDuration
+             lastPhotoDuration, lastViewedMonth
     }
 
     init(from decoder: Decoder) throws {
@@ -71,6 +74,7 @@ struct ProjectSettings: Codable, Equatable {
         coverTransition = try c.decodeIfPresent(SegmentTransition.self, forKey: .coverTransition) ?? SegmentTransition()
         endingTransition = try c.decodeIfPresent(SegmentTransition.self, forKey: .endingTransition) ?? SegmentTransition()
         lastPhotoDuration = try c.decodeIfPresent(Double.self, forKey: .lastPhotoDuration) ?? LibraryStore.defaultPhotoDuration
+        lastViewedMonth = try c.decodeIfPresent(Date.self, forKey: .lastViewedMonth)
     }
 }
 
@@ -326,6 +330,8 @@ enum DateStamp {
     static let bottomMarginFraction: CGFloat = 0.07
     /// Letter-spacing as a fraction of the font size (1SE tracks the stamp out).
     static let trackingFraction: CGFloat = 0.08
+    /// The caption renders a bit smaller than the date stamp (≈22% smaller).
+    static let captionFontScale: CGFloat = 0.78
 
     /// e.g. "MAR 03 2026", matching the stamp 1SE burns into its exports.
     static func text(for date: Date) -> String {

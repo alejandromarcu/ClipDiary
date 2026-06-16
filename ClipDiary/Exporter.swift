@@ -508,11 +508,11 @@ struct Exporter {
             let opacityValues = points.map { NSNumber(value: $0.v) }
             let opacityKeyTimes = points.map { NSNumber(value: $0.t) }
 
-            func makeTextLayer(text: String, y: CGFloat) -> CATextLayer {
+            func makeTextLayer(text: String, y: CGFloat, size: CGFloat) -> CATextLayer {
                 let layer = CATextLayer()
                 layer.string = NSAttributedString(string: text, attributes: [
-                    .font: NSFont.systemFont(ofSize: fontSize, weight: .bold),
-                    .kern: fontSize * DateStamp.trackingFraction,
+                    .font: NSFont.systemFont(ofSize: size, weight: .bold),
+                    .kern: size * DateStamp.trackingFraction,
                     .foregroundColor: NSColor.white,
                 ])
                 layer.alignmentMode = .left
@@ -524,7 +524,7 @@ struct Exporter {
                 )
                 layer.shadowColor = CGColor(gray: 0, alpha: 1)
                 layer.shadowOpacity = 0.6
-                layer.shadowRadius = fontSize * 0.06
+                layer.shadowRadius = size * 0.06
                 layer.shadowOffset = .zero
 
                 // Visible only during the clip's segment, following the opacity
@@ -544,11 +544,13 @@ struct Exporter {
             }
 
             if !overlay.text.isEmpty {
-                parentLayer.addSublayer(makeTextLayer(text: overlay.text, y: bottomMargin))
+                parentLayer.addSublayer(makeTextLayer(text: overlay.text, y: bottomMargin, size: fontSize))
             }
             if !overlay.caption.isEmpty {
                 let captionY = bottomMargin + lineHeight + lineGap
-                parentLayer.addSublayer(makeTextLayer(text: overlay.caption, y: captionY))
+                parentLayer.addSublayer(makeTextLayer(
+                    text: overlay.caption, y: captionY,
+                    size: fontSize * DateStamp.captionFontScale))
             }
         }
 

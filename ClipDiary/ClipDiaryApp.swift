@@ -44,7 +44,7 @@ struct ClipDiaryApp: App {
         // source folders' photos/videos and pick the day's keepers.
         WindowGroup("Review", for: ReviewRequest.self) { $request in
             if let request {
-                ReviewWindow(startDay: request.day)
+                ReviewWindow(startDay: request.day, startUndated: request.startUndated)
                     .environmentObject(store)
             }
         }

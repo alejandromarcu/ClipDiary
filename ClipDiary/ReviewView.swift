@@ -2,9 +2,12 @@ import SwiftUI
 import AppKit
 import AVFoundation
 
-/// Identifies which day a review window starts at.
+/// Identifies which day a review window starts at. `startUndated` opens it
+/// straight on the undated bucket instead (used by the calendar's "undated"
+/// button); `day` is still carried as the fallback day for those items.
 struct ReviewRequest: Codable, Hashable {
     let day: Date
+    var startUndated: Bool = false
 }
 
 /// Steps through the source folders' photos and videos in capture order,
@@ -23,6 +26,8 @@ struct ReviewWindow: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openWindow) private var openWindow
     let startDay: Date
+    /// Open directly on the undated bucket (from the calendar's undated button).
+    var startUndated = false
 
     /// id of the item under review; nil before positioning or past the end.
     @State private var currentID: String?
@@ -58,8 +63,6 @@ struct ReviewWindow: View {
         return idx > 0
     }
 
-    private var undatedCount: Int { items.filter(\.isUndated).count }
-
     var body: some View {
         VStack(spacing: 12) {
             header
@@ -71,8 +74,8 @@ struct ReviewWindow: View {
             }
         }
         .padding(16)
-        .frame(minWidth: 700, idealWidth: 840, maxWidth: .infinity,
-               minHeight: 640, idealHeight: 780, maxHeight: .infinity)
+        .frame(minWidth: 820, idealWidth: 1000, maxWidth: .infinity,
+               minHeight: 600, idealHeight: 760, maxHeight: .infinity)
         // Esc closes the window, matching the app's other windows. Hidden, but
         // still wired up for the keyboard shortcut.
         .background {
@@ -119,14 +122,11 @@ struct ReviewWindow: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
+            // The day/time context moved into the review pane; only show a
+            // headline here for the in-between states (no current item).
+            if current == nil {
                 Text(headline)
                     .font(.headline)
-                if let item = current {
-                    Text(subheadline(for: item))
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
             }
             if let item = current {
                 if item.isUndated {
@@ -136,14 +136,6 @@ struct ReviewWindow: View {
                         .padding(.horizontal, 8).padding(.vertical, 3)
                         .background(Capsule().fill(.orange.opacity(0.15)))
                         .help("This file carries no date (often stripped by chat apps) — pick the day below before adding")
-                }
-                if item.isLivePhoto {
-                    Label("Live Photo", systemImage: "livephoto")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(Capsule().fill(Color.secondary.opacity(0.12)))
-                        .help("Add this as the still image, or switch to its short motion video below")
                 }
                 let used = store.usageCount(of: item)
                 if used > 0 {
@@ -160,20 +152,6 @@ struct ReviewWindow: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
-            if undatedCount > 0 && current?.isUndated != true {
-                Button {
-                    jumpToUndated()
-                } label: {
-                    Label("\(undatedCount) undated", systemImage: "calendar.badge.exclamationmark")
-                }
-                .help("Jump to the photos and videos without a capture date (reviewed after all dated days)")
-            }
-            Button {
-                showSources = true
-            } label: {
-                Label("Sources…", systemImage: "folder.badge.gearshape")
-            }
-            .help("Manage the folders scanned for photos and videos")
         }
     }
 
@@ -186,16 +164,6 @@ struct ReviewWindow: View {
         }
         if reachedEnd { return "No more photos or videos" }
         return startDay.formatted(date: .complete, time: .omitted)
-    }
-
-    /// "3 of 14 today · IMG_0041.JPG · 4:47 PM" — or the undated equivalent.
-    private func subheadline(for item: SourceItem) -> String {
-        if let date = item.captureDate {
-            return "\(positionInDay(of: item)) · \(item.fileName) · \(date.formatted(date: .omitted, time: .shortened))"
-        }
-        let undated = items.filter(\.isUndated)
-        let position = (undated.firstIndex(of: item) ?? 0) + 1
-        return "\(position) of \(undated.count) undated · \(item.fileName)"
     }
 
     /// e.g. "3 of 14 today". Dated items only.
@@ -259,26 +227,63 @@ struct ReviewWindow: View {
     /// the editor (and the draft) follows that choice.
     @ViewBuilder
     private func editor(for item: SourceItem, draft: Clip) -> some View {
-        VStack(spacing: 10) {
-            if item.isLivePhoto {
-                Picker("", selection: $useMotion) {
-                    Text("Photo").tag(false)
-                    Text(motionLabel(for: item)).tag(true)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
-                .help("This is a Live Photo — add it as the still image, or use its short motion video")
-            }
+        // For a Live Photo, the still/motion picker rides in the media column
+        // (so it doesn't push the right pane down); other items have none.
+        let accessory: AnyView? = item.isLivePhoto
+            ? AnyView(livePhotoPicker(for: item)) : nil
 
-            if useMotion, let motion = item.motionURL {
-                TrimEditor(clip: draft, sourceURL: motion, onAdd: { add($0) })
-            } else if item.kind == .photo {
-                PhotoEditor(clip: draft, sourceURL: item.url, onAdd: { add($0) })
-            } else {
-                TrimEditor(clip: draft, sourceURL: item.url, onAdd: { add($0) })
-            }
+        if useMotion, let motion = item.motionURL {
+            TrimEditor(clip: draft, sourceURL: motion, onAdd: { add($0) },
+                       reviewInfo: reviewInfo(for: item), mediaAccessory: accessory)
+        } else if item.kind == .photo {
+            PhotoEditor(clip: draft, sourceURL: item.url, onAdd: { add($0) },
+                        reviewInfo: reviewInfo(for: item), mediaAccessory: accessory)
+        } else {
+            TrimEditor(clip: draft, sourceURL: item.url, onAdd: { add($0) },
+                       reviewInfo: reviewInfo(for: item), mediaAccessory: accessory)
         }
+    }
+
+    /// "Live Photo" label + the still/motion segmented control, shown above the
+    /// media in the editor's left column.
+    private func livePhotoPicker(for item: SourceItem) -> some View {
+        HStack(spacing: 8) {
+            Label("Live Photo", systemImage: "livephoto")
+                .foregroundStyle(.secondary)
+            Spacer()
+            Picker("", selection: $useMotion) {
+                Text("Photo").tag(false)
+                Text(motionLabel(for: item)).tag(true)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .help("This is a Live Photo — add it as the still image, or use its short motion video")
+        }
+        .font(.callout)
+    }
+
+    /// The day/file context shown atop the review pane, split into short lines.
+    private func reviewInfo(for item: SourceItem) -> ReviewItemInfo {
+        if let date = item.captureDate {
+            // e.g. "Thu, May 28, 2026 5:30 PM" — abbreviated day + time on one line.
+            let day = date.formatted(.dateTime.weekday(.abbreviated)
+                .month(.abbreviated).day().year())
+            let time = date.formatted(date: .omitted, time: .shortened)
+            return ReviewItemInfo(
+                title: "\(day) \(time)",
+                detailLines: [
+                    positionInDay(of: item),
+                    item.fileName,
+                ]
+            )
+        }
+        let undated = items.filter(\.isUndated)
+        let position = (undated.firstIndex(of: item) ?? 0) + 1
+        return ReviewItemInfo(
+            title: "Undated",
+            detailLines: ["\(position) of \(undated.count) undated", item.fileName]
+        )
     }
 
     /// "Video · 0:03" when the motion length is known, else "Video".
@@ -298,18 +303,14 @@ struct ReviewWindow: View {
     private func ensurePosition() {
         if let currentID, items.contains(where: { $0.id == currentID }) { return }
         if reachedEnd { return }
+        if startUndated, let undated = items.first(where: \.isUndated)?.id {
+            currentID = undated
+            return
+        }
         currentID = items.first { ($0.captureDate ?? .distantFuture) >= startDay.dayKey }?.id
         if currentID == nil && !items.isEmpty && !store.isScanningSources {
             reachedEnd = true
         }
-    }
-
-    /// Jumps to the first item of the undated bucket.
-    private func jumpToUndated() {
-        guard let id = items.first(where: \.isUndated)?.id else { return }
-        useMotion = false
-        currentID = id
-        reachedEnd = false
     }
 
     private func next() {
@@ -395,6 +396,7 @@ struct ReviewWindow: View {
 /// Edit button) opens the day's regular clip editor.
 private struct PickedStrip: View {
     @EnvironmentObject var store: LibraryStore
+    @Environment(\.openWindow) private var openWindow
     let day: Date
     var onEdit: (Date) -> Void
 
@@ -415,6 +417,14 @@ private struct PickedStrip: View {
                 }
             }
             if dayClips.isEmpty { Spacer() }
+            if !dayClips.isEmpty {
+                Button("Preview Day") {
+                    openWindow(value: PreviewRequest(
+                        range: .custom(start: day, end: day), tagFilter: nil,
+                        includeEndingFade: false, includeBookends: false))
+                }
+                .help("Play this day's clips in a preview window")
+            }
             // Always available so an empty day can still open its editor — which
             // is where a card is added.
             Button(dayClips.isEmpty ? "Add Card…" : "Edit Day…") { onEdit(day) }
