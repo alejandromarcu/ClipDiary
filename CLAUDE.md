@@ -169,6 +169,24 @@ Deliberate improvements over 1SE:
 - After any change, build with `xcodebuild -scheme ClipDiary build` and fix
   errors before finishing.
 
+## Versioning
+
+ClipDiary uses semantic versioning (`MAJOR.MINOR.PATCH`), tracked in the
+Xcode project's `MARKETING_VERSION` build setting (both Debug and Release
+configs in `ClipDiary.xcodeproj/project.pbxproj`) and mirrored in
+`CHANGELOG.md`. Started at `1.0.0`.
+
+**Every PR bumps the version and adds a CHANGELOG.md entry**, as part of
+that PR:
+- **PATCH** — bug fixes, small tweaks, no new user-visible capability.
+- **MINOR** — new features, additive changes (the common case).
+- **MAJOR** — breaking changes, e.g. a project/data format change that isn't
+  backward compatible, or a significant rework of how the app is used.
+
+`CHANGELOG.md` entries are written for a human reading what's new, not as a
+commit log: a short, plain-language summary of what changed, under a new
+`## [x.y.z] - YYYY-MM-DD` heading at the top (after the intro).
+
 ## Known state
 
 v1 is working: import, calendar, trim, preview, month export all functional.
