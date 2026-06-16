@@ -272,11 +272,11 @@ struct ReviewWindow: View {
             }
 
             if useMotion, let motion = item.motionURL {
-                TrimEditor(clip: draft, sourceURL: motion) { add($0) }
+                TrimEditor(clip: draft, sourceURL: motion, onAdd: { add($0) })
             } else if item.kind == .photo {
-                PhotoEditor(clip: draft, sourceURL: item.url) { add($0) }
+                PhotoEditor(clip: draft, sourceURL: item.url, onAdd: { add($0) })
             } else {
-                TrimEditor(clip: draft, sourceURL: item.url) { add($0) }
+                TrimEditor(clip: draft, sourceURL: item.url, onAdd: { add($0) })
             }
         }
     }
