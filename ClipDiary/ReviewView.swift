@@ -20,6 +20,8 @@ struct ReviewRequest: Codable, Hashable {
 /// has, with a shortcut to its editor.
 struct ReviewWindow: View {
     @EnvironmentObject var store: LibraryStore
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.openWindow) private var openWindow
     let startDay: Date
 
     /// id of the item under review; nil before positioning or past the end.
@@ -39,8 +41,6 @@ struct ReviewWindow: View {
     /// For a Live Photo, whether the user chose its motion video over the
     /// still. Reset to the still each time a new item comes up.
     @State private var useMotion = false
-    /// Day whose picked clips are being edited in a sheet.
-    @State private var editDay: DaySelection?
     @State private var showSources = false
 
     private var items: [SourceItem] { store.sourceItems }
@@ -67,12 +67,19 @@ struct ReviewWindow: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
             PickedStrip(day: current?.captureDate?.dayKey ?? startDay.dayKey) {
-                editDay = DaySelection(day: $0)
+                openWindow(value: DayEditRequest(day: $0))
             }
         }
         .padding(16)
         .frame(minWidth: 700, idealWidth: 840, maxWidth: .infinity,
                minHeight: 640, idealHeight: 780, maxHeight: .infinity)
+        // Esc closes the window, matching the app's other windows. Hidden, but
+        // still wired up for the keyboard shortcut.
+        .background {
+            Button("Close") { dismiss() }
+                .keyboardShortcut(.cancelAction)
+                .hidden()
+        }
         .navigationTitle("Review — \(store.currentProjectName ?? "ClipDiary")")
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
@@ -89,9 +96,6 @@ struct ReviewWindow: View {
                 .disabled(current == nil)
                 .help("Next photo/video — skips into the following day at the end of a day (↓)")
             }
-        }
-        .sheet(item: $editDay) { selection in
-            DaySheet(day: selection.day).environmentObject(store)
         }
         .sheet(isPresented: $showSources) {
             SourceFoldersSheet().environmentObject(store)

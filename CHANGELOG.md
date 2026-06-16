@@ -7,6 +7,13 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.1.1] - 2026-06-16
+
+- The day editor now opens in its own window and remembers its position and
+  size between openings, matching the review window.
+- Press **Esc** to close the review window, like the app's other windows.
+- Renamed the card text "Colour" label to "Color".
+
 ## [1.1.0] - 2026-06-16
 
 - **Separate "review" and "edit" on each calendar day.** Hovering a day cell

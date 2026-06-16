@@ -6,7 +6,6 @@ struct ContentView: View {
     @EnvironmentObject var store: LibraryStore
 
     @State private var displayedMonth = Date().dayKey
-    @State private var selectedDay: DaySelection?
     private enum ImportKind { case media, mash }
     @State private var showImporter = false
     @State private var importKind: ImportKind = .media
@@ -120,9 +119,6 @@ struct ContentView: View {
                 self.tagFilter = nil
             }
         }
-        .sheet(item: $selectedDay) { selection in
-            DaySheet(day: selection.day).environmentObject(store)
-        }
         .sheet(isPresented: $showRenderSheet) {
             RenderSheet(initialRange: store.settings.renderRange ?? .month(Date()),
                         tagFilter: tagFilter,
@@ -225,7 +221,7 @@ struct ContentView: View {
                                     day: day,
                                     tagFilter: tagFilter,
                                     onReview: { openWindow(value: ReviewRequest(day: day)) },
-                                    onEdit: { selectedDay = DaySelection(day: day) }
+                                    onEdit: { openWindow(value: DayEditRequest(day: day)) }
                                 )
                                 .environmentObject(store)
                             } else {

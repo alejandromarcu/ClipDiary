@@ -340,7 +340,7 @@ struct CardEditorView: View {
                                 Text("Size")
                                 Slider(value: textStyle.sizeFraction, in: 0.03...0.4)
                             }
-                            ColorPicker("Colour", selection: bind(textStyle.color), supportsOpacity: true)
+                            ColorPicker("Color", selection: bind(textStyle.color), supportsOpacity: true)
                             Picker("Align", selection: textStyle.alignment) {
                                 Image(systemName: "text.alignleft").tag(CardTextAlignment.leading)
                                 Image(systemName: "text.aligncenter").tag(CardTextAlignment.center)

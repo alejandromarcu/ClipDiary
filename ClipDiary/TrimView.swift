@@ -3,7 +3,14 @@ import AVKit
 import AVFoundation
 import UniformTypeIdentifiers
 
-/// Sheet for one calendar day: pick a clip (if several), preview it,
+/// Identifies which day the edit-day window shows. Opened with
+/// `openWindow(value:)` so the window (like Review) remembers its own
+/// position and size between openings.
+struct DayEditRequest: Codable, Hashable {
+    let day: Date
+}
+
+/// Editor window for one calendar day: pick a clip (if several), preview it,
 /// drag the in/out handles to trim, change its date, or delete it.
 struct DaySheet: View {
     @EnvironmentObject var store: LibraryStore
@@ -65,33 +72,19 @@ struct DaySheet: View {
         .padding(20)
         .frame(minWidth: 640, idealWidth: 760, maxWidth: .infinity,
                minHeight: 560, idealHeight: 680, maxHeight: .infinity)
-        .background(ResizableSheetSupport(minSize: NSSize(width: 640, height: 560)))
+        // Esc closes the window, matching the app's other windows. Hidden, but
+        // still wired up for the keyboard shortcut.
+        .background {
+            Button("Close") { dismiss() }
+                .keyboardShortcut(.cancelAction)
+                .hidden()
+        }
         .onAppear { selectedClipID = dayClips.first?.id }
         .sheet(isPresented: $showCardPicker) {
             CardsManagerView(onPick: { store.addCard($0, to: day) })
                 .environmentObject(store)
         }
     }
-}
-
-/// SwiftUI sheets on macOS are created without the `.resizable` window style,
-/// so flexible frames alone don't let the user drag the sheet's edges. Once
-/// resizable, the window also stops honoring SwiftUI's min frame, so the
-/// minimum has to be set on the window itself.
-private struct ResizableSheetSupport: NSViewRepresentable {
-    let minSize: NSSize
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async {
-            guard let window = view.window else { return }
-            window.styleMask.insert(.resizable)
-            window.contentMinSize = minSize
-        }
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
 /// Horizontal strip of the day's clips, in play order (left → right). Click a

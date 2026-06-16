@@ -342,13 +342,6 @@ struct DayAvailability {
     var isEmpty: Bool { videoCount == 0 && photoCount == 0 }
 }
 
-/// Wraps a day so it can drive `.sheet(item:)`, instead of retroactively
-/// conforming the system Date type to Identifiable.
-struct DaySelection: Identifiable {
-    let day: Date
-    var id: Date { day }
-}
-
 extension Date {
     /// Start of the calendar day, used as the canonical key for a day.
     var dayKey: Date { Calendar.current.startOfDay(for: self) }
