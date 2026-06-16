@@ -7,6 +7,14 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.1.0] - 2026-06-16
+
+- **Separate "review" and "edit" on each calendar day.** Hovering a day cell
+  reveals a **+** button in its bottom-right corner that opens the review window
+  to add that day's clips. Clicking anywhere else on the day opens the day editor
+  to rearrange, retrim, or add a card to the clips you've already picked —
+  which works on empty days too.
+
 ## [1.0.0] - 2026-06-16
 
 First tracked version. ClipDiary is a native macOS app for making "1 second

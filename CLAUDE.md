@@ -102,9 +102,11 @@ Deliberate improvements over 1SE:
   thumbnail + picked-clip badge and a source-availability footer (video count
   + length, photo count from `store.availability(on:)`); the month header
   carries the same month-wide tally.
-  **Clicking a day opens the review window** (`ReviewRequest` via openWindow);
-  the per-day clip editor (`DaySheet`) is on the day cell's context menu and
-  in the review window's picked strip. Toolbar: a **Project Settings** gear
+  Each day cell carries a **hover-revealed bottom-right + circle** that **opens
+  the review window** (`ReviewRequest` via openWindow); **clicking anywhere else
+  on the cell opens the per-day clip editor** (`DaySheet`). Both are also on the day
+  cell's context menu, and `DaySheet` is reachable from the review window's
+  picked strip. Toolbar: a **Project Settings** gear
   (⌘,), an Import menu (Import Media… fileImporter multi-select, Import 1SE
   Video…) and a single **Create Video…** button. Also contains
   `ProjectSettingsSheet` (orientation radio group, ending-fade toggle + duration
@@ -211,7 +213,7 @@ window draws the same stamp as a synced SwiftUI overlay, sized by the shared
 `DateStamp` constants in Models.swift.
 The primary population flow is **source folders + review**: each project
 lists folders (e.g. the month's photo dump) scanned recursively into a
-chronological index; clicking a day reviews that day's media one by one
+chronological index; tapping a day's **+** reviews that day's media one by one
 (↑/↓ navigate, crossing into later days; ⌘↩ adds the trimmed/cropped draft
 and advances). Source files are copied into `Clips/` only when picked. The
 old Import menu still works for one-off files.
