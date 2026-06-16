@@ -18,8 +18,18 @@ struct PhotoEditor: View {
     private let original: Clip
     private let sourceURL: URL?
     private let onAdd: ((Clip) -> Void)?
+    /// Reports the working copy (date applied) on every change, so the day
+    /// editor can persist it before previewing. Library mode only.
+    private let onLiveEdit: ((Clip) -> Void)?
 
     private var isReview: Bool { onAdd != nil }
+
+    /// The working copy with the picked date applied — what would be saved.
+    private var editedClip: Clip {
+        var updated = clip
+        updated.date = editedDate.dayKey
+        return updated
+    }
 
     private var hasChanges: Bool {
         clip != original || editedDate.dayKey != original.date
@@ -41,10 +51,12 @@ struct PhotoEditor: View {
         }
     }
 
-    init(clip: Clip, sourceURL: URL? = nil, onAdd: ((Clip) -> Void)? = nil) {
+    init(clip: Clip, sourceURL: URL? = nil, onAdd: ((Clip) -> Void)? = nil,
+         onLiveEdit: ((Clip) -> Void)? = nil) {
         original = clip
         self.sourceURL = sourceURL
         self.onAdd = onAdd
+        self.onLiveEdit = onLiveEdit
         _clip = State(initialValue: clip)
         _editedDate = State(initialValue: clip.date)
     }
@@ -147,10 +159,12 @@ struct PhotoEditor: View {
                 }
             }
         }
-        .onAppear { load() }
+        .onAppear { load(); onLiveEdit?(editedClip) }
         // Auto-save so switching clips or closing the sheet keeps edits.
         // No-op if the clip was just deleted. Review drafts aren't saved.
         .onDisappear { if !isReview { saveEdits() } }
+        .onChange(of: clip) { _, _ in onLiveEdit?(editedClip) }
+        .onChange(of: editedDate) { _, _ in onLiveEdit?(editedClip) }
         .sheet(isPresented: $showTransition) {
             TransitionEditorSheet(transition: $clip.transition, maxSeconds: clip.trimmedDuration)
         }

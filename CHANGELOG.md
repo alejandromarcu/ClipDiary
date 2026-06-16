@@ -13,6 +13,9 @@ and versions follow [Semantic Versioning](https://semver.org/)
   size between openings, matching the review window.
 - Press **Esc** to close the review window, like the app's other windows.
 - Renamed the card text "Colour" label to "Color".
+- Fixed "Preview Day" (and the month/year preview) not reflecting a clip's
+  unsaved edits — caption, transition, trim and the like now show up in the
+  preview right away.
 
 ## [1.1.0] - 2026-06-16
 

@@ -1000,6 +1000,13 @@ struct PreviewRequest: Codable, Hashable {
     var includeBookends: Bool = true
 }
 
+/// Identity that drives a preview rebuild: the render settings plus the clips
+/// being rendered, so a preview refreshes when either changes.
+private struct PreviewBuildKey: Equatable {
+    let settings: ProjectSettings
+    let clips: [Clip]
+}
+
 /// Plays the month's stitched composition in-app — same trims, ordering and
 /// letterboxing as the export, without writing a file.
 struct PreviewWindow: View {
@@ -1085,7 +1092,11 @@ struct PreviewWindow: View {
                maxWidth: .infinity,
                minHeight: 480, idealHeight: 720, maxHeight: .infinity)
         .navigationTitle("Preview \(range.label)")
-        .task(id: store.settings) {
+        // Rebuild when the settings or the clips in range change — the latter
+        // so edits made (and saved) while a preview window stays open, e.g. via
+        // the day editor's "Preview Day", are reflected on the next preview.
+        .task(id: PreviewBuildKey(settings: store.settings,
+                                  clips: store.clips(in: range, taggedWith: tagFilter))) {
             await rebuild()
         }
         .onDisappear {
