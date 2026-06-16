@@ -7,6 +7,20 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.3.0] - 2026-06-16
+
+- Polished the card editor: the card now sits at the top of the canvas (with
+  any extra height left empty below) so it lines up with the inspector, instead
+  of drifting toward the bottom of a tall window.
+- Added a hairline frame around the card on the canvas, so a card whose
+  background matches the window (e.g. white) still shows its exact extent.
+- Added a "Grid" toggle to the card editor toolbar that overlays an evenly
+  spaced dotted grid (10 columns × 6 rows) to help line elements up and judge
+  spacing to the edges. It's a view aid only and isn't saved with the card.
+- Replaced the text-size slider in the card editor with a number field (shown
+  as a percent of the card height) plus up/down arrows, so a size can be typed
+  or nudged precisely.
+
 ## [1.2.0] - 2026-06-16
 
 - Reworked the review window into two columns: the photo or video (with its
