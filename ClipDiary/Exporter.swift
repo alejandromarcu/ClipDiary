@@ -61,6 +61,11 @@ struct MonthComposition {
 
 struct Exporter {
 
+    /// Opaque black for the letterbox area behind each segment. Set explicitly
+    /// on every instruction: relying on the default background makes the bars
+    /// flash green while a segment's opacity ramps (fade in/out).
+    private static let letterboxColor = CGColor(red: 0, green: 0, blue: 0, alpha: 1)
+
     /// Stitches the trimmed clips (in order) into a single MP4 at `outputURL`.
     /// Every clip is aspect-fit into `renderSize` (letterboxed if needed).
     static func exportMovie(
@@ -203,6 +208,7 @@ struct Exporter {
 
             let instruction = AVMutableVideoCompositionInstruction()
             instruction.timeRange = CMTimeRange(start: cursor, duration: range.duration)
+            instruction.backgroundColor = Self.letterboxColor
             instruction.layerInstructions = [layer]
             instructions.append(instruction)
             lastLayer = layer
@@ -279,6 +285,7 @@ struct Exporter {
 
             let instruction = AVMutableVideoCompositionInstruction()
             instruction.timeRange = CMTimeRange(start: cursor, duration: range.duration)
+            instruction.backgroundColor = Self.letterboxColor
             instruction.layerInstructions = [layer]
             instructions.append(instruction)
             lastLayer = layer
@@ -337,6 +344,12 @@ struct Exporter {
         videoComposition.renderSize = renderSize
         videoComposition.frameDuration = CMTime(value: 1, timescale: 30)
         videoComposition.instructions = instructions
+        // Pin the output to Rec. 709. Without an explicit color space the
+        // compositor's intermediate blending (during an opacity ramp) mishandles
+        // the black background and tints the letterbox bars green.
+        videoComposition.colorPrimaries = AVVideoColorPrimaries_ITU_R_709_2
+        videoComposition.colorYCbCrMatrix = AVVideoYCbCrMatrix_ITU_R_709_2
+        videoComposition.colorTransferFunction = AVVideoTransferFunction_ITU_R_709_2
 
         succeeded = true
         return MonthComposition(
@@ -625,7 +638,7 @@ struct Exporter {
     // MARK: - Photo / image segments
 
     /// Renders a photo clip (with its crop applied) into a silent MP4 of the
-    /// clip's display duration, sized to fit within `renderSize`.
+    /// clip's display duration, at the full `renderSize` (letterboxed).
     private static func renderPhotoSegment(
         clip: Clip,
         photoURL: URL,
@@ -644,9 +657,15 @@ struct Exporter {
         )
     }
 
-    /// Writes a still image into a silent MP4 of `seconds` (min 0.5), fit within
-    /// `renderSize` with even H.264 dimensions, never upscaled. Shared by photo
-    /// clips and Cover/Ending card segments.
+    /// Writes a still image into a silent MP4 of `seconds` (min 0.5), rendered
+    /// at the full `renderSize` with the image aspect-fit and a black letterbox
+    /// baked in. Shared by photo clips and Cover/Ending card segments.
+    ///
+    /// Filling the whole frame (rather than emitting a smaller segment the
+    /// composition then letterboxes) matters for fades: the compositor would
+    /// otherwise blend the partial-coverage segment against its background while
+    /// the opacity ramps, tinting the bars green. A full-frame opaque segment
+    /// fades cleanly to/from black.
     private static func writeImageSegment(
         image: CGImage,
         seconds: Double,
@@ -654,11 +673,9 @@ struct Exporter {
         in directory: URL,
         name: String
     ) async throws -> URL {
-        // Even dimensions for H.264, never upscaled beyond the source.
-        let fitScale = min(1, min(renderSize.width / CGFloat(image.width),
-                                  renderSize.height / CGFloat(image.height)))
-        let width = max(2, Int(CGFloat(image.width) * fitScale / 2) * 2)
-        let height = max(2, Int(CGFloat(image.height) * fitScale / 2) * 2)
+        // Even dimensions for H.264.
+        let width = max(2, Int(renderSize.width / 2) * 2)
+        let height = max(2, Int(renderSize.height / 2) * 2)
 
         let outputURL = directory.appendingPathComponent("\(name).mp4")
         let writer = try AVAssetWriter(outputURL: outputURL, fileType: .mp4)
@@ -666,6 +683,13 @@ struct Exporter {
             AVVideoCodecKey: AVVideoCodecType.h264,
             AVVideoWidthKey: width,
             AVVideoHeightKey: height,
+            // Tag the segment Rec. 709 so it matches the composition's color
+            // space; a mismatch is what tints the letterbox bars green on fade.
+            AVVideoColorPropertiesKey: [
+                AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
+                AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+                AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
+            ],
         ])
         input.expectsMediaDataInRealTime = false
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(
@@ -739,9 +763,18 @@ struct Exporter {
         ) else { return nil }
 
         let bounds = CGRect(x: 0, y: 0, width: width, height: height)
-        context.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 1))
+        context.setFillColor(Self.letterboxColor)
         context.fill(bounds)
-        context.draw(image, in: bounds)
+
+        // Aspect-fit the image inside the frame, centered, leaving black bars.
+        let scale = min(CGFloat(width) / CGFloat(image.width),
+                        CGFloat(height) / CGFloat(image.height))
+        let drawWidth = CGFloat(image.width) * scale
+        let drawHeight = CGFloat(image.height) * scale
+        let imageRect = CGRect(x: (CGFloat(width) - drawWidth) / 2,
+                               y: (CGFloat(height) - drawHeight) / 2,
+                               width: drawWidth, height: drawHeight)
+        context.draw(image, in: imageRect)
         return buffer
     }
 }

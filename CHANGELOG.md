@@ -23,6 +23,8 @@ and versions follow [Semantic Versioning](https://semver.org/)
 - Photo display duration: the value can now be typed into a box, the **−** and
   **+** keys adjust it, and a newly reviewed photo defaults to the duration you
   last used (remembered per project).
+- Fixed the letterbox bars (e.g. beside a portrait photo) flashing green during
+  a clip's fade in/out — they now stay black throughout the transition.
 
 ## [1.1.0] - 2026-06-16
 
