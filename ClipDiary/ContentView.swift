@@ -1011,6 +1011,7 @@ private struct PreviewBuildKey: Equatable {
 /// letterboxing as the export, without writing a file.
 struct PreviewWindow: View {
     @EnvironmentObject var store: LibraryStore
+    @Environment(\.dismiss) private var dismiss
     let range: RenderRange
     var tagFilter: String?
     var includeEndingFade: Bool = true
@@ -1027,17 +1028,14 @@ struct PreviewWindow: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            HStack {
-                if let tagFilter {
+            if let tagFilter {
+                HStack {
                     Text("Tag: \(tagFilter)")
                         .font(.callout.bold())
                         .padding(.horizontal, 8).padding(.vertical, 3)
                         .background(Capsule().fill(.yellow.opacity(0.25)))
+                    Spacer()
                 }
-                Spacer()
-                Text(store.settings.orientation.label)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             ZStack {
@@ -1091,6 +1089,13 @@ struct PreviewWindow: View {
         .frame(minWidth: 480, idealWidth: store.settings.orientation == .portrait ? 520 : 860,
                maxWidth: .infinity,
                minHeight: 480, idealHeight: 720, maxHeight: .infinity)
+        // Esc closes the window, matching the app's other windows. Hidden, but
+        // still wired up for the keyboard shortcut.
+        .background {
+            Button("Close") { dismiss() }
+                .keyboardShortcut(.cancelAction)
+                .hidden()
+        }
         .navigationTitle("Preview \(range.label)")
         // Rebuild when the settings or the clips in range change — the latter
         // so edits made (and saved) while a preview window stays open, e.g. via

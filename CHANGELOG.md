@@ -25,6 +25,8 @@ and versions follow [Semantic Versioning](https://semver.org/)
   last used (remembered per project).
 - Fixed the letterbox bars (e.g. beside a portrait photo) flashing green during
   a clip's fade in/out — they now stay black throughout the transition.
+- Preview window: dropped the orientation label in the top-right corner, and
+  **Esc** now closes the window like the app's other windows.
 
 ## [1.1.0] - 2026-06-16
 
