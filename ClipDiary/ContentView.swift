@@ -224,7 +224,7 @@ struct ContentView: View {
                                 DayCell(
                                     day: day,
                                     tagFilter: tagFilter,
-                                    onTap: { openWindow(value: ReviewRequest(day: day)) },
+                                    onReview: { openWindow(value: ReviewRequest(day: day)) },
                                     onEdit: { selectedDay = DaySelection(day: day) }
                                 )
                                 .environmentObject(store)
@@ -250,7 +250,7 @@ struct ContentView: View {
     private var footer: some View {
         HStack {
             Image(systemName: "info.circle")
-            Text("Click a day to review that day's photos & videos from your source folders (↑/↓ to move, ⌘↩ to add). Right-click a day to edit its picked clips.")
+            Text("Tap a day's + to review that day's photos & videos from your source folders (↑/↓ to move, ⌘↩ to add). Click anywhere else on a day to edit its picked clips.")
             Spacer()
         }
         .font(.caption)
@@ -349,17 +349,27 @@ struct DayCell: View {
     @EnvironmentObject var store: LibraryStore
     let day: Date
     var tagFilter: String?
-    /// Left click: review the day's source media. Context menu: edit clips.
-    var onTap: () -> Void
+    /// The + circle: review the day's source media and add clips.
+    var onReview: () -> Void
+    /// Clicking anywhere else on the cell: open the day's clip editor (also the
+    /// way in to add a card, so empty days still have a destination).
     var onEdit: () -> Void
 
     @State private var thumbnail: NSImage?
+    // Hover is tracked separately for the cell and the + button, then OR'd:
+    // moving onto the button makes the cell's tracking area report "exited"
+    // (the button has its own pointer tracking), so a single flag would flicker
+    // off mid-hover. With two flags, the button stays revealed as long as the
+    // pointer is over either region.
+    @State private var hoveringCell = false
+    @State private var hoveringButton = false
+    private var isHovering: Bool { hoveringCell || hoveringButton }
 
     private var dayClips: [Clip] { store.clips(on: day, taggedWith: tagFilter) }
     private var hasThumbnail: Bool { thumbnail != nil }
 
     var body: some View {
-        Button(action: onTap) {
+        Button(action: onEdit) {
             VStack(alignment: .leading, spacing: 0) {
                 header
                 Spacer(minLength: 2)
@@ -395,11 +405,22 @@ struct DayCell: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { hoveringCell = $0 }
+        // A dedicated review button so the whole-cell tap can mean "edit". It
+        // sits on top of the edit button and consumes clicks in its own circle.
+        // Revealed on hover to keep a full month of cells from looking busy
+        // (its corner stays the review target even faded out — the pointer is
+        // already over the cell, so the + is showing by the time it's clicked).
+        .overlay(alignment: .bottomTrailing) {
+            reviewButton
+                .opacity(isHovering ? 1 : 0)
+                .animation(.easeInOut(duration: 0.12), value: isHovering)
+        }
         .contextMenu {
-            Button("Review Sources…", action: onTap)
             // Always reachable — the day editor is also where a card is added,
             // so an empty day still needs a way in.
             Button(dayClips.isEmpty ? "Edit Day…" : "Edit Day's Clips…", action: onEdit)
+            Button("Review Sources…", action: onReview)
         }
         .task(id: dayClips.first?.thumbnailKey) {
             if let first = dayClips.first {
@@ -408,6 +429,23 @@ struct DayCell: View {
                 thumbnail = nil
             }
         }
+    }
+
+    /// Bottom-right + circle that opens the review window for this day.
+    private var reviewButton: some View {
+        Button(action: onReview) {
+            Image(systemName: "plus")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 32, height: 32)
+                .background(Circle().fill(Color.accentColor))
+                .overlay(Circle().strokeBorder(.white.opacity(0.85), lineWidth: 1))
+                .shadow(color: .black.opacity(0.35), radius: 2, y: 0.5)
+        }
+        .buttonStyle(.plain)
+        .onHover { hoveringButton = $0 }
+        .padding(6)
+        .help("Review this day's photos & videos and add clips")
     }
 
     /// Day number plus a badge for clips already picked on this day.
