@@ -1,0 +1,29 @@
+# Changelog
+
+All notable changes to ClipDiary are documented here, written for a human
+reading what's new — not a raw commit log.
+
+The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
+and versions follow [Semantic Versioning](https://semver.org/)
+(`MAJOR.MINOR.PATCH`).
+
+## [1.0.0] - 2026-06-16
+
+First tracked version. ClipDiary is a native macOS app for making "1 second
+a day" style monthly memory videos, with:
+
+- A project-based library with a month calendar view.
+- **Source folders + review workflow**: point at a folder of photos/videos,
+  then step through each day's media to pick, trim, and crop clips.
+- A trim editor for videos (drag in/out points on a filmstrip) and a crop
+  editor for photos, with adjustable display duration.
+- Live Photos support (choose the still or the motion clip when picking).
+- Tags, captions, and per-day reordering of clips.
+- A burned-in date stamp on rendered video, toggleable per clip.
+- Per-clip fade transitions (picture, audio, and date stamp).
+- Title cards (covers, endings, day slides), pasted in with ⌘V.
+- Preview and export for a month, a year, a custom date range, or the whole
+  library, with portrait/landscape orientation and an optional ending
+  fade-to-black.
+- Importing one-off media files and splitting a mashed 1 Second Everyday
+  export into per-day clips.
