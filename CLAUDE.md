@@ -140,9 +140,20 @@ Deliberate improvements over 1SE:
   the bottom-left corner ("MAR 03 2026"). Coarse 0.3s sampling pass, then
   bisection refines each day boundary to ~1 frame; each day's range is
   re-encoded to its own MP4 (`AVAssetExportSession`, frame-accurate) and
-  registered via `LibraryStore.adoptVideo(at:date:)`. `MashImportSheet`
+  registered via `LibraryStore.adoptVideo(at:date:)`. Because a busy
+  background can make the stamp misread (a wrong day, or even a wrong year),
+  `resolveDates` then repairs the day list using the invariant that a 1SE
+  mashup plays its days strictly in order: a longest **non-decreasing**
+  subsequence of the dates is the trusted spine, and each out-of-order run is
+  snapped onto the day it belongs to (`snapTarget`: bracketed by the same
+  trusted day → that day; bracketed by different days but only the year
+  misread → the neighbour sharing the month/day, e.g. a boundary "FEB 08 2045"
+  sliver; at an edge → its one neighbour; otherwise left flagged), then
+  same-day pieces are merged into one clip (`MashDateFlag` .ok/.corrected/
+  .needsReview + `originalDates` drive the review UI). `MashImportSheet`
   drives scan → review → import phases (reached from the Import toolbar
-  menu in `ContentView`).
+  menu in `ContentView`); review shows a frame per day and highlights the
+  auto-corrected/flagged dates for inline editing.
 - `Exporter.swift` — builds an `AVMutableComposition` from the month's clips
   in date order (then createdAt), inserting each clip's in→out range. Photos
   are first rendered (cropped, via AVAssetWriter) into silent temp MP4
