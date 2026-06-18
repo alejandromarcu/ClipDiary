@@ -7,6 +7,14 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.5.0] - 2026-06-18
+
+- The calendar's month title is now clickable: it opens a small popover with
+  a year stepper and a grid of all twelve months, so you can jump straight to
+  any month or year (or back to "this month") in one or two clicks instead of
+  stepping through with the arrows. The familiar prev/next-month chevrons are
+  still there for one-step navigation.
+
 ## [1.4.0] - 2026-06-17
 
 - Importing a 1SE video now fixes misread dates automatically. A 1SE export
