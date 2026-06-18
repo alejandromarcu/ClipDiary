@@ -15,6 +15,8 @@ struct ContentView: View {
     @State private var showSettingsSheet = false
     @Environment(\.openWindow) private var openWindow
     @State private var tagFilter: String?
+    @State private var showMonthPicker = false
+    @State private var pickerYear = Calendar.current.component(.year, from: Date())
 
     private var calendar: Calendar { Calendar.current }
 
@@ -172,9 +174,17 @@ struct ContentView: View {
     private var monthHeader: some View {
         HStack {
             Button { shiftMonth(by: -1) } label: { Image(systemName: "chevron.left") }
-            Text(displayedMonth.formatted(.dateTime.month(.wide).year()))
-                .font(.title2.bold())
-                .frame(minWidth: 220)
+            Button {
+                pickerYear = calendar.component(.year, from: displayedMonth)
+                showMonthPicker = true
+            } label: {
+                Text(displayedMonth.formatted(.dateTime.month(.wide).year()))
+                    .font(.title2.bold())
+                    .frame(minWidth: 220)
+            }
+            .buttonStyle(.plain)
+            .help("Jump to any month or year")
+            .popover(isPresented: $showMonthPicker, arrowEdge: .bottom) { monthYearPicker }
             Button { shiftMonth(by: 1) } label: { Image(systemName: "chevron.right") }
             Spacer()
             if let tagFilter {
@@ -208,6 +218,53 @@ struct ContentView: View {
                 .font(.callout.monospacedDigit())
         }
         .padding()
+    }
+
+    /// Popover for jumping straight to any month/year: ‹ year › arrows over a
+    /// 3×4 grid of months, plus a "This month" shortcut. Keeps the common
+    /// prev/next-month chevrons untouched for one-step stepping.
+    private var monthYearPicker: some View {
+        let selectedYear = calendar.component(.year, from: displayedMonth)
+        let selectedMonth = calendar.component(.month, from: displayedMonth)
+        let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 4)
+        return VStack(spacing: 12) {
+            HStack {
+                Button { pickerYear -= 1 } label: { Image(systemName: "chevron.left") }
+                Spacer()
+                Text(verbatim: String(pickerYear)).font(.headline.monospacedDigit())
+                Spacer()
+                Button { pickerYear += 1 } label: { Image(systemName: "chevron.right") }
+            }
+            .buttonStyle(.borderless)
+
+            LazyVGrid(columns: columns, spacing: 8) {
+                ForEach(1...12, id: \.self) { month in
+                    let isSelected = month == selectedMonth && pickerYear == selectedYear
+                    Button {
+                        jumpTo(year: pickerYear, month: month)
+                        showMonthPicker = false
+                    } label: {
+                        Text(calendar.shortMonthSymbols[month - 1])
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(isSelected ? Color.accentColor : Color.clear)
+                            )
+                            .foregroundStyle(isSelected ? Color.white : Color.primary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            Divider()
+            Button("This month") {
+                displayedMonth = Date().dayKey
+                showMonthPicker = false
+            }
+        }
+        .padding()
+        .frame(width: 260)
     }
 
     private var weekdayHeader: some View {
@@ -278,6 +335,17 @@ struct ContentView: View {
     private func shiftMonth(by delta: Int) {
         if let newMonth = calendar.date(byAdding: .month, value: delta, to: displayedMonth) {
             displayedMonth = newMonth
+        }
+    }
+
+    /// Jump to the first day of the given year/month (used by the picker popover).
+    private func jumpTo(year: Int, month: Int) {
+        var comps = DateComponents()
+        comps.year = year
+        comps.month = month
+        comps.day = 1
+        if let date = calendar.date(from: comps) {
+            displayedMonth = date.dayKey
         }
     }
 
