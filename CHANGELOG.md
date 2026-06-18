@@ -7,6 +7,20 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.4.0] - 2026-06-17
+
+- Importing a 1SE video now fixes misread dates automatically. A 1SE export
+  always plays its days in order, so any date the scan reads "out of order"
+  (jumping back in time, or into the future) is a misread — usually a busy
+  background making the burned-in date stamp briefly unreadable. ClipDiary now
+  snaps each misread back onto the day it actually belongs to and re-joins the
+  pieces of a day that a misread had split apart. Previously a single day could
+  turn into stray clips on the wrong dates (e.g. parts landing on "Feb 03 2025"
+  and "Feb 08 2026" instead of all on "Feb 08 2025"); now it stays one clip.
+- The import review screen now shows a frame from each day, highlights the
+  auto-corrected days (including what their stamp was misread as) so you can
+  verify them at a glance, and lets you adjust any date inline before importing.
+
 ## [1.3.0] - 2026-06-16
 
 - Polished the card editor: the card now sits at the top of the canvas (with
