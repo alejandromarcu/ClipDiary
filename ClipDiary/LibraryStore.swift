@@ -553,6 +553,111 @@ final class LibraryStore: ObservableObject {
         return (hash, bytes)
     }
 
+    /// Copies `src` to `dst` in 1 MB chunks while hashing the bytes, so the file
+    /// is read once for both the copy and its SHA-256 (a separate `copyItem` +
+    /// `contentDigest` would read it twice — wasteful across thousands of large
+    /// clips). Returns the digest + byte count, or nil if the copy fails.
+    /// Unlike `copyItem` it doesn't preserve file attributes; library copies
+    /// don't need them.
+    nonisolated static func copyComputingDigest(
+        from src: URL, to dst: URL
+    ) -> (hash: String, bytes: Int64)? {
+        guard let input = try? FileHandle(forReadingFrom: src) else { return nil }
+        defer { try? input.close() }
+        guard FileManager.default.createFile(atPath: dst.path, contents: nil),
+              let output = try? FileHandle(forWritingTo: dst) else { return nil }
+        defer { try? output.close() }
+        var hasher = SHA256()
+        var bytes: Int64 = 0
+        do {
+            while let chunk = try input.read(upToCount: 1 << 20), !chunk.isEmpty {
+                try output.write(contentsOf: chunk)
+                hasher.update(data: chunk)
+                bytes += Int64(chunk.count)
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: dst)
+            return nil
+        }
+        let hash = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        return (hash, bytes)
+    }
+
+    /// Imports one 1SE "Download Your Data" project (see `DataExportImport.swift`):
+    /// copies each snippet's `video.mov` into `Clips/` untrimmed and registers it
+    /// on its timeline day, with the date stamp on (these raw snippets aren't
+    /// pre-stamped, unlike a mashed-video import). `snippets` arrive in 1SE play
+    /// order; within a day that order is preserved by seeding `createdAt` from the
+    /// day plus an in-day index, so any clip added later still lands last. The
+    /// heavy copy+hash runs off the main actor and clips are flushed/saved in
+    /// batches, so a multi-thousand-clip import stays responsive and a partial
+    /// run survives interruption. `progress` reports clips processed (1...count).
+    func importDataExportProject(
+        _ snippets: [DataExportSnippet],
+        progress: @MainActor (Int) -> Void
+    ) async {
+        guard hasProject, let dir = clipsDir else { return }
+        var batch: [Clip] = []
+        var lastDay: Date?
+        var inDayIndex = 0
+        for (i, snippet) in snippets.enumerated() {
+            if snippet.date == lastDay {
+                inDayIndex += 1
+            } else {
+                inDayIndex = 0
+                lastDay = snippet.date
+            }
+            let createdAt = snippet.date.addingTimeInterval(Double(inDayIndex))
+            if let clip = await Self.adoptDataExportSnippet(
+                videoURL: snippet.videoURL, into: dir,
+                date: snippet.date, createdAt: createdAt, caption: snippet.caption
+            ) {
+                batch.append(clip)
+            }
+            if batch.count >= 100 {
+                clips.append(contentsOf: batch)
+                batch.removeAll(keepingCapacity: true)
+                save()
+            }
+            progress(i + 1)
+        }
+        if !batch.isEmpty {
+            clips.append(contentsOf: batch)
+            save()
+        }
+    }
+
+    /// Copies one export snippet's video into `clipsDir` (hashing in the same
+    /// pass) and builds its full-length `Clip`. nil if the copy fails or the
+    /// file isn't a playable video. Runs off the main actor.
+    nonisolated private static func adoptDataExportSnippet(
+        videoURL: URL, into clipsDir: URL, date: Date, createdAt: Date, caption: String
+    ) async -> Clip? {
+        let newName = UUID().uuidString + ".mov"
+        let destURL = clipsDir.appendingPathComponent(newName)
+        guard let digest = copyComputingDigest(from: videoURL, to: destURL) else {
+            return nil
+        }
+        let asset = AVURLAsset(url: destURL)
+        let duration = (try? await asset.load(.duration))?.seconds ?? 0
+        guard duration.isFinite, duration > 0 else {
+            try? FileManager.default.removeItem(at: destURL)
+            return nil
+        }
+        var clip = Clip(
+            fileName: newName,
+            date: date,
+            inSeconds: 0,
+            outSeconds: duration,
+            durationSeconds: duration,
+            createdAt: createdAt,
+            caption: caption
+        )
+        clip.sourceHash = digest.hash
+        clip.sourceBytes = digest.bytes
+        return clip
+    }
+
     /// How long an imported photo is shown by default, in seconds.
     static let defaultPhotoDuration = 3.0
 

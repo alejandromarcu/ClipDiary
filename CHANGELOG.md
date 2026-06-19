@@ -7,6 +7,18 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.6.0] - 2026-06-18
+
+- New **Import ▸ Import 1SE Data Export…**. If you request your data from the
+  1 Second Everyday website ("Download Your Data") and unzip it, ClipDiary can
+  now read that folder directly: it picks up every snippet's real date from the
+  export, so there's no scanning, OCR, or date-guessing like there is when
+  importing a mashed-together 1SE video. Choose the unzipped folder, pick which
+  of your 1SE projects to bring in, and each clip is copied in on its own day,
+  at its full length, with the date stamp on and its **1SE caption** carried
+  over — matching how it looked in 1SE. Tip: import each 1SE project into its
+  own ClipDiary project (create or open the destination first).
+
 ## [1.5.0] - 2026-06-18
 
 - The calendar's month title is now clickable: it opens a small popover with

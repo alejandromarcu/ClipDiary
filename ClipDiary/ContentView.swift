@@ -6,10 +6,11 @@ struct ContentView: View {
     @EnvironmentObject var store: LibraryStore
 
     @State private var displayedMonth = Date().dayKey
-    private enum ImportKind { case media, mash }
+    private enum ImportKind { case media, mash, dataExport }
     @State private var showImporter = false
     @State private var importKind: ImportKind = .media
     @State private var mashSource: MashSource?
+    @State private var dataExportSource: DataExportSource?
     @State private var showRenderSheet = false
     @State private var showSourcesSheet = false
     @State private var showSettingsSheet = false
@@ -19,6 +20,16 @@ struct ContentView: View {
     @State private var pickerYear = Calendar.current.component(.year, from: Date())
 
     private var calendar: Calendar { Calendar.current }
+
+    /// File types the Import file panel accepts for the chosen kind: media
+    /// files, a single 1SE mashup video, or a 1SE data-export folder.
+    private var importContentTypes: [UTType] {
+        switch importKind {
+        case .media: return [.movie, .video, .mpeg4Movie, .quickTimeMovie, .image]
+        case .mash: return [.movie, .video, .mpeg4Movie, .quickTimeMovie]
+        case .dataExport: return [.folder]
+        }
+    }
 
     var body: some View {
         Group {
@@ -94,6 +105,7 @@ struct ContentView: View {
                 Menu {
                     Button("Import Media…") { importKind = .media; showImporter = true }
                     Button("Import 1SE Video…") { importKind = .mash; showImporter = true }
+                    Button("Import 1SE Data Export…") { importKind = .dataExport; showImporter = true }
                 } label: {
                     Label("Import", systemImage: "square.and.arrow.down")
                 }
@@ -114,9 +126,7 @@ struct ContentView: View {
         }
         .fileImporter(
             isPresented: $showImporter,
-            allowedContentTypes: importKind == .media
-                ? [.movie, .video, .mpeg4Movie, .quickTimeMovie, .image]
-                : [.movie, .video, .mpeg4Movie, .quickTimeMovie],
+            allowedContentTypes: importContentTypes,
             allowsMultipleSelection: importKind == .media
         ) { result in
             guard case .success(let urls) = result else { return }
@@ -129,10 +139,17 @@ struct ContentView: View {
                 if let url = urls.first {
                     mashSource = MashSource(url: url)
                 }
+            case .dataExport:
+                if let url = urls.first {
+                    dataExportSource = DataExportSource(url: url)
+                }
             }
         }
         .sheet(item: $mashSource) { source in
             MashImportSheet(sourceURL: source.url).environmentObject(store)
+        }
+        .sheet(item: $dataExportSource) { source in
+            DataExportImportSheet(exportURL: source.url).environmentObject(store)
         }
         .onChange(of: store.allTags) { _, tags in
             if let tagFilter,
