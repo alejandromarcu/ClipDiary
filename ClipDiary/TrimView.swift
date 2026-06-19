@@ -3,230 +3,14 @@ import AVKit
 import AVFoundation
 import UniformTypeIdentifiers
 
-/// Identifies which day the edit-day window shows. Opened with
-/// `openWindow(value:)` so the window (like Review) remembers its own
-/// position and size between openings.
-struct DayEditRequest: Codable, Hashable {
-    let day: Date
-}
-
-/// A mutable box for the day editor's in-flight clip edits. The embedded
+/// A mutable box for the day window's in-flight clip edits. The embedded
 /// trim/photo editors keep their working copy in local `@State` and only write
-/// it back to the store on disappear; this lets the day editor grab the
-/// current copy to persist before opening a preview, without re-rendering on
-/// every keystroke.
+/// it back to the store on disappear; this lets the day window grab the current
+/// copy to persist before opening a preview, without re-rendering on every
+/// keystroke. A reference type so the editor can keep it current without
+/// re-rendering the host view.
 final class LiveEditBuffer {
     var clip: Clip?
-}
-
-/// Editor window for one calendar day: pick a clip (if several), preview it,
-/// drag the in/out handles to trim, change its date, or delete it.
-struct DaySheet: View {
-    @EnvironmentObject var store: LibraryStore
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.openWindow) private var openWindow
-    let day: Date
-
-    @State private var selectedClipID: UUID?
-    @State private var showCardPicker = false
-
-    /// Holds the embedded editor's latest in-flight edit. The editors only
-    /// persist to the store on disappear, so without this "Preview Day" (and
-    /// the preview window it opens) would render the clip as it was before the
-    /// current edits. A reference type so the editor can keep it current on
-    /// every keystroke/drag without re-rendering this view.
-    @State private var liveEdits = LiveEditBuffer()
-
-    private var dayClips: [Clip] { store.clips(on: day) }
-
-    var body: some View {
-        VStack(spacing: 12) {
-            HStack {
-                Text(day.formatted(date: .complete, time: .omitted))
-                    .font(.headline)
-                Spacer()
-                Button {
-                    showCardPicker = true
-                } label: {
-                    Label("Add Card…", systemImage: "rectangle.on.rectangle.angled")
-                }
-                .help("Add a designed title card as a clip on this day")
-                if !dayClips.isEmpty {
-                    Button("Preview Day") {
-                        // Flush the editor's unsaved edits first so the preview
-                        // reflects them (caption, transition, trim, …).
-                        if let edited = liveEdits.clip { store.update(edited) }
-                        openWindow(value: PreviewRequest(
-                            range: .custom(start: day, end: day), tagFilter: nil,
-                            includeEndingFade: false, includeBookends: false))
-                    }
-                }
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.defaultAction)
-            }
-
-            if dayClips.count > 1 {
-                DayClipStrip(day: day, clips: dayClips, selectedClipID: $selectedClipID)
-            }
-
-            if let clip = dayClips.first(where: { $0.id == selectedClipID }) ?? dayClips.first {
-                if clip.kind == .photo {
-                    PhotoEditor(clip: clip, onLiveEdit: { liveEdits.clip = $0 },
-                                onDelete: { delete(clip) })
-                        .id(clip.id)
-                } else {
-                    TrimEditor(clip: clip, onLiveEdit: { liveEdits.clip = $0 },
-                               onDelete: { delete(clip) })
-                        .id(clip.id)
-                }
-            } else {
-                ContentUnavailableView(
-                    "No clip on this day",
-                    systemImage: "video.slash",
-                    description: Text("Use “Add Card…” above to drop in a title slide, or review the day's photos and videos from your source folders.")
-                )
-                // Fill the body so the header stays pinned to the top instead of
-                // the whole sheet centering on the short empty-state content.
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-        .padding(20)
-        .frame(minWidth: 640, idealWidth: 760, maxWidth: .infinity,
-               minHeight: 560, idealHeight: 680, maxHeight: .infinity)
-        // Esc closes the window, matching the app's other windows. Hidden, but
-        // still wired up for the keyboard shortcut.
-        .background {
-            Button("Close") { dismiss() }
-                .keyboardShortcut(.cancelAction)
-                .hidden()
-        }
-        .onAppear { selectedClipID = dayClips.first?.id }
-        .sheet(isPresented: $showCardPicker) {
-            CardsManagerView(onPick: { store.addCard($0, to: day) })
-                .environmentObject(store)
-        }
-    }
-
-    /// Deletes a clip but keeps the window open: select the previous clip if
-    /// there is one, else the next, and only close when it was the last clip.
-    private func delete(_ clip: Clip) {
-        let clips = dayClips
-        var neighborID: UUID?
-        if let idx = clips.firstIndex(where: { $0.id == clip.id }) {
-            if idx > 0 {
-                neighborID = clips[idx - 1].id
-            } else if idx + 1 < clips.count {
-                neighborID = clips[idx + 1].id
-            }
-        }
-        // Avoid re-flushing the just-deleted clip from the live-edit buffer.
-        if liveEdits.clip?.id == clip.id { liveEdits.clip = nil }
-        store.delete(clip)
-        if let neighborID {
-            selectedClipID = neighborID
-        } else {
-            dismiss()
-        }
-    }
-}
-
-/// Horizontal strip of the day's clips, in play order (left → right). Click a
-/// thumbnail to edit it; drag one onto another to reorder, so clips can run out
-/// of strict capture order when that makes for nicer transitions. Shown only
-/// when a day has more than one clip; replaces the old segmented clip picker.
-private struct DayClipStrip: View {
-    @EnvironmentObject var store: LibraryStore
-    let day: Date
-    let clips: [Clip]
-    @Binding var selectedClipID: UUID?
-
-    /// id of the clip currently being dragged (the drop target reads it to
-    /// compute the new order). Cleared on drop.
-    @State private var draggingID: UUID?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Drag to reorder · click to edit")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(Array(clips.enumerated()), id: \.element.id) { index, clip in
-                        cell(index: index, clip: clip)
-                    }
-                }
-                .padding(.vertical, 2)
-            }
-            .animation(.snappy(duration: 0.2), value: clips.map(\.id))
-        }
-    }
-
-    private func cell(index: Int, clip: Clip) -> some View {
-        let isSelected = (selectedClipID ?? clips.first?.id) == clip.id
-        return VStack(spacing: 3) {
-            StripThumb(clip: clip)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(isSelected ? Color.accentColor : .clear, lineWidth: 3)
-                )
-            Text("Clip \(index + 1)")
-                .font(.caption2)
-                .foregroundStyle(isSelected ? Color.accentColor : .secondary)
-        }
-        .contentShape(Rectangle())
-        .onTapGesture { selectedClipID = clip.id }
-        .onDrag {
-            draggingID = clip.id
-            return NSItemProvider(object: clip.id.uuidString as NSString)
-        }
-        .onDrop(of: [.text], isTargeted: nil) { _ in reorder(onto: clip) }
-        .help("Click to edit · drag to reorder")
-    }
-
-    /// Moves the dragged clip to where `target` sits and commits the new order.
-    private func reorder(onto target: Clip) -> Bool {
-        defer { draggingID = nil }
-        guard let draggingID, draggingID != target.id,
-              let from = clips.firstIndex(where: { $0.id == draggingID }),
-              let to = clips.firstIndex(where: { $0.id == target.id })
-        else { return false }
-        var order = clips
-        order.insert(order.remove(at: from), at: to)
-        store.reorderClips(on: day, orderedIDs: order.map(\.id))
-        return true
-    }
-}
-
-/// Fixed-size thumbnail of a clip (its in-point frame or the cropped photo)
-/// with its trimmed length, for the day editor's reorder strip.
-private struct StripThumb: View {
-    @EnvironmentObject var store: LibraryStore
-    let clip: Clip
-
-    @State private var image: NSImage?
-
-    var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            Group {
-                if let image {
-                    Image(nsImage: image).resizable().scaledToFill()
-                } else {
-                    Color.black.opacity(0.15)
-                }
-            }
-            .frame(width: 84, height: 52)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            HStack(spacing: 2) {
-                Image(systemName: clip.kind == .photo ? "photo" : "video")
-                Text(formatTime(clip.trimmedDuration))
-            }
-            .font(.caption2.monospacedDigit())
-            .foregroundStyle(.white)
-            .shadow(color: .black.opacity(0.8), radius: 2)
-            .padding(3)
-        }
-        .task(id: clip.thumbnailKey) { image = await store.thumbnail(for: clip) }
-    }
 }
 
 /// Editable row of tag chips with a field for new tags and a menu to reuse
@@ -464,13 +248,7 @@ struct TrimEditor: View {
     }
 
     var body: some View {
-        Group {
-            if isReview {
-                reviewBody
-            } else {
-                libraryBody
-            }
-        }
+        editorBody
         .onAppear { setUp(); onLiveEdit?(editedClip) }
         .task { await loadThumbnails(url: sourceURL ?? store.fileURL(for: clip)) }
         .onDisappear {
@@ -491,30 +269,11 @@ struct TrimEditor: View {
 
     // MARK: - Layouts
 
-    /// Day-editor layout: media, trim controls and metadata stacked top to
-    /// bottom in one column.
-    private var libraryBody: some View {
-        VStack(spacing: 14) {
-            mediaView
-            trimControls
-            TagRow(tags: $clip.tags)
-            captionField
-            TransitionRow(transition: clip.transition) { showTransition = true }
-            Divider()
-            HStack {
-                DayPickerField(selection: $editedDate)
-                dateStampToggle
-                Spacer()
-                revertButton
-                deleteButton
-            }
-        }
-    }
-
-    /// Review layout: the media and trim controls take the whole left side so
-    /// the video is as big as possible; tags/caption/transition/day and the
-    /// add/revert actions live in a fixed-width pane on the right.
-    private var reviewBody: some View {
+    /// Two-column layout used in both modes: the media and trim controls take the
+    /// whole left side so the video is as big as possible; tags/caption/
+    /// transition/day and the add (review) or delete (library) action live in a
+    /// resizable pane on the right.
+    private var editorBody: some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(spacing: 14) {
                 mediaAccessory
@@ -529,7 +288,7 @@ struct TrimEditor: View {
         }
     }
 
-    /// Right-hand pane shown in review mode.
+    /// Right-hand metadata + actions pane.
     private var sidePane: some View {
         VStack(alignment: .leading, spacing: 14) {
             if let reviewInfo {
@@ -546,7 +305,8 @@ struct TrimEditor: View {
             HStack {
                 revertButton
                 Spacer()
-                addButton
+                // Review adds a draft; library edits an existing clip.
+                if isReview { addButton } else { deleteButton }
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)

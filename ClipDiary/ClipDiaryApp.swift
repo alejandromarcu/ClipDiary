@@ -40,20 +40,13 @@ struct ClipDiaryApp: App {
             }
         }
 
-        // Clicking a calendar day opens the review window: flip through the
-        // source folders' photos/videos and pick the day's keepers.
-        WindowGroup("Review", for: ReviewRequest.self) { $request in
+        // Interacting with a calendar day opens the day window: flip through the
+        // source folders' photos/videos to add clips, and edit the day's
+        // already-picked clips — both in one place.
+        WindowGroup("Day", for: ReviewRequest.self) { $request in
             if let request {
-                ReviewWindow(startDay: request.day, startUndated: request.startUndated)
-                    .environmentObject(store)
-            }
-        }
-
-        // Editing a calendar day opens its own window (instead of a sheet) so
-        // it remembers its position and size between openings, like Review.
-        WindowGroup("Edit Day", for: DayEditRequest.self) { $request in
-            if let request {
-                DaySheet(day: request.day)
+                ReviewWindow(startDay: request.day, startUndated: request.startUndated,
+                             focusSources: request.focusSources)
                     .environmentObject(store)
             }
         }

@@ -67,7 +67,6 @@ struct ContentView: View {
             monthHeader
             weekdayHeader
             calendarGrid
-            footer
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -186,7 +185,7 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Header / footer
+    // MARK: - Header
 
     private var monthHeader: some View {
         HStack {
@@ -313,8 +312,8 @@ struct ContentView: View {
                                 DayCell(
                                     day: day,
                                     tagFilter: tagFilter,
-                                    onReview: { openWindow(value: ReviewRequest(day: day)) },
-                                    onEdit: { openWindow(value: DayEditRequest(day: day)) }
+                                    onReview: { openWindow(value: ReviewRequest(day: day, focusSources: true)) },
+                                    onEdit: { openWindow(value: ReviewRequest(day: day)) }
                                 )
                                 .environmentObject(store)
                             } else {
@@ -334,17 +333,6 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal)
         .padding(.bottom, 8)
-    }
-
-    private var footer: some View {
-        HStack {
-            Image(systemName: "info.circle")
-            Text("Tap a day's + to review that day's photos & videos from your source folders (↑/↓ to move, ⌘↩ to add). Click anywhere else on a day to edit its picked clips.")
-            Spacer()
-        }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .padding(10)
     }
 
     // MARK: - Helpers
@@ -457,21 +445,14 @@ struct DayCell: View {
     @EnvironmentObject var store: LibraryStore
     let day: Date
     var tagFilter: String?
-    /// The + circle: review the day's source media and add clips.
+    /// Context-menu "Review Sources…": open the day window focused on its source
+    /// media to add clips.
     var onReview: () -> Void
-    /// Clicking anywhere else on the cell: open the day's clip editor (also the
-    /// way in to add a card, so empty days still have a destination).
+    /// Clicking the cell: open the day window focused on the day's already-picked
+    /// clips (also the way in to add a card and to review sources).
     var onEdit: () -> Void
 
     @State private var thumbnail: NSImage?
-    // Hover is tracked separately for the cell and the + button, then OR'd:
-    // moving onto the button makes the cell's tracking area report "exited"
-    // (the button has its own pointer tracking), so a single flag would flicker
-    // off mid-hover. With two flags, the button stays revealed as long as the
-    // pointer is over either region.
-    @State private var hoveringCell = false
-    @State private var hoveringButton = false
-    private var isHovering: Bool { hoveringCell || hoveringButton }
 
     private var dayClips: [Clip] { store.clips(on: day, taggedWith: tagFilter) }
     private var hasThumbnail: Bool { thumbnail != nil }
@@ -513,21 +494,9 @@ struct DayCell: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { hoveringCell = $0 }
-        // A dedicated review button so the whole-cell tap can mean "edit". It
-        // sits on top of the edit button and consumes clicks in its own circle.
-        // Revealed on hover to keep a full month of cells from looking busy
-        // (its corner stays the review target even faded out — the pointer is
-        // already over the cell, so the + is showing by the time it's clicked).
-        .overlay(alignment: .bottomTrailing) {
-            reviewButton
-                .opacity(isHovering ? 1 : 0)
-                .animation(.easeInOut(duration: 0.12), value: isHovering)
-        }
         .contextMenu {
-            // Always reachable — the day editor is also where a card is added,
-            // so an empty day still needs a way in.
-            Button(dayClips.isEmpty ? "Edit Day…" : "Edit Day's Clips…", action: onEdit)
+            // Both open the same day window, focused on picks vs. sources.
+            Button(dayClips.isEmpty ? "Open Day…" : "Edit This Day…", action: onEdit)
             Button("Review Sources…", action: onReview)
         }
         .task(id: dayClips.first?.thumbnailKey) {
@@ -539,22 +508,6 @@ struct DayCell: View {
         }
     }
 
-    /// Bottom-right + circle that opens the review window for this day.
-    private var reviewButton: some View {
-        Button(action: onReview) {
-            Image(systemName: "plus")
-                .font(.system(size: 16, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 32, height: 32)
-                .background(Circle().fill(Color.accentColor))
-                .overlay(Circle().strokeBorder(.white.opacity(0.85), lineWidth: 1))
-                .shadow(color: .black.opacity(0.35), radius: 2, y: 0.5)
-        }
-        .buttonStyle(.plain)
-        .onHover { hoveringButton = $0 }
-        .padding(6)
-        .help("Review this day's photos & videos and add clips")
-    }
 
     /// Day number plus a badge for clips already picked on this day.
     private var header: some View {
