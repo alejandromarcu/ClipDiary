@@ -13,7 +13,9 @@ import UniformTypeIdentifiers
 /// that way). With no project open the app shows its welcome screen.
 @MainActor
 final class LibraryStore: ObservableObject {
-    @Published private(set) var clips: [Clip] = []
+    @Published private(set) var clips: [Clip] = [] {
+        didSet { clipsByDayCache = nil }
+    }
     @Published var lastError: String?
 
     /// The open project's root directory, or nil when none is open.
@@ -24,7 +26,9 @@ final class LibraryStore: ObservableObject {
     /// The project's source folders (review-window inventory) and the media
     /// found inside them, sorted by capture time.
     @Published private(set) var sourceFolders: [SourceFolder] = []
-    @Published private(set) var sourceItems: [SourceItem] = []
+    @Published private(set) var sourceItems: [SourceItem] = [] {
+        didSet { sourceItemsByDayCache = nil }
+    }
     @Published private(set) var isScanningSources = false
 
     /// The open project's render preferences (orientation, ending fade).
@@ -49,6 +53,14 @@ final class LibraryStore: ObservableObject {
     private var accessingSourceURLs: [URL] = []
     private var scanTask: Task<Void, Never>?
     private let thumbnailCache = NSCache<NSUUID, NSImage>()
+    /// Clips and source items grouped by calendar day (`startOfDay` key), built
+    /// lazily and dropped whenever `clips`/`sourceItems` change. The calendar
+    /// draws ~40 day cells, each querying its day's clips and availability
+    /// several times per render; a full O(count) scan per query (with costly
+    /// `Calendar.isDate(inSameDayAs:)` comparisons) made month navigation crawl
+    /// once a library held thousands of clips.
+    private var clipsByDayCache: [Date: [Clip]]?
+    private var sourceItemsByDayCache: [Date: [SourceItem]]?
 
     var currentProjectName: String? { currentProjectURL?.lastPathComponent }
     var hasProject: Bool { currentProjectURL != nil }
@@ -388,18 +400,19 @@ final class LibraryStore: ObservableObject {
     /// combined length) and how many source photos fall on it. Drives the
     /// per-day footage hint in the calendar, independent of what's been picked.
     func availability(on day: Date) -> DayAvailability {
-        availability(where: { $0.isSameDay(as: day) })
+        let key = Calendar.current.startOfDay(for: day)
+        return tally(sourceItemsByDay()[key] ?? [])
     }
 
-    /// Same tally across a whole month, for the calendar header.
+    /// Same tally across a whole month, for the calendar header (one scan per
+    /// header render, so a plain filter is fine — no month index needed).
     func availability(inMonthOf month: Date) -> DayAvailability {
-        availability(where: { $0.isSameMonth(as: month) })
+        tally(sourceItems.filter { ($0.captureDate?.isSameMonth(as: month)) ?? false })
     }
 
-    private func availability(where matches: (Date) -> Bool) -> DayAvailability {
+    private func tally(_ items: [SourceItem]) -> DayAvailability {
         var result = DayAvailability()
-        for item in sourceItems {
-            guard let date = item.captureDate, matches(date) else { continue }
+        for item in items {
             switch item.kind {
             case .video:
                 result.videoCount += 1
@@ -411,11 +424,48 @@ final class LibraryStore: ObservableObject {
         return result
     }
 
+    /// Source items grouped by capture day (`startOfDay`), built lazily and
+    /// cached until `sourceItems` changes. Undated items (no `captureDate`) are
+    /// left out — they're reviewed in their own bucket, not placed on a day.
+    private func sourceItemsByDay() -> [Date: [SourceItem]] {
+        if let sourceItemsByDayCache { return sourceItemsByDayCache }
+        let cal = Calendar.current
+        var index: [Date: [SourceItem]] = [:]
+        for item in sourceItems {
+            guard let date = item.captureDate else { continue }
+            index[cal.startOfDay(for: date), default: []].append(item)
+        }
+        sourceItemsByDayCache = index
+        return index
+    }
+
+    /// Clips grouped by their calendar day (`startOfDay`), built lazily and
+    /// cached until `clips` changes. Backs the per-day calendar/editor queries.
+    private func clipsByDay() -> [Date: [Clip]] {
+        if let clipsByDayCache { return clipsByDayCache }
+        let cal = Calendar.current
+        var index: [Date: [Clip]] = [:]
+        for clip in clips {
+            index[cal.startOfDay(for: clip.date), default: []].append(clip)
+        }
+        clipsByDayCache = index
+        return index
+    }
+
     // MARK: - Queries
 
     func clips(on day: Date, taggedWith tag: String? = nil) -> [Clip] {
-        clips.filter { $0.date.isSameDay(as: day) && $0.matches(tagFilter: tag) }
+        let key = Calendar.current.startOfDay(for: day)
+        return (clipsByDay()[key] ?? [])
+            .filter { $0.matches(tagFilter: tag) }
             .sorted { $0.createdAt < $1.createdAt }
+    }
+
+    /// Whether any clip matches the tag filter — a cheap, short-circuiting test
+    /// for enabling Create Video, instead of building a filtered array of the
+    /// whole (possibly multi-thousand-clip) library just to check emptiness.
+    func hasClips(taggedWith tag: String? = nil) -> Bool {
+        clips.contains { $0.matches(tagFilter: tag) }
     }
 
     /// Every distinct tag in the library, alphabetical, for quick reuse.
@@ -759,6 +809,11 @@ final class LibraryStore: ObservableObject {
         // reorder made while an editor is open would be clobbered by its stale
         // snapshot on save.
         clip.createdAt = clips[idx].createdAt
+        // The day/photo editors save on disappear, so just clicking through a
+        // day's clips (or closing the editor untouched) would otherwise
+        // re-encode and rewrite the entire library each time — skip the write
+        // when nothing actually changed.
+        guard clips[idx] != clip else { return }
         if clips[idx].thumbnailKey != clip.thumbnailKey {
             thumbnailCache.removeObject(forKey: clip.id as NSUUID)
         }

@@ -7,6 +7,15 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.6.1] - 2026-06-18
+
+- Much faster on large libraries (thousands of clips). Moving between months in
+  the calendar used to take several seconds because every day cell rescanned the
+  whole library; days are now looked up by an index, so navigation is near
+  instant. Switching between clips in a day's editor was also slow — it re-saved
+  the entire library on every click even when nothing changed; it now only
+  writes when there's an actual edit.
+
 ## [1.6.0] - 2026-06-18
 
 - New **Import ▸ Import 1SE Data Export…**. If you request your data from the
