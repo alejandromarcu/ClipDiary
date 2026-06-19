@@ -80,21 +80,28 @@ Deliberate improvements over 1SE:
   exports) are paired into one photo `SourceItem` carrying the motion clip in
   `motionURL` (+ its `duration`); the motion file is not surfaced as its own
   video, so a Live Photo counts as one photo, not a phantom extra video.
-- `ReviewView.swift` — `ReviewWindow` (opened by clicking a calendar day):
-  steps through `sourceItems` in capture order starting at that day, ↑/↓ for
-  previous/next (flowing into following days and finally the undated
-  bucket), embeds `TrimEditor`/`PhotoEditor` in review mode on a per-item
-  draft clip, "Add to Clips" (⌘↩) calls `store.pick` and auto-advances;
-  "Added ✓ ×n" badge via `usageCount(of:)`. Undated items show an orange
-  "No capture date" badge, their drafts default to the clicked day, and an
-  "N undated" header button jumps to the bucket. A **Live Photo** shows a
-  "Photo / Video" segmented picker (`useMotion`): Photo embeds `PhotoEditor`
-  on the still, Video embeds `TrimEditor` on the motion clip; ⌘↩ then picks
-  whichever (copying the still or the motion file). Bottom strip shows the
-  day's picked clips and opens `DaySheet` to edit them. Also
-  `SourceFoldersSheet` (a thin wrapper around the reusable
-  `SourceFoldersSection`: add/remove/rescan source folders; auto-presented
-  when a project has no clips and no sources) and
+- `ReviewView.swift` — `ReviewWindow`, the **day window** (one window does both
+  reviewing source media *and* editing the day's picked clips). A left
+  **thumbnail rail** lists the day's content in two sections: *Picked* (the
+  clips already added — click to edit, drag to reorder via `reorderClips`) and
+  *Available* (`store.sourceItems(on:)`, each with an "Added ✓×n" badge via
+  `usageCount(of:)`). A `Selection` is `.clip(UUID)` or `.source(path)`:
+  selecting a clip shows `TrimEditor`/`PhotoEditor` in library mode, a source in
+  review mode on a per-item draft. ↑/↓ navigate within the active section (the
+  rail auto-scrolls to keep the selection visible); the source flow runs into
+  following days and finally the undated bucket. "Add to Clips" (⌘↩) calls
+  `store.pick` and auto-advances. Undated items show an orange "No capture date"
+  badge above the media and default their drafts to the window's day. A **Live
+  Photo** shows a "Photo / Video" segmented picker (`useMotion`): Photo embeds
+  `PhotoEditor` on the still, Video embeds `TrimEditor` on the motion clip; ⌘↩
+  picks whichever (copying the still or the motion file). Layout splits by scope:
+  the **toolbar** holds navigation (Previous/Next **Day** `<`/`>`, then item
+  ↑/↓); the **rail footer** holds the day-scoped **Add Card…** and **Preview
+  Day**; the editor's side pane holds the item-scoped Add/Delete/Revert. Opened
+  via `ReviewRequest` (`focusSources` chooses the initial section — the + circle
+  vs. a cell click; `startUndated` opens straight on the bucket). Also `SourceFoldersSheet` (a thin wrapper around
+  the reusable `SourceFoldersSection`: add/remove/rescan source folders;
+  auto-presented when a project has no clips and no sources) and
   `presentAddSourceFolderPanel`.
 - `ContentView.swift` — month calendar grid (week-row `VStack`/`HStack`s, 7
   columns, respects `calendar.firstWeekday`) that fills the window height with
@@ -102,11 +109,10 @@ Deliberate improvements over 1SE:
   thumbnail + picked-clip badge and a source-availability footer (video count
   + length, photo count from `store.availability(on:)`); the month header
   carries the same month-wide tally.
-  Each day cell carries a **hover-revealed bottom-right + circle** that **opens
-  the review window** (`ReviewRequest` via openWindow); **clicking anywhere else
-  on the cell opens the per-day clip editor** (`DaySheet`). Both are also on the day
-  cell's context menu, and `DaySheet` is reachable from the review window's
-  picked strip. Toolbar: a **Project Settings** gear
+  **Clicking a day cell opens the day window** on the day's picked clips
+  (`ReviewRequest(day:)` via openWindow); the cell's **context menu** also offers
+  "Review Sources…" (`ReviewRequest(focusSources: true)`, opening the same window
+  on the day's source media). Toolbar: a **Project Settings** gear
   (⌘,), an Import menu (Import Media… fileImporter multi-select, Import 1SE
   Video…, Import 1SE Data Export…) and a single **Create Video…** button. Also contains
   `ProjectSettingsSheet` (orientation radio group, ending-fade toggle + duration
@@ -117,19 +123,21 @@ Deliberate improvements over 1SE:
   buttons, plus a video/photo count (calendar `video.fill`/`photo.fill` icons)
   and total length for the chosen range; format/fade still come from Project
   Settings (no longer surfaced in this window).
-- `TrimView.swift` — `DaySheet` (per-day editor; when a day has multiple clips
-  a `DayClipStrip` shows them as a thumbnail row in play order — click to edit,
-  **drag one onto another to reorder** (via `LibraryStore.reorderClips`) so
-  clips can run out of chronological order for nicer transitions; routes to
-  `TrimEditor` or `PhotoEditor` by kind, date reassignment, delete), `TagRow`
-  (shared tag chips + new-tag field + reuse
-  menu) and `TrimSlider` (filmstrip of 10 thumbnails with draggable yellow
-  in/out handles, min gap 0.1s). Set In/Set Out buttons (⌘I/⌘O) mark trim
-  points at the current playback time. "Preview Trim" plays exactly the
-  in→out segment using a periodic time observer to pause at the out point.
-  `TrimEditor` has two modes: library (auto-saves on disappear, can delete)
-  and **review** (`sourceURL:` plays the original source file, `onAdd:` shows
-  an "Add to Clips" ⌘↩ button handing back the configured draft).
+- `TrimView.swift` — `TrimEditor` (the video editor), plus the shared pieces:
+  `LiveEditBuffer` (lets the day window flush an editor's in-flight edit before
+  Preview Day, since editors only persist on disappear), `TagRow` (tag chips +
+  new-tag field + reuse menu), `DayPickerField`, `ReviewItemInfo`/
+  `ReviewItemHeader`, `ResizablePaneDivider` (drag-resizes the side pane), and
+  `TrimSlider` (filmstrip of 10 thumbnails with draggable yellow in/out handles,
+  min gap 0.1s). Set In/Set Out buttons (⌘I/⌘O) mark trim points at the current
+  playback time. "Preview Trim" plays exactly the in→out segment using a periodic
+  time observer to pause at the out point. `TrimEditor` has two modes — library
+  (auto-saves on disappear, can delete) and **review** (`sourceURL:` plays the
+  original source file, `onAdd:` shows an "Add to Clips" ⌘↩ button handing back
+  the configured draft) — both drawn in **one two-column layout**: media + trim
+  controls on the left, metadata/actions in the right side pane (the action is
+  Add in review, Delete in library). The day's reorder (drag clips) lives in the
+  day window's rail, calling `LibraryStore.reorderClips`.
 - `PhotoView.swift` — `PhotoEditor` (crop, display-duration stepper, aspect
   lock picker Free/16:9/9:16, tags, date, delete) and `PhotoCropView`
   (aspect-fit photo, draggable yellow corner handles + move-inside gesture,
@@ -241,12 +249,13 @@ editors); 1SE imports default it off (their frames are already stamped).
 Export burns it in via `AVVideoCompositionCoreAnimationTool`; the preview
 window draws the same stamp as a synced SwiftUI overlay, sized by the shared
 `DateStamp` constants in Models.swift.
-The primary population flow is **source folders + review**: each project
-lists folders (e.g. the month's photo dump) scanned recursively into a
-chronological index; tapping a day's **+** reviews that day's media one by one
-(↑/↓ navigate, crossing into later days; ⌘↩ adds the trimmed/cropped draft
-and advances). Source files are copied into `Clips/` only when picked. The
-old Import menu still works for one-off files.
+The primary population flow is **source folders + the day window**: each
+project lists folders (e.g. the month's photo dump) scanned recursively into a
+chronological index; opening a day shows that day's media as a thumbnail rail
+alongside its already-picked clips. Reviewing a source (↑/↓ navigate, crossing
+into later days; ⌘↩ adds the trimmed/cropped draft and advances) and editing a
+picked clip happen in the same window. Source files are copied into `Clips/`
+only when picked. The old Import menu still works for one-off files.
 
 ## Backup / reconstruction
 

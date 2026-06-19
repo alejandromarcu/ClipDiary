@@ -106,13 +106,7 @@ struct PhotoEditor: View {
     }
 
     var body: some View {
-        Group {
-            if isReview {
-                reviewBody
-            } else {
-                libraryBody
-            }
-        }
+        editorBody
         .onAppear { load(); onLiveEdit?(editedClip) }
         // Auto-save so switching clips or closing the sheet keeps edits.
         // No-op if the clip was just deleted. Review drafts aren't saved.
@@ -126,30 +120,11 @@ struct PhotoEditor: View {
 
     // MARK: - Layouts
 
-    /// Day-editor layout: photo, crop/duration controls and metadata stacked
-    /// top to bottom in one column.
-    private var libraryBody: some View {
-        VStack(spacing: 14) {
-            photoView
-            cropControls
-            TagRow(tags: $clip.tags)
-            captionField
-            TransitionRow(transition: clip.transition) { showTransition = true }
-            Divider()
-            HStack {
-                DayPickerField(selection: $editedDate)
-                dateStampToggle
-                Spacer()
-                revertButton
-                deleteButton
-            }
-        }
-    }
-
-    /// Review layout: the photo and crop controls take the whole left side so
-    /// the image is as big as possible; tags/caption/transition/day and the
-    /// add/revert actions live in a fixed-width pane on the right.
-    private var reviewBody: some View {
+    /// Two-column layout used in both modes: the photo and crop controls take the
+    /// whole left side so the image is as big as possible; tags/caption/
+    /// transition/day and the add (review) or delete (library) action live in a
+    /// resizable pane on the right.
+    private var editorBody: some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(spacing: 14) {
                 mediaAccessory
@@ -164,7 +139,7 @@ struct PhotoEditor: View {
         }
     }
 
-    /// Right-hand pane shown in review mode.
+    /// Right-hand metadata + actions pane.
     private var sidePane: some View {
         VStack(alignment: .leading, spacing: 14) {
             if let reviewInfo {
@@ -181,7 +156,8 @@ struct PhotoEditor: View {
             HStack {
                 revertButton
                 Spacer()
-                addButton
+                // Review adds a draft; library edits an existing clip.
+                if isReview { addButton } else { deleteButton }
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)

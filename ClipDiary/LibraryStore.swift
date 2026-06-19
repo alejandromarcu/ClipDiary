@@ -53,6 +53,10 @@ final class LibraryStore: ObservableObject {
     private var accessingSourceURLs: [URL] = []
     private var scanTask: Task<Void, Never>?
     private let thumbnailCache = NSCache<NSUUID, NSImage>()
+    /// Thumbnails for not-yet-picked source items (keyed by file path), shown in
+    /// the day window's source rail. Separate from `thumbnailCache` because
+    /// source items are keyed by path, not by a clip's UUID.
+    private let sourceThumbnailCache = NSCache<NSString, NSImage>()
     /// Clips and source items grouped by calendar day (`startOfDay` key), built
     /// lazily and dropped whenever `clips`/`sourceItems` change. The calendar
     /// draws ~40 day cells, each querying its day's clips and availability
@@ -222,6 +226,7 @@ final class LibraryStore: ObservableObject {
         cardsDir = url.appendingPathComponent("Cards", isDirectory: true)
         try? FileManager.default.createDirectory(at: clipsDir, withIntermediateDirectories: true)
         thumbnailCache.removeAllObjects()
+        sourceThumbnailCache.removeAllObjects()
         clips = loadedClips
         settings = Self.loadSettings(from: settingsURL)
         cards = Self.loadCards(from: cardsDir)
@@ -459,6 +464,25 @@ final class LibraryStore: ObservableObject {
         return (clipsByDay()[key] ?? [])
             .filter { $0.matches(tagFilter: tag) }
             .sorted { $0.createdAt < $1.createdAt }
+    }
+
+    /// Source items captured on a day, in capture order — the day window's
+    /// "Available" rail. Undated items are excluded (they live in the review
+    /// flow's undated bucket, not on any day).
+    func sourceItems(on day: Date) -> [SourceItem] {
+        let key = Calendar.current.startOfDay(for: day)
+        return sourceItemsByDay()[key] ?? []
+    }
+
+    /// The nearest day before/after `day` that has either picked clips or source
+    /// media — the day window's day-stepping. nil at the ends. Reuses the cached
+    /// day groupings, so it only scans the (small) set of distinct days.
+    func adjacentContentDay(from day: Date, forward: Bool) -> Date? {
+        let key = Calendar.current.startOfDay(for: day)
+        var days = Set(clipsByDay().keys)
+        days.formUnion(sourceItemsByDay().keys)
+        return forward ? days.filter { $0 > key }.min()
+                       : days.filter { $0 < key }.max()
     }
 
     /// Whether any clip matches the tag filter — a cheap, short-circuiting test
@@ -1070,6 +1094,37 @@ final class LibraryStore: ObservableObject {
             let (cgImage, _) = try await generator.image(at: time)
             let image = NSImage(cgImage: cgImage, size: .zero)
             thumbnailCache.setObject(image, forKey: clip.id as NSUUID)
+            return image
+        } catch {
+            return nil
+        }
+    }
+
+    /// Thumbnail for a not-yet-picked source item (the still for a photo / Live
+    /// Photo, an early frame for a video), cached in memory by file path.
+    func thumbnail(for item: SourceItem) async -> NSImage? {
+        let key = item.id as NSString
+        if let cached = sourceThumbnailCache.object(forKey: key) {
+            return cached
+        }
+        if item.kind == .photo {
+            guard let cg = loadOrientedCGImage(from: item.url, maxPixel: 480) else {
+                return nil
+            }
+            let image = NSImage(cgImage: cg, size: .zero)
+            sourceThumbnailCache.setObject(image, forKey: key)
+            return image
+        }
+        let asset = AVURLAsset(url: item.url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 480, height: 480)
+        // A frame slightly in (not 0) avoids the occasional black first frame.
+        let time = CMTime(seconds: 0.1, preferredTimescale: 600)
+        do {
+            let (cgImage, _) = try await generator.image(at: time)
+            let image = NSImage(cgImage: cgImage, size: .zero)
+            sourceThumbnailCache.setObject(image, forKey: key)
             return image
         } catch {
             return nil

@@ -7,6 +7,23 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.7.0] - 2026-06-19
+
+- The Review window and the per-day editor are now **one window**. Clicking a
+  calendar day opens it on that day's already-picked clips (and its "Review
+  Sources…" right-click option opens it on the day's source media). The separate
+  "Edit Day" window and the per-cell **+** button are gone.
+- A new **left thumbnail rail** shows the whole day at a glance: a *Picked*
+  section (the clips you've added — click to edit, drag to reorder) and an
+  *Available* section (every photo/video captured that day, with an "✓" badge on
+  ones you've already used). Click any thumbnail to jump straight to it instead
+  of only stepping through with ↑/↓.
+- **Previous / Next Day** toolbar buttons (`<` / `>`) step between days that
+  have media, without going back to the calendar.
+- Editing a picked clip now uses the same roomy two-column layout as reviewing
+  (big media on the left, all the controls in a side pane), so editing and
+  reviewing look and feel the same.
+
 ## [1.6.1] - 2026-06-18
 
 - Much faster on large libraries (thousands of clips). Moving between months in
