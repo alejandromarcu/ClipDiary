@@ -108,7 +108,7 @@ Deliberate improvements over 1SE:
   cell's context menu, and `DaySheet` is reachable from the review window's
   picked strip. Toolbar: a **Project Settings** gear
   (⌘,), an Import menu (Import Media… fileImporter multi-select, Import 1SE
-  Video…) and a single **Create Video…** button. Also contains
+  Video…, Import 1SE Data Export…) and a single **Create Video…** button. Also contains
   `ProjectSettingsSheet` (orientation radio group, ending-fade toggle + duration
   stepper, and a `SourceFoldersSection`) and `RenderSheet` — the unified
   Preview/Export window: a time-range picker (`RenderMode` month/year/all/custom,
@@ -154,6 +154,25 @@ Deliberate improvements over 1SE:
   drives scan → review → import phases (reached from the Import toolbar
   menu in `ContentView`); review shows a frame per day and highlights the
   auto-corrected/flagged dates for inline editing.
+- `DataExportImport.swift` — "Import 1SE Data Export": the cleaner alternative
+  to the mashup OCR. Reads a 1SE **"Download Your Data"** export folder (the
+  GDPR zip, unzipped), whose `files/snapshots/manifest-*.json` already lists
+  every project and per-snippet `date` (the timeline day) + `video_id`, with the
+  actual clip at `files/snippets/<video_id>/video.mov` — so dates are read, not
+  guessed. `DataExportReader.read` picks the newest non-partial manifest,
+  resolves each project's snippets whose `video.mov` exists, and returns
+  `DataExportProject`s biggest-first. `DataExportImportSheet` lets the user pick
+  one project to import into the **current** ClipDiary project;
+  `LibraryStore.importDataExportProject` copies each `video.mov` in untrimmed
+  (full length, matching what 1SE plays) with the date stamp **on** (raw
+  snippets aren't pre-stamped, unlike a mashup), preserving 1SE's within-day play
+  order via `createdAt`. Captions are carried over too: 1SE stores them in
+  `backups.json` (not the manifest) under `location_text` — a legacy field name,
+  with `diary_text` an empty fallback — keyed by `video_uid`; `captionMap` builds
+  that lookup (newest non-empty wins) and each clip gets its `caption`. The copy+hash runs off the main actor in a single read
+  pass (`LibraryStore.copyComputingDigest`) and clips are saved in batches.
+  Because the copies are the original bytes (not re-encoded), their `sourceHash`
+  matches the export, so these clips are reconstructable from it.
 - `Exporter.swift` — builds an `AVMutableComposition` from the month's clips
   in date order (then createdAt), inserting each clip's in→out range. Photos
   are first rendered (cropped, via AVAssetWriter) into silent temp MP4
