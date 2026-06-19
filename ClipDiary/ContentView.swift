@@ -121,7 +121,7 @@ struct ContentView: View {
                     Label("Create Video…", systemImage: "film.stack")
                 }
                 .help("Pick a time range, then preview it or save the video")
-                .disabled(store.clips(in: .all, taggedWith: tagFilter).isEmpty)
+                .disabled(!store.hasClips(taggedWith: tagFilter))
             }
         }
         .fileImporter(
