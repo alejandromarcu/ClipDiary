@@ -7,6 +7,15 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.11.1] - 2026-06-20
+
+- **Fixed phantom thumbnails after switching projects.** Creating or opening a
+  new project while the calendar was still drawing the old one's thumbnails
+  could leave stale thumbnails stuck on some days — days that were actually
+  empty in the new project (clicking them showed nothing and the clip count read
+  0). The calendar now discards a thumbnail load that finishes after the project
+  has already changed.
+
 ## [1.11.0] - 2026-06-20
 
 - **Copy a clip to another project ("post to project").** When you're editing a

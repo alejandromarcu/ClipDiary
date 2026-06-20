@@ -499,7 +499,13 @@ struct DayCell: View {
         }
         .task(id: dayClips.first.map { store.thumbnailKey(for: $0) }) {
             if let first = dayClips.first {
-                thumbnail = await store.thumbnail(for: first)
+                let image = await store.thumbnail(for: first)
+                // The load suspends; if the day's first clip changed meanwhile
+                // (e.g. the project was switched, clearing this day's clips),
+                // this task was cancelled and a fresh one set the new value —
+                // don't clobber it with the now-stale image.
+                guard !Task.isCancelled else { return }
+                thumbnail = image
             } else {
                 thumbnail = nil
             }
