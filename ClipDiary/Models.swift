@@ -6,6 +6,55 @@ enum ClipKind: String, Codable {
     case video, photo
 }
 
+/// The Cover/Ending cards (and their fades) chosen for one render period in the
+/// Create Video window. Stored per period (keyed by `RenderRange.periodKey`) so
+/// each month/year/custom span remembers its own bookends — selecting a card
+/// for "2025" doesn't carry over to "May 2026".
+struct BookendSettings: Codable, Equatable {
+    /// The card shown at the very start of the rendered video, or nil for none.
+    var coverCardID: UUID? = nil
+    /// The card shown at the very end of the rendered video, or nil for none.
+    var endingCardID: UUID? = nil
+    /// Fade in/out for the cover and ending cards (the cards carry none).
+    var coverTransition = SegmentTransition()
+    var endingTransition = SegmentTransition()
+    /// With **no cover card**, fade the first clip in from black over this many
+    /// seconds at the start of the video (0 = no fade). Ignored when a cover
+    /// card is set — the card's own fade opens the video instead.
+    var firstClipFadeInSeconds: Double = 0
+    /// With **no ending card**, fade the last clip out to black over this many
+    /// seconds at the end of the video (0 = no fade). Ignored when an ending
+    /// card is set.
+    var lastClipFadeOutSeconds: Double = 0
+
+    /// True when nothing is configured — no cards and no fades. Such an entry is
+    /// dropped rather than stored so the period map stays sparse.
+    var isDefault: Bool {
+        coverCardID == nil && endingCardID == nil
+            && coverTransition.isEmpty && endingTransition.isEmpty
+            && firstClipFadeInSeconds == 0 && lastClipFadeOutSeconds == 0
+    }
+
+    init() {}
+
+    // Decoded field-by-field with `decodeIfPresent` so entries written before a
+    // field existed (and future additions) load without migration.
+    enum CodingKeys: String, CodingKey {
+        case coverCardID, endingCardID, coverTransition, endingTransition,
+             firstClipFadeInSeconds, lastClipFadeOutSeconds
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        coverCardID = try c.decodeIfPresent(UUID.self, forKey: .coverCardID)
+        endingCardID = try c.decodeIfPresent(UUID.self, forKey: .endingCardID)
+        coverTransition = try c.decodeIfPresent(SegmentTransition.self, forKey: .coverTransition) ?? SegmentTransition()
+        endingTransition = try c.decodeIfPresent(SegmentTransition.self, forKey: .endingTransition) ?? SegmentTransition()
+        firstClipFadeInSeconds = try c.decodeIfPresent(Double.self, forKey: .firstClipFadeInSeconds) ?? 0
+        lastClipFadeOutSeconds = try c.decodeIfPresent(Double.self, forKey: .lastClipFadeOutSeconds) ?? 0
+    }
+}
+
 /// Per-project render preferences, persisted next to the clips in
 /// `settings.json`. Every field has a default and decodes with
 /// `decodeIfPresent`, so projects created before settings existed (no file) —
@@ -13,24 +62,16 @@ enum ClipKind: String, Codable {
 struct ProjectSettings: Codable, Equatable {
     /// The month video's aspect/size, used for both Preview and Export.
     var orientation: Orientation = .landscape
-    /// When true, the month video fades to black over its final
-    /// `fadeOutSeconds` (video, audio and the date stamp together).
-    var fadeOutLastClip: Bool = false
-    /// Length of that fade, in seconds (ignored when `fadeOutLastClip` is off).
-    var fadeOutSeconds: Double = 1.0
     /// The time range last chosen in the Create Video window, remembered per
     /// project. `nil` means "never changed" — the window then defaults to the
     /// current month, which keeps following the calendar instead of sticking.
     var renderRange: RenderRange? = nil
-    /// The card shown at the very start of a rendered video, or nil for none.
-    /// Chosen in the Create Video window and remembered per project.
-    var coverCardID: UUID? = nil
-    /// The card shown at the very end of a rendered video, or nil for none.
-    var endingCardID: UUID? = nil
-    /// Fade in/out for the cover and ending cards, set in the Create Video
-    /// window (the cards themselves carry no transition).
-    var coverTransition = SegmentTransition()
-    var endingTransition = SegmentTransition()
+    /// Cover/Ending cards (and their fades) remembered **per render period**,
+    /// keyed by `RenderRange.periodKey`. Picking a cover for "2025" and then
+    /// switching the Create Video window to "May 2026" shows that period's own
+    /// (initially empty) bookends; switching back restores 2025's. Use
+    /// `bookends(for:)` / `setBookends(_:for:)` rather than touching this map.
+    var bookendsByPeriod: [String: BookendSettings] = [:]
     /// The display duration last used for a photo, so the next photo reviewed
     /// defaults to it instead of always restarting at the standard default.
     var lastPhotoDuration: Double = LibraryStore.defaultPhotoDuration
@@ -38,9 +79,19 @@ struct ProjectSettings: Codable, Equatable {
     /// to that month instead of the current one. `nil` → never navigated.
     var lastViewedMonth: Date? = nil
 
-    /// The fade length to actually apply, or nil when fading is disabled.
-    var effectiveFadeOutSeconds: Double? {
-        fadeOutLastClip && fadeOutSeconds > 0 ? fadeOutSeconds : nil
+    /// The Cover/Ending bookends saved for `range`'s period (defaults if none).
+    func bookends(for range: RenderRange) -> BookendSettings {
+        bookendsByPeriod[range.periodKey] ?? BookendSettings()
+    }
+
+    /// Remember `bookends` for `range`'s period; a default (empty) value drops
+    /// the entry so the map only holds periods the user actually configured.
+    mutating func setBookends(_ bookends: BookendSettings, for range: RenderRange) {
+        if bookends.isDefault {
+            bookendsByPeriod[range.periodKey] = nil
+        } else {
+            bookendsByPeriod[range.periodKey] = bookends
+        }
     }
 
     enum Orientation: String, Codable, CaseIterable, Identifiable {
@@ -58,21 +109,15 @@ struct ProjectSettings: Codable, Equatable {
     init() {}
 
     enum CodingKeys: String, CodingKey {
-        case orientation, fadeOutLastClip, fadeOutSeconds, renderRange,
-             coverCardID, endingCardID, coverTransition, endingTransition,
-             lastPhotoDuration, lastViewedMonth
+        case orientation, renderRange,
+             bookendsByPeriod, lastPhotoDuration, lastViewedMonth
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         orientation = try c.decodeIfPresent(Orientation.self, forKey: .orientation) ?? .landscape
-        fadeOutLastClip = try c.decodeIfPresent(Bool.self, forKey: .fadeOutLastClip) ?? false
-        fadeOutSeconds = try c.decodeIfPresent(Double.self, forKey: .fadeOutSeconds) ?? 1.0
         renderRange = try c.decodeIfPresent(RenderRange.self, forKey: .renderRange)
-        coverCardID = try c.decodeIfPresent(UUID.self, forKey: .coverCardID)
-        endingCardID = try c.decodeIfPresent(UUID.self, forKey: .endingCardID)
-        coverTransition = try c.decodeIfPresent(SegmentTransition.self, forKey: .coverTransition) ?? SegmentTransition()
-        endingTransition = try c.decodeIfPresent(SegmentTransition.self, forKey: .endingTransition) ?? SegmentTransition()
+        bookendsByPeriod = try c.decodeIfPresent([String: BookendSettings].self, forKey: .bookendsByPeriod) ?? [:]
         lastPhotoDuration = try c.decodeIfPresent(Double.self, forKey: .lastPhotoDuration) ?? LibraryStore.defaultPhotoDuration
         lastViewedMonth = try c.decodeIfPresent(Date.self, forKey: .lastViewedMonth)
     }
@@ -167,6 +212,24 @@ enum RenderRange: Codable, Hashable {
         }
         guard let day = endDay else { return nil }
         return cal.date(bySettingHour: 23, minute: 59, second: 0, of: day)
+    }
+
+    /// A canonical string identifying the *period* (not the exact anchor date),
+    /// so any `.month` anchored anywhere in June 2025 keys the same as another.
+    /// Used to remember per-period Cover/Ending bookends in `ProjectSettings`.
+    var periodKey: String {
+        let cal = Calendar.current
+        switch self {
+        case .month(let anchor):
+            let c = cal.dateComponents([.year, .month], from: anchor)
+            return String(format: "month:%04d-%02d", c.year ?? 0, c.month ?? 0)
+        case .year(let anchor):
+            return "year:\(cal.component(.year, from: anchor))"
+        case .all:
+            return "all"
+        case .custom(let start, let end):
+            return "custom:\(Self.fileDateFormatter.string(from: start.dayKey))..\(Self.fileDateFormatter.string(from: end.dayKey))"
+        }
     }
 
     /// The representative date a range hangs off — its month/year, the start of

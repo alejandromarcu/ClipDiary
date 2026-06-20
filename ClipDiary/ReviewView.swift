@@ -662,7 +662,7 @@ struct ReviewWindow: View {
         if let edited = liveEdits.clip { store.update(edited) }
         openWindow(value: PreviewRequest(
             range: .custom(start: currentDay, end: currentDay), tagFilter: nil,
-            includeEndingFade: false, includeBookends: false))
+            includeBookends: false))
     }
 
     // MARK: - Source draft

@@ -34,7 +34,6 @@ struct ClipDiaryApp: App {
         WindowGroup("Preview", for: PreviewRequest.self) { $request in
             if let request {
                 PreviewWindow(range: request.range, tagFilter: request.tagFilter,
-                              includeEndingFade: request.includeEndingFade,
                               includeBookends: request.includeBookends)
                     .environmentObject(store)
             }

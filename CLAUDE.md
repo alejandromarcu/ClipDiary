@@ -32,9 +32,18 @@ Deliberate improvements over 1SE:
   SHA-256 of the copied media bytes) + `sourceBytes` (file size) are recorded at
   pick/import time so the project can be rebuilt by content if `Clips/` is lost
   — see "Backup / reconstruction" below. Also `ProjectSettings`
-  (orientation + ending-fade toggle/duration + the remembered Create Video
-  `renderRange`): a small per-project Codable blob, every field defaulted via
-  `decodeIfPresent` so old projects and future options need no migration. And
+  (orientation + the remembered Create Video `renderRange` + `bookendsByPeriod`):
+  a small per-project Codable blob, every
+  field defaulted via `decodeIfPresent` so old projects and future options need
+  no migration. `bookendsByPeriod` maps a `RenderRange.periodKey` (a canonical
+  month/year/custom/all string) to a `BookendSettings` (cover + ending card ids
+  and their fades, **plus** `firstClipFadeInSeconds`/`lastClipFadeOutSeconds` —
+  applied when the respective card is None to fade the first clip in / last clip
+  out), so the Create Video window remembers a distinct Cover/Ending per time
+  range; `bookends(for:)`/`setBookends(_:for:)` read/write it (an empty value
+  drops the entry). `bookendClipFades(_:)` turns those into the render-level
+  fade-in/out. (There is no longer a project-wide ending fade — it moved here,
+  per period.) And
   `RenderRange` (month / year / all / custom start–end): the time span a video
   covers, with `contains`/`label`/`fileNameLabel` helpers, used by both Preview
   and Export and persisted in `settings.json`.
@@ -115,14 +124,17 @@ Deliberate improvements over 1SE:
   on the day's source media). Toolbar: a **Project Settings** gear
   (⌘,), an Import menu (Import Media… fileImporter multi-select, Import 1SE
   Video…, Import 1SE Data Export…) and a single **Create Video…** button. Also contains
-  `ProjectSettingsSheet` (orientation radio group, ending-fade toggle + duration
-  stepper, and a `SourceFoldersSection`) and `RenderSheet` — the unified
+  `ProjectSettingsSheet` (orientation radio group + a `SourceFoldersSection`) and
+  `RenderSheet` — the unified
   Preview/Export window: a time-range picker (`RenderMode` month/year/all/custom,
-  remembered in `settings.renderRange`, defaulting to the current month) with
+  remembered in `settings.renderRange`, defaulting to the current month), a
+  **Cover/Ending** picker (per-period `BookendSettings`; with a card the fade
+  edits the card's transition, with **None** it edits the first-clip fade-in /
+  last-clip fade-out via `ClipFadeSheet`), and
   **Preview** (opens `PreviewWindow`) and **Save…** (NSSavePanel + progress bar)
   buttons, plus a video/photo count (calendar `video.fill`/`photo.fill` icons)
-  and total length for the chosen range; format/fade still come from Project
-  Settings (no longer surfaced in this window).
+  and total length for the chosen range; orientation still comes from Project
+  Settings (not surfaced in this window).
 - `TrimView.swift` — `TrimEditor` (the video editor), plus the shared pieces:
   `LiveEditBuffer` (lets the day window flush an editor's in-flight edit before
   Preview Day, since editors only persist on disappear), `TagRow` (tag chips +
@@ -188,12 +200,14 @@ Deliberate improvements over 1SE:
   segment `AVMutableVideoCompositionInstruction` aspect-fits each clip into
   the render size (handles preferredTransform / rotated iPhone video,
   letterboxes mixed orientations). Exports MP4 via `AVAssetExportSession`,
-  highest quality, 30fps frameDuration. An optional **ending fade**
-  (`fadeOutSeconds`, from project settings, clamped to the last clip) ramps the
-  last segment's opacity to black, the audio volume to 0 (`AVMutableAudioMix`)
-  and the date stamp to 0; `MonthComposition.fadeRange`/`audioMix` carry it so
-  preview and export stay in sync (the preview dims its SwiftUI stamp over the
-  same range).
+  highest quality, 30fps frameDuration. `buildComposition` also takes an
+  optional `fadeInSeconds`/`fadeOutSeconds` (the per-period bookend fades, when
+  no cover/ending card): the **fade-in** ramps the first clip's opacity up from
+  black (+ its audio + date stamp), the **fade-out** ramps the last segment's
+  opacity to black, the audio volume to 0 (`AVMutableAudioMix`) and the date
+  stamp to 0 — each skipped if that clip already fades itself. The `audioMix`
+  and the date `dateOverlays`' fade fields carry the same spans so preview and
+  export stay in sync (the preview dims its SwiftUI stamp over the same ranges).
 
 ## Conventions & constraints
 
@@ -234,9 +248,11 @@ The app is **project-based**: launching with no remembered project shows a
 welcome screen (New / Open / Recent); the last-used project reopens
 automatically. The calendar/import/export all operate on the open project.
 Per-project **settings** (`settings.json`) hold the render orientation
-(portrait/landscape — chosen once here, no longer asked per export/preview) and
-an optional ending fade-to-black; the toolbar's **Project Settings** sheet (⌘,)
-edits them and also hosts source-folder management.
+(portrait/landscape — chosen once here, no longer asked per export/preview); the
+toolbar's **Project Settings** sheet (⌘,) edits it and also hosts source-folder
+management. Cover/Ending cards and their fades — including the first-clip
+fade-in / last-clip fade-out used when a side is None — live per render period
+in the Create Video window, not in Project Settings.
 The main screen has a tag filter (toolbar picker, single tag) that scopes the
 calendar thumbnails/counts and the rendered video. A single **Create Video…**
 toolbar button opens `RenderSheet`, where a time range (a specific month, a
