@@ -33,8 +33,13 @@ Deliberate improvements over 1SE:
   pick/import time so the project can be rebuilt by content if `Clips/` is lost
   — see "Backup / reconstruction" below. Also `ProjectSettings`
   (orientation + ending-fade toggle/duration + the remembered Create Video
-  `renderRange`): a small per-project Codable blob, every field defaulted via
-  `decodeIfPresent` so old projects and future options need no migration. And
+  `renderRange` + `bookendsByPeriod`): a small per-project Codable blob, every
+  field defaulted via `decodeIfPresent` so old projects and future options need
+  no migration. `bookendsByPeriod` maps a `RenderRange.periodKey` (a canonical
+  month/year/custom/all string) to a `BookendSettings` (cover + ending card ids
+  and their fades), so the Create Video window remembers a distinct Cover/Ending
+  per time range; `bookends(for:)`/`setBookends(_:for:)` read/write it (an empty
+  value drops the entry). And
   `RenderRange` (month / year / all / custom start–end): the time span a video
   covers, with `contains`/`label`/`fileNameLabel` helpers, used by both Preview
   and Export and persisted in `settings.json`.

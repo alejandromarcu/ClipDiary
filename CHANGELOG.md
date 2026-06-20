@@ -7,6 +7,15 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.9.0] - 2026-06-20
+
+- The **Cover** and **Ending** cards (and their fades) in the Create Video
+  window are now remembered **per time range**. Set a cover and ending for
+  "2025", switch the range to "May 2026" and the selectors reset to None so you
+  can choose that month's own bookends — switch back to "2025" and your earlier
+  choices reappear. Each month, year, custom span, and "All clips" keeps its own
+  cover/ending, and Preview and Save use whichever belongs to the chosen range.
+
 ## [1.8.0] - 2026-06-19
 
 - Video clips now have a **volume control** in the clip editor. Each clip

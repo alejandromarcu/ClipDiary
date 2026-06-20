@@ -157,12 +157,10 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $showRenderSheet) {
-            RenderSheet(initialRange: store.settings.renderRange ?? .month(Date()),
+            let initialRange = store.settings.renderRange ?? .month(Date())
+            RenderSheet(initialRange: initialRange,
                         tagFilter: tagFilter,
-                        initialCover: store.settings.coverCardID,
-                        initialEnding: store.settings.endingCardID,
-                        initialCoverTransition: store.settings.coverTransition,
-                        initialEndingTransition: store.settings.endingTransition)
+                        initialBookends: store.settings.bookends(for: initialRange))
                 .environmentObject(store)
         }
         .sheet(isPresented: $showSourcesSheet) {
@@ -619,13 +617,11 @@ struct RenderSheet: View {
     /// updates" warning, so the save is deferred to `onChange` instead.
     @State private var range: RenderRange
 
-    /// Cover/Ending card selections + their fades, mirrored locally and
-    /// persisted back to the project in `onChange` (same deferred-save reason as
-    /// `range` above).
-    @State private var coverCardID: UUID?
-    @State private var endingCardID: UUID?
-    @State private var coverTransition = SegmentTransition()
-    @State private var endingTransition = SegmentTransition()
+    /// Cover/Ending card selections + their fades for the **current period**,
+    /// mirrored locally and persisted back to the project in `onChange` (same
+    /// deferred-save reason as `range` above). Reloaded whenever `range` changes
+    /// to whatever was saved for the new period (or empty when never set).
+    @State private var bookends: BookendSettings
     @State private var editingBookendFade: BookendFade?
 
     /// Which bookend's fade sheet is open.
@@ -640,14 +636,9 @@ struct RenderSheet: View {
     /// means `onChange` fires only on real edits, so an untouched window leaves
     /// `settings.renderRange` nil and keeps defaulting to the current month.
     init(initialRange: RenderRange, tagFilter: String?,
-         initialCover: UUID? = nil, initialEnding: UUID? = nil,
-         initialCoverTransition: SegmentTransition = SegmentTransition(),
-         initialEndingTransition: SegmentTransition = SegmentTransition()) {
+         initialBookends: BookendSettings = BookendSettings()) {
         _range = State(initialValue: initialRange)
-        _coverCardID = State(initialValue: initialCover)
-        _endingCardID = State(initialValue: initialEnding)
-        _coverTransition = State(initialValue: initialCoverTransition)
-        _endingTransition = State(initialValue: initialEndingTransition)
+        _bookends = State(initialValue: initialBookends)
         self.tagFilter = tagFilter
     }
 
@@ -717,24 +708,18 @@ struct RenderSheet: View {
         // Persist the choice as a side effect, safely outside the view update.
         .onChange(of: range) { _, newRange in
             store.updateSettings { $0.renderRange = newRange }
+            // Load the bookends saved for the new period (empty when never set),
+            // so the cover/ending controls track the period the user picked.
+            bookends = store.settings.bookends(for: newRange)
         }
-        .onChange(of: coverCardID) { _, new in
-            store.updateSettings { $0.coverCardID = new }
-        }
-        .onChange(of: endingCardID) { _, new in
-            store.updateSettings { $0.endingCardID = new }
-        }
-        .onChange(of: coverTransition) { _, new in
-            store.updateSettings { $0.coverTransition = new }
-        }
-        .onChange(of: endingTransition) { _, new in
-            store.updateSettings { $0.endingTransition = new }
+        .onChange(of: bookends) { _, new in
+            store.updateSettings { $0.setBookends(new, for: range) }
         }
         .sheet(item: $editingBookendFade) { which in
             let isCover = which == .cover
             TransitionEditorSheet(
-                transition: isCover ? $coverTransition : $endingTransition,
-                maxSeconds: cardDuration(isCover ? coverCardID : endingCardID)
+                transition: isCover ? $bookends.coverTransition : $bookends.endingTransition,
+                maxSeconds: cardDuration(isCover ? bookends.coverCardID : bookends.endingCardID)
             )
         }
     }
@@ -749,14 +734,14 @@ struct RenderSheet: View {
             HStack {
                 Text("Cover")
                     .frame(width: 60, alignment: .leading)
-                cardMenu(selection: $coverCardID)
-                fadeButton(coverTransition, enabled: coverCardID != nil) { editingBookendFade = .cover }
+                cardMenu(selection: $bookends.coverCardID)
+                fadeButton(bookends.coverTransition, enabled: bookends.coverCardID != nil) { editingBookendFade = .cover }
             }
             HStack {
                 Text("Ending")
                     .frame(width: 60, alignment: .leading)
-                cardMenu(selection: $endingCardID)
-                fadeButton(endingTransition, enabled: endingCardID != nil) { editingBookendFade = .ending }
+                cardMenu(selection: $bookends.endingCardID)
+                fadeButton(bookends.endingTransition, enabled: bookends.endingCardID != nil) { editingBookendFade = .ending }
             }
             if store.cards.isEmpty {
                 Text("No cards yet — design a cover or ending with the Cards button in the toolbar.")
@@ -918,8 +903,8 @@ struct RenderSheet: View {
         let creationDate = range.exportCreationDate(clips: clips)
         // Render the Cover/Ending cards now (on the main actor) so the export
         // task just splices the finished images on.
-        let leading = bookend(for: coverCardID, transition: coverTransition, renderSize: renderSize)
-        let trailing = bookend(for: endingCardID, transition: endingTransition, renderSize: renderSize)
+        let leading = bookend(for: bookends.coverCardID, transition: bookends.coverTransition, renderSize: renderSize)
+        let trailing = bookend(for: bookends.endingCardID, transition: bookends.endingTransition, renderSize: renderSize)
 
         Task {
             do {
@@ -1185,8 +1170,9 @@ struct PreviewWindow: View {
 
         let clips = store.clips(in: range, taggedWith: tagFilter)
         let renderSize = store.settings.orientation.size
-        let leading = includeBookends ? cardBookend(store.settings.coverCardID, transition: store.settings.coverTransition, store: store, renderSize: renderSize) : nil
-        let trailing = includeBookends ? cardBookend(store.settings.endingCardID, transition: store.settings.endingTransition, store: store, renderSize: renderSize) : nil
+        let bookends = store.settings.bookends(for: range)
+        let leading = includeBookends ? cardBookend(bookends.coverCardID, transition: bookends.coverTransition, store: store, renderSize: renderSize) : nil
+        let trailing = includeBookends ? cardBookend(bookends.endingCardID, transition: bookends.endingTransition, store: store, renderSize: renderSize) : nil
         do {
             let built = try await Exporter.buildComposition(
                 clips: clips, store: store,
