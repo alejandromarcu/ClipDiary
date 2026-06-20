@@ -7,6 +7,20 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.11.0] - 2026-06-20
+
+- **Copy a clip to another project ("post to project").** When you're editing a
+  picked clip in the day window, a new **Copy to Project** button copies that
+  clip — its trim, crop, tags, caption, date, volume and fade — into another
+  ClipDiary project. This mirrors keeping one shared timeline for all the kids
+  and pulling a handful of clips into each child's own project (e.g. for a
+  birthday video), where you're then free to retime or add to them
+  independently. The menu lists the projects you copied to recently for
+  one-click reuse, and **Choose Project…** lets you pick any project folder. A
+  title card placed on a day can be copied too — its design comes along.
+  Re-posting the same clip reuses the media already in the target instead of
+  duplicating the file.
+
 ## [1.10.1] - 2026-06-20
 
 - **The app now has its own icon.** A colourful filmstrip-with-play-button tile

@@ -252,6 +252,8 @@ final class LibraryStore: ObservableObject {
     private enum Keys {
         static let lastBookmark = "lastProjectBookmark"
         static let recentBookmarks = "recentProjectBookmarks"
+        /// Projects recently copied/posted to (the "Copy to Project" quick menu).
+        static let recentCopyTargets = "recentCopyTargetBookmarks"
     }
     private static let maxRecents = 10
 
@@ -307,6 +309,155 @@ final class LibraryStore: ObservableObject {
             defaults.removeObject(forKey: Keys.lastBookmark)
         }
         defaults.set(storedRecentBookmarks().filter { $0 != data }, forKey: Keys.recentBookmarks)
+    }
+
+    // MARK: - Copy a clip to another project ("post to project")
+
+    /// Projects recently copied to, newest first, for the "Copy to Project"
+    /// quick menu. The open project itself is filtered out — you copy *into*
+    /// another project, never the one you're working in. Resolving for display
+    /// doesn't take access; only the copy itself does.
+    var recentCopyTargets: [RecentProject] {
+        storedCopyTargets().compactMap { data in
+            var stale = false
+            guard let url = try? URL(resolvingBookmarkData: data,
+                                     options: .withSecurityScope,
+                                     relativeTo: nil,
+                                     bookmarkDataIsStale: &stale)
+            else { return nil }
+            return RecentProject(url: url, bookmark: data)
+        }
+        .filter { $0.url.standardizedFileURL != currentProjectURL?.standardizedFileURL }
+    }
+
+    private func storedCopyTargets() -> [Data] {
+        UserDefaults.standard.array(forKey: Keys.recentCopyTargets) as? [Data] ?? []
+    }
+
+    /// Bumps `url` to the front of the recent copy-target list (deduped, capped),
+    /// so the next copy is one click away.
+    private func rememberCopyTarget(_ url: URL) {
+        guard let bookmark = makeBookmark(for: url) else { return }
+        var recents = storedCopyTargets().filter { data in
+            var stale = false
+            let existing = try? URL(resolvingBookmarkData: data,
+                                    options: .withSecurityScope,
+                                    relativeTo: nil, bookmarkDataIsStale: &stale)
+            return existing?.standardizedFileURL != url.standardizedFileURL
+        }
+        recents.insert(bookmark, at: 0)
+        UserDefaults.standard.set(Array(recents.prefix(Self.maxRecents)),
+                                  forKey: Keys.recentCopyTargets)
+        // Refresh the menu so the just-used target appears at the top next time.
+        objectWillChange.send()
+    }
+
+    /// Copies one picked clip from the open project into another ClipDiary
+    /// project on disk ("post to project"): copies its media — or, for a card
+    /// clip, the card's whole folder — into the target and appends a fresh clip
+    /// entry to the target's `clips.json`. The target is always a *different*
+    /// project (the app only keeps one open), so its in-memory store isn't
+    /// involved: we edit its files directly and the clip shows up when it's next
+    /// opened. The copy lands at the end of its day (new `createdAt`) so it can
+    /// be reordered in the target. Re-posting the same media reuses the target's
+    /// existing copy, matched by content hash, instead of duplicating the file.
+    /// Returns whether it succeeded; on failure `lastError` explains why.
+    @discardableResult
+    func copyClip(_ clip: Clip, toProjectAt targetURL: URL) -> Bool {
+        guard let clipsDir, let cardsDir else { return false }
+        guard targetURL.standardizedFileURL != currentProjectURL?.standardizedFileURL else {
+            lastError = "That’s the project you’re copying from — choose a different one."
+            return false
+        }
+
+        let didStart = targetURL.startAccessingSecurityScopedResource()
+        defer { if didStart { targetURL.stopAccessingSecurityScopedResource() } }
+
+        let targetMeta = targetURL.appendingPathComponent("clips.json")
+        guard FileManager.default.fileExists(atPath: targetMeta.path) else {
+            lastError = "“\(targetURL.lastPathComponent)” isn’t a ClipDiary project (no clips.json)."
+            return false
+        }
+        var targetClips: [Clip]
+        do {
+            targetClips = try Self.loadClips(from: targetMeta)
+        } catch {
+            lastError = "Could not read the clip list of “\(targetURL.lastPathComponent)”: \(error.localizedDescription)"
+            return false
+        }
+
+        var copy = clip
+        copy.id = UUID()
+        copy.createdAt = Date()
+        // The clip wasn't picked from the target's source folders, so its
+        // original source path doesn't apply there.
+        copy.sourcePath = nil
+
+        if let cardID = clip.cardID {
+            // A card clip has no media bytes — copy the card's folder so the
+            // live reference still resolves in the target (skip it if the
+            // target already has that card from an earlier copy).
+            let srcCardDir = cardsDir.appendingPathComponent(cardID.uuidString, isDirectory: true)
+            guard FileManager.default.fileExists(atPath: srcCardDir.path) else {
+                lastError = "This card no longer exists, so it can’t be copied."
+                return false
+            }
+            let dstCardDir = targetURL.appendingPathComponent("Cards", isDirectory: true)
+                .appendingPathComponent(cardID.uuidString, isDirectory: true)
+            if !FileManager.default.fileExists(atPath: dstCardDir.path) {
+                do {
+                    try FileManager.default.createDirectory(
+                        at: dstCardDir.deletingLastPathComponent(),
+                        withIntermediateDirectories: true)
+                    try FileManager.default.copyItem(at: srcCardDir, to: dstCardDir)
+                } catch {
+                    lastError = "Could not copy the card into “\(targetURL.lastPathComponent)”: \(error.localizedDescription)"
+                    return false
+                }
+            }
+            // cardID and the empty fileName carry over unchanged.
+        } else {
+            let srcFile = clipsDir.appendingPathComponent(clip.fileName)
+            guard FileManager.default.fileExists(atPath: srcFile.path) else {
+                lastError = "The media file for this clip is missing, so it can’t be copied."
+                return false
+            }
+            let hash = clip.sourceHash ?? Self.contentDigest(of: srcFile)?.hash
+            if let hash, let existing = targetClips.first(where: { $0.sourceHash == hash }) {
+                // Same bytes already in the target — reuse that copy.
+                copy.fileName = existing.fileName
+                copy.sourceHash = existing.sourceHash
+                copy.sourceBytes = existing.sourceBytes
+            } else {
+                let targetClipsDir = targetURL.appendingPathComponent("Clips", isDirectory: true)
+                try? FileManager.default.createDirectory(at: targetClipsDir, withIntermediateDirectories: true)
+                let fallbackExt = clip.kind == .photo ? "jpg" : "mov"
+                let ext = srcFile.pathExtension.isEmpty ? fallbackExt : srcFile.pathExtension
+                let newName = UUID().uuidString + "." + ext
+                let dstFile = targetClipsDir.appendingPathComponent(newName)
+                guard let digest = Self.copyComputingDigest(from: srcFile, to: dstFile) else {
+                    lastError = "Could not copy the clip’s media into “\(targetURL.lastPathComponent)”."
+                    return false
+                }
+                copy.fileName = newName
+                copy.sourceHash = digest.hash
+                copy.sourceBytes = digest.bytes
+            }
+        }
+
+        targetClips.append(copy)
+        do {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(targetClips)
+            try data.write(to: targetMeta, options: .atomic)
+        } catch {
+            lastError = "Could not update the clip list of “\(targetURL.lastPathComponent)”: \(error.localizedDescription)"
+            return false
+        }
+        rememberCopyTarget(targetURL)
+        return true
     }
 
     // MARK: - Source folders
@@ -1266,4 +1417,19 @@ func presentOpenProjectPanel(store: LibraryStore) {
     panel.message = "Choose a ClipDiary project folder."
     guard panel.runModal() == .OK, let url = panel.url else { return }
     store.openProject(at: url)
+}
+
+/// Open-panel flow for choosing a *target* project to copy a clip into
+/// ("post to project"). Unlike `presentOpenProjectPanel` it doesn't switch the
+/// open project — it just returns the chosen folder (nil if cancelled).
+@MainActor
+func presentChooseCopyTargetPanel() -> URL? {
+    let panel = NSOpenPanel()
+    panel.canChooseDirectories = true
+    panel.canChooseFiles = false
+    panel.allowsMultipleSelection = false
+    panel.prompt = "Copy Here"
+    panel.message = "Choose the ClipDiary project to copy this clip into."
+    guard panel.runModal() == .OK else { return nil }
+    return panel.url
 }

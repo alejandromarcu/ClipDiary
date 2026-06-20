@@ -180,6 +180,11 @@ struct PhotoEditor: View {
             DayPickerField(selection: $editedDate)
             if !isCard { dateStampToggle }
             if isCard && !isReview { editCardButton }
+            // Library mode only: post this picked clip/card to another project.
+            if !isReview {
+                Divider()
+                CopyClipToProjectMenu(clip: editedClip)
+            }
             Spacer(minLength: 0)
             HStack {
                 revertButton
