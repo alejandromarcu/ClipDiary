@@ -116,6 +116,58 @@ struct DayPickerField: View {
     }
 }
 
+/// Library-mode control in the day window's clip editors: copies the picked
+/// clip into *another* ClipDiary project ("post to project") — e.g. pulling a
+/// clip from a shared main timeline into one child's own project. The menu
+/// lists projects copied to recently for one-click reuse, plus
+/// "Choose Project…" to navigate to any project folder. A brief confirmation
+/// shows after a successful copy.
+struct CopyClipToProjectMenu: View {
+    @EnvironmentObject var store: LibraryStore
+    /// The clip to copy (the editor's current working copy, date applied).
+    let clip: Clip
+    @State private var confirmation: String?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Menu {
+                let recents = store.recentCopyTargets
+                ForEach(recents) { project in
+                    Button(project.name) { copy(to: project.url, named: project.name) }
+                }
+                if !recents.isEmpty { Divider() }
+                Button("Choose Project…") {
+                    if let url = presentChooseCopyTargetPanel() {
+                        copy(to: url, named: url.lastPathComponent)
+                    }
+                }
+            } label: {
+                Label("Copy to Project", systemImage: "square.and.arrow.up.on.square")
+            }
+            .fixedSize()
+            .help("Copy this clip into another ClipDiary project (e.g. one child's own timeline)")
+
+            if let confirmation {
+                Label(confirmation, systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .transition(.opacity)
+            }
+        }
+    }
+
+    private func copy(to url: URL, named name: String) {
+        guard store.copyClip(clip, toProjectAt: url) else { return }
+        withAnimation { confirmation = "Copied to \(name)" }
+        Task {
+            try? await Task.sleep(for: .seconds(2.5))
+            withAnimation { confirmation = nil }
+        }
+    }
+}
+
 /// Context block shown atop the review pane: the source item's day plus a few
 /// detail lines (its position in the day, file name and time). Built by the
 /// review window and handed to the embedded editor so it can sit beside the
@@ -305,6 +357,11 @@ struct TrimEditor: View {
             Divider()
             DayPickerField(selection: $editedDate)
             dateStampToggle
+            // Library mode only: post this picked clip to another project.
+            if !isReview {
+                Divider()
+                CopyClipToProjectMenu(clip: editedClip)
+            }
             Spacer(minLength: 0)
             HStack {
                 revertButton
