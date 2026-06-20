@@ -262,6 +262,9 @@ struct TrimEditor: View {
         .onChange(of: editedDate) { _, _ in onLiveEdit?(editedClip) }
         .onChange(of: clip.inSeconds) { _, newValue in seek(to: newValue) }
         .onChange(of: clip.outSeconds) { _, newValue in seek(to: newValue) }
+        .onChange(of: clip.volume) { _, newValue in
+            player?.volume = Float(min(1, max(0, newValue)))
+        }
         .sheet(isPresented: $showTransition) {
             TransitionEditorSheet(transition: $clip.transition, maxSeconds: clip.trimmedDuration)
         }
@@ -298,6 +301,7 @@ struct TrimEditor: View {
             TagRow(tags: $clip.tags)
             captionField
             TransitionRow(transition: clip.transition) { showTransition = true }
+            volumeRow
             Divider()
             DayPickerField(selection: $editedDate)
             dateStampToggle
@@ -384,6 +388,53 @@ struct TrimEditor: View {
                 .foregroundStyle(.secondary)
             TextField("Caption (optional)", text: $clip.caption)
                 .textFieldStyle(.roundedBorder)
+        }
+    }
+
+    /// Audio level for this clip in the rendered video: 0% mutes, 100% is the
+    /// original, up to 400% boosts (handy for a very quiet clip — though a clip
+    /// that's already loud will clip before reaching the top). The speaker icon
+    /// reflects the level and resets it to 100% when clicked.
+    private var volumeRow: some View {
+        HStack(spacing: 8) {
+            Button {
+                clip.volume = 1
+                commitLiveEdit()
+            } label: {
+                Image(systemName: volumeSymbol)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18)
+            }
+            .buttonStyle(.plain)
+            .help("Reset volume to 100%")
+            Slider(value: $clip.volume, in: 0...4) { editing in
+                // Commit on release so an already-open Preview Day window
+                // rebuilds with the new level instead of replaying the old one.
+                if !editing { commitLiveEdit() }
+            }
+            Text("\(Int((clip.volume * 100).rounded()))%")
+                .font(.callout.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 44, alignment: .trailing)
+        }
+        .help("How loud this clip's audio plays in the rendered video (0–400%). A boost above 100% is applied to the exported file — the in-app preview can't play louder than 100%, so use Save… to hear it.")
+    }
+
+    /// Push the current edit straight to the store so an open Preview Day
+    /// window (and the calendar) reflect it immediately. Editors otherwise only
+    /// persist on disappear, which leaves an open preview playing the old audio.
+    /// Library mode only — review drafts aren't in the store yet.
+    private func commitLiveEdit() {
+        guard !isReview else { return }
+        saveEdits()
+    }
+
+    private var volumeSymbol: String {
+        switch clip.volume {
+        case ..<0.01: return "speaker.slash.fill"
+        case ..<0.67: return "speaker.wave.1.fill"
+        case ..<1.34: return "speaker.wave.2.fill"
+        default: return "speaker.wave.3.fill"
         }
     }
 
@@ -479,6 +530,10 @@ struct TrimEditor: View {
     private func setUp() {
         let url = sourceURL ?? store.fileURL(for: clip)
         let newPlayer = AVPlayer(url: url)
+        // AVPlayer's volume is capped at 1.0, so the scrub preview can reflect
+        // muting/attenuation but not a >100% boost (that still applies in the
+        // rendered video via the export's audio mix).
+        newPlayer.volume = Float(min(1, max(0, clip.volume)))
         player = newPlayer
         seek(to: clip.inSeconds)
 

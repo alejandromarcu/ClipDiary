@@ -272,6 +272,10 @@ struct Clip: Identifiable, Codable, Equatable, Hashable {
     /// Optional fade in/out applied to this clip's segment in the rendered
     /// video. Edited in the day editor and review window.
     var transition = SegmentTransition()
+    /// Playback level for this clip's audio in the rendered video, 1.0 = 100%.
+    /// 0 mutes; values above 1 boost the volume (the editor caps it at 4.0 =
+    /// 400%). Videos only — photos are silent, so it's ignored for them.
+    var volume: Double = 1.0
 
     var trimmedDuration: Double { max(0, outSeconds - inSeconds) }
 
@@ -294,7 +298,7 @@ struct Clip: Identifiable, Codable, Equatable, Hashable {
     enum CodingKeys: String, CodingKey {
         case id, fileName, date, inSeconds, outSeconds, durationSeconds, createdAt,
              tags, kind, crop, showsDateOverlay, caption, sourcePath,
-             sourceHash, sourceBytes, transition
+             sourceHash, sourceBytes, transition, volume
     }
 }
 
@@ -318,6 +322,7 @@ extension Clip {
         sourceHash = try container.decodeIfPresent(String.self, forKey: .sourceHash)
         sourceBytes = try container.decodeIfPresent(Int64.self, forKey: .sourceBytes)
         transition = try container.decodeIfPresent(SegmentTransition.self, forKey: .transition) ?? SegmentTransition()
+        volume = try container.decodeIfPresent(Double.self, forKey: .volume) ?? 1.0
     }
 }
 

@@ -7,6 +7,16 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.8.0] - 2026-06-19
+
+- Video clips now have a **volume control** in the clip editor. Each clip
+  defaults to 100% and can be dialed anywhere from 0% (muted) to 400% (boosted —
+  useful for a very quiet clip) with the slider; click the speaker icon to snap
+  back to 100%. The level is applied to the exported video and rides along with
+  any fade in/out. The in-app preview reflects muting/attenuation but plays
+  boosts above 100% at 100% (a player limitation) — use Save… to hear a boost.
+  Photos are silent, so they don't show the control.
+
 ## [1.7.0] - 2026-06-19
 
 - The Review window and the per-day editor are now **one window**. Clicking a

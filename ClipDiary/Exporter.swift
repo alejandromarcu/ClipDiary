@@ -163,6 +163,13 @@ struct Exporter {
         // ramp; the mix is only attached if at least one ramp was added.
         let audioParams = audioTrack.map { AVMutableAudioMixInputParameters(track: $0) }
         var audioMixUsed = false
+        // Each audio clip's volume envelope, collected during the loop and
+        // applied at the end (after the ending fade is known). Every segment is
+        // covered by an explicit ramp so AVFoundation never *interpolates* a
+        // clip's level toward its neighbour's — bare `setVolume` points smear
+        // into each other (a 0% clip ends up merely quiet, not silent).
+        var audioSegments: [(start: CMTime, duration: CMTime,
+                             volume: Float, fadeIn: Double, fadeOut: Double)] = []
 
         // Collect clip file URLs on the main actor before doing AV work.
         let items: [(clip: Clip, url: URL)] = await MainActor.run {
@@ -270,17 +277,12 @@ struct Exporter {
             let (fadeIn, fadeOut) = Self.applyOpacityFades(
                 clip.transition, to: layer, start: cursor, duration: range.duration
             )
-            if clipHasAudio, let audioParams {
-                // The shared volume curve holds its last value, so an earlier
-                // clip's fade-out would otherwise silence every later clip.
-                // Reset the baseline to full at this clip's start (a fade-in
-                // ramp defines its own start, so it only matters without one).
-                if fadeIn <= 0 { audioParams.setVolume(1, at: cursor) }
-                if fadeIn > 0 || fadeOut > 0 {
-                    Self.applyVolumeFades(fadeIn: fadeIn, fadeOut: fadeOut, to: audioParams,
-                                          start: cursor, duration: range.duration)
-                    audioMixUsed = true
-                }
+            let volume = Float(max(0, clip.volume))
+            if clipHasAudio {
+                audioSegments.append((start: cursor, duration: range.duration,
+                                      volume: volume, fadeIn: fadeIn, fadeOut: fadeOut))
+                // A non-default level (or any fade) needs the mix attached.
+                if volume != 1 || fadeIn > 0 || fadeOut > 0 { audioMixUsed = true }
             }
 
             let instruction = AVMutableVideoCompositionInstruction()
@@ -322,14 +324,34 @@ struct Exporter {
                 let fadeDuration = CMTime(seconds: fadeSeconds, preferredTimescale: 600)
                 let range = CMTimeRange(start: totalDuration - fadeDuration, duration: fadeDuration)
                 lastLayer.setOpacityRamp(fromStartOpacity: 1, toEndOpacity: 0, timeRange: range)
-                if let audioParams, insertedAudio {
-                    audioParams.setVolumeRamp(fromStartVolume: 1, toEndVolume: 0, timeRange: range)
-                    audioMixUsed = true
+                // Fold the audio fade into the last audio clip's envelope (so it
+                // ramps from that clip's own level to 0), but only when that clip
+                // actually runs to the end — a trailing silent photo/card means
+                // there's no audio in the fade region to ramp.
+                if insertedAudio, let last = audioSegments.indices.last {
+                    let segEnd = (audioSegments[last].start + audioSegments[last].duration).seconds
+                    if abs(segEnd - totalDuration.seconds) < 0.001 {
+                        audioSegments[last].fadeOut = max(audioSegments[last].fadeOut, fadeSeconds)
+                        audioMixUsed = true
+                    }
                 }
                 // Fade the last segment's date stamp with it, if it has one.
                 if let idx = overlays.firstIndex(where: { $0.timeRange.start == lastSegment.start }) {
                     overlays[idx].fadeOutSeconds = fadeSeconds
                 }
+            }
+        }
+
+        // Apply every audio clip's volume envelope as contiguous ramps. Done
+        // here (not in the loop) so the ending fade above is already folded in.
+        // Default-level clips get a flat 1→1 ramp too: that anchor is what stops
+        // a neighbour's level from interpolating across the segment boundary.
+        if audioMixUsed, let audioParams {
+            for seg in audioSegments {
+                Self.applyVolumeEnvelope(
+                    volume: seg.volume, fadeIn: seg.fadeIn, fadeOut: seg.fadeOut,
+                    to: audioParams, start: seg.start, duration: seg.duration
+                )
             }
         }
 
@@ -613,27 +635,37 @@ struct Exporter {
         return (fadeIn, fadeOut)
     }
 
-    /// Adds matching audio volume ramps for a segment's fades onto the shared
-    /// audio-mix parameters (no-op when both fades are 0).
-    static func applyVolumeFades(
-        fadeIn: Double, fadeOut: Double,
+    /// Writes a clip's whole volume envelope onto the shared audio-mix
+    /// parameters as **contiguous** ramps: an optional fade-in (0→volume), a
+    /// flat plateau (volume→volume) over the middle, and an optional fade-out
+    /// (volume→0). Covering every instant with an explicit ramp is what keeps
+    /// the level constant — a bare `setVolume` point gets linearly interpolated
+    /// toward the next clip's point, so a 0% clip would only be quieter, not
+    /// muted, and a 200% clip barely louder than 100%.
+    static func applyVolumeEnvelope(
+        volume: Float, fadeIn: Double, fadeOut: Double,
         to params: AVMutableAudioMixInputParameters,
         start: CMTime, duration: CMTime
     ) {
-        if fadeIn > 0 {
-            params.setVolumeRamp(
-                fromStartVolume: 0, toEndVolume: 1,
-                timeRange: CMTimeRange(start: start,
-                                       duration: CMTime(seconds: fadeIn, preferredTimescale: 600))
-            )
+        let dur = duration.seconds
+        func at(_ seconds: Double) -> CMTime {
+            start + CMTime(seconds: seconds, preferredTimescale: 600)
         }
-        if fadeOut > 0 {
-            let s = start + CMTime(seconds: duration.seconds - fadeOut, preferredTimescale: 600)
-            params.setVolumeRamp(
-                fromStartVolume: 1, toEndVolume: 0,
-                timeRange: CMTimeRange(start: s,
-                                       duration: CMTime(seconds: fadeOut, preferredTimescale: 600))
-            )
+        // Clamp the two fades so they can't overlap within the segment.
+        let fi = max(0, min(fadeIn, dur))
+        let fo = max(0, min(fadeOut, dur - fi))
+        if fi > 0 {
+            params.setVolumeRamp(fromStartVolume: 0, toEndVolume: volume,
+                                 timeRange: CMTimeRange(start: at(0), end: at(fi)))
+        }
+        let plateauEnd = dur - fo
+        if plateauEnd > fi {
+            params.setVolumeRamp(fromStartVolume: volume, toEndVolume: volume,
+                                 timeRange: CMTimeRange(start: at(fi), end: at(plateauEnd)))
+        }
+        if fo > 0 {
+            params.setVolumeRamp(fromStartVolume: volume, toEndVolume: 0,
+                                 timeRange: CMTimeRange(start: at(plateauEnd), end: at(dur)))
         }
     }
 
