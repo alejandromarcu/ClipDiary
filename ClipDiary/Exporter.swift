@@ -73,6 +73,7 @@ struct Exporter {
         store: LibraryStore,
         outputURL: URL,
         renderSize: CGSize,
+        fadeInSeconds: Double? = nil,
         fadeOutSeconds: Double? = nil,
         creationDate: Date? = nil,
         leading: Bookend? = nil,
@@ -81,7 +82,8 @@ struct Exporter {
     ) async throws {
         let built = try await buildComposition(
             clips: clips, store: store, renderSize: renderSize,
-            fadeOutSeconds: fadeOutSeconds, leading: leading, trailing: trailing
+            fadeInSeconds: fadeInSeconds, fadeOutSeconds: fadeOutSeconds,
+            leading: leading, trailing: trailing
         )
         defer { built.cleanUp() }
 
@@ -131,6 +133,7 @@ struct Exporter {
         clips: [Clip],
         store: LibraryStore,
         renderSize: CGSize,
+        fadeInSeconds: Double? = nil,
         fadeOutSeconds: Double? = nil,
         leading: Bookend? = nil,
         trailing: Bookend? = nil
@@ -148,12 +151,20 @@ struct Exporter {
         var instructions: [AVMutableVideoCompositionInstruction] = []
         var overlays: [DateOverlay] = []
         var cursor = CMTime.zero
+        // The first inserted **clip's** layer + timeline range (never the cover
+        // card, which is handled before the loop), so a first-clip fade-in can
+        // ramp exactly the opening clip.
+        var firstClipLayer: AVMutableVideoCompositionLayerInstruction?
+        var firstClipSegment: CMTimeRange?
+        // True when that opening clip already fades itself in, so the fade-in
+        // below doesn't ramp the same segment a second time.
+        var firstClipFadedIn = false
         // The last successfully inserted clip's layer + timeline range, so an
         // ending fade can ramp exactly that segment (never an earlier one).
         var lastLayer: AVMutableVideoCompositionLayerInstruction?
         var lastSegment: CMTimeRange?
         // True when the last inserted segment already faded itself to black (an
-        // ending card with its own fade-out), so the project ending-fade below
+        // ending card with its own fade-out), so the ending-fade below
         // doesn't ramp the same segment a second time.
         var lastSegmentFadedOut = false
         // Whether any clip contributed audio (an all-photos month has none, so
@@ -290,6 +301,11 @@ struct Exporter {
             instruction.backgroundColor = Self.letterboxColor
             instruction.layerInstructions = [layer]
             instructions.append(instruction)
+            if firstClipLayer == nil {
+                firstClipLayer = layer
+                firstClipSegment = instruction.timeRange
+                firstClipFadedIn = fadeIn > 0
+            }
             lastLayer = layer
             lastSegment = instruction.timeRange
             lastSegmentFadedOut = fadeOut > 0
@@ -312,10 +328,40 @@ struct Exporter {
         guard cursor > .zero else { throw ExportError.noClips }
         let totalDuration = cursor
 
-        // Optional project ending fade to black: ramp the last segment's
-        // opacity (the composition behind it is black) and its audio volume to
-        // zero over the final stretch — but only when that segment didn't
-        // already fade itself (a clip/ending card with its own fade-out wins).
+        // Optional first-clip fade-in from black (when there's no cover card):
+        // ramp the opening clip's opacity up from zero (the composition behind
+        // it is black) and fade its audio + date stamp in over the first stretch
+        // — unless that clip already fades itself in (its own fade-in wins).
+        if let fadeInSeconds, fadeInSeconds > 0,
+           !firstClipFadedIn,
+           let firstClipLayer, let firstClipSegment {
+            let fadeSeconds = min(fadeInSeconds, firstClipSegment.duration.seconds)
+            if fadeSeconds > 0 {
+                let fadeDuration = CMTime(seconds: fadeSeconds, preferredTimescale: 600)
+                let range = CMTimeRange(start: firstClipSegment.start, duration: fadeDuration)
+                firstClipLayer.setOpacityRamp(fromStartOpacity: 0, toEndOpacity: 1, timeRange: range)
+                // Fold the audio fade into the opening audio clip's envelope, but
+                // only when that clip actually starts the video (a leading silent
+                // photo means there's no audio in the fade region to ramp).
+                if insertedAudio, let first = audioSegments.indices.first {
+                    let segStart = audioSegments[first].start.seconds
+                    if abs(segStart - firstClipSegment.start.seconds) < 0.001 {
+                        audioSegments[first].fadeIn = max(audioSegments[first].fadeIn, fadeSeconds)
+                        audioMixUsed = true
+                    }
+                }
+                // Fade the opening segment's date stamp in with it, if it has one.
+                if let idx = overlays.firstIndex(where: { $0.timeRange.start == firstClipSegment.start }) {
+                    overlays[idx].fadeInSeconds = max(overlays[idx].fadeInSeconds, fadeSeconds)
+                }
+            }
+        }
+
+        // Optional last-clip fade-out to black (when there's no ending card):
+        // ramp the last segment's opacity (the composition behind it is black)
+        // and its audio volume to zero over the final stretch — but only when
+        // that segment didn't already fade itself (a clip/ending card with its
+        // own fade-out wins).
         if let fadeOutSeconds, fadeOutSeconds > 0,
            !lastSegmentFadedOut,
            let lastLayer, let lastSegment {

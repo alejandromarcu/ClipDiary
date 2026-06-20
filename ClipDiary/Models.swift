@@ -18,12 +18,40 @@ struct BookendSettings: Codable, Equatable {
     /// Fade in/out for the cover and ending cards (the cards carry none).
     var coverTransition = SegmentTransition()
     var endingTransition = SegmentTransition()
+    /// With **no cover card**, fade the first clip in from black over this many
+    /// seconds at the start of the video (0 = no fade). Ignored when a cover
+    /// card is set — the card's own fade opens the video instead.
+    var firstClipFadeInSeconds: Double = 0
+    /// With **no ending card**, fade the last clip out to black over this many
+    /// seconds at the end of the video (0 = no fade). Ignored when an ending
+    /// card is set.
+    var lastClipFadeOutSeconds: Double = 0
 
     /// True when nothing is configured — no cards and no fades. Such an entry is
     /// dropped rather than stored so the period map stays sparse.
     var isDefault: Bool {
         coverCardID == nil && endingCardID == nil
             && coverTransition.isEmpty && endingTransition.isEmpty
+            && firstClipFadeInSeconds == 0 && lastClipFadeOutSeconds == 0
+    }
+
+    init() {}
+
+    // Decoded field-by-field with `decodeIfPresent` so entries written before a
+    // field existed (and future additions) load without migration.
+    enum CodingKeys: String, CodingKey {
+        case coverCardID, endingCardID, coverTransition, endingTransition,
+             firstClipFadeInSeconds, lastClipFadeOutSeconds
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        coverCardID = try c.decodeIfPresent(UUID.self, forKey: .coverCardID)
+        endingCardID = try c.decodeIfPresent(UUID.self, forKey: .endingCardID)
+        coverTransition = try c.decodeIfPresent(SegmentTransition.self, forKey: .coverTransition) ?? SegmentTransition()
+        endingTransition = try c.decodeIfPresent(SegmentTransition.self, forKey: .endingTransition) ?? SegmentTransition()
+        firstClipFadeInSeconds = try c.decodeIfPresent(Double.self, forKey: .firstClipFadeInSeconds) ?? 0
+        lastClipFadeOutSeconds = try c.decodeIfPresent(Double.self, forKey: .lastClipFadeOutSeconds) ?? 0
     }
 }
 
@@ -34,11 +62,6 @@ struct BookendSettings: Codable, Equatable {
 struct ProjectSettings: Codable, Equatable {
     /// The month video's aspect/size, used for both Preview and Export.
     var orientation: Orientation = .landscape
-    /// When true, the month video fades to black over its final
-    /// `fadeOutSeconds` (video, audio and the date stamp together).
-    var fadeOutLastClip: Bool = false
-    /// Length of that fade, in seconds (ignored when `fadeOutLastClip` is off).
-    var fadeOutSeconds: Double = 1.0
     /// The time range last chosen in the Create Video window, remembered per
     /// project. `nil` means "never changed" — the window then defaults to the
     /// current month, which keeps following the calendar instead of sticking.
@@ -55,11 +78,6 @@ struct ProjectSettings: Codable, Equatable {
     /// The calendar month last shown for this project, so reopening it returns
     /// to that month instead of the current one. `nil` → never navigated.
     var lastViewedMonth: Date? = nil
-
-    /// The fade length to actually apply, or nil when fading is disabled.
-    var effectiveFadeOutSeconds: Double? {
-        fadeOutLastClip && fadeOutSeconds > 0 ? fadeOutSeconds : nil
-    }
 
     /// The Cover/Ending bookends saved for `range`'s period (defaults if none).
     func bookends(for range: RenderRange) -> BookendSettings {
@@ -91,15 +109,13 @@ struct ProjectSettings: Codable, Equatable {
     init() {}
 
     enum CodingKeys: String, CodingKey {
-        case orientation, fadeOutLastClip, fadeOutSeconds, renderRange,
+        case orientation, renderRange,
              bookendsByPeriod, lastPhotoDuration, lastViewedMonth
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         orientation = try c.decodeIfPresent(Orientation.self, forKey: .orientation) ?? .landscape
-        fadeOutLastClip = try c.decodeIfPresent(Bool.self, forKey: .fadeOutLastClip) ?? false
-        fadeOutSeconds = try c.decodeIfPresent(Double.self, forKey: .fadeOutSeconds) ?? 1.0
         renderRange = try c.decodeIfPresent(RenderRange.self, forKey: .renderRange)
         bookendsByPeriod = try c.decodeIfPresent([String: BookendSettings].self, forKey: .bookendsByPeriod) ?? [:]
         lastPhotoDuration = try c.decodeIfPresent(Double.self, forKey: .lastPhotoDuration) ?? LibraryStore.defaultPhotoDuration

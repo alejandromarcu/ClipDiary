@@ -118,3 +118,82 @@ struct TransitionEditorSheet: View {
         )
     }
 }
+
+/// Sheet for a single clip-level fade duration — the first-clip fade-in or
+/// last-clip fade-out offered in the Create Video window when there's no
+/// Cover/Ending card. The simpler sibling of `TransitionEditorSheet` (one fade,
+/// a plain `Double`), capped to the target clip's length.
+struct ClipFadeSheet: View {
+    @Binding var seconds: Double
+    /// Sheet heading, e.g. "Fade In First Clip".
+    var title: String
+    /// The toggle's label, e.g. "Fade in" / "Fade out".
+    var fadeLabel: String
+    /// One-line explanation shown under the title.
+    var message: String
+    /// The target clip's length; the fade is capped to it.
+    var maxSeconds: Double
+
+    @Environment(\.dismiss) private var dismiss
+
+    private var upperBound: Double { max(0.1, maxSeconds) }
+    private var range: ClosedRange<Double> { 0.1...upperBound }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(title)
+                .font(.title3.bold())
+            Text(maxSeconds > 0
+                 ? "\(message) Capped at the clip's length (\(String(format: "%.1f", maxSeconds))s)."
+                 : message)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                Toggle(fadeLabel, isOn: isOn)
+                    .toggleStyle(.checkbox)
+                Spacer()
+                // Only the duration controls dim when the fade is off — the
+                // toggle stays live (mirrors `TransitionEditorSheet`).
+                Group {
+                    TextField("", value: secondsBinding, format: .number.precision(.fractionLength(1)))
+                        .labelsHidden()
+                        .multilineTextAlignment(.trailing)
+                        .monospacedDigit()
+                        .frame(width: 44)
+                    Text("s")
+                    Stepper("", value: secondsBinding, in: range, step: 0.1)
+                        .labelsHidden()
+                }
+                .disabled(!isOn.wrappedValue)
+                .foregroundStyle(isOn.wrappedValue ? .primary : .secondary)
+            }
+
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(24)
+        .frame(width: 380)
+    }
+
+    /// On/off for the fade: flipping on seeds a default length (capped), off zeroes it.
+    private var isOn: Binding<Bool> {
+        Binding(
+            get: { seconds > 0 },
+            set: { seconds = $0 ? min(SegmentTransition.defaultFadeSeconds, upperBound) : 0 }
+        )
+    }
+
+    /// Seconds, clamped to the valid range on every write.
+    private var secondsBinding: Binding<Double> {
+        Binding(
+            get: { seconds },
+            set: { seconds = min(max($0, range.lowerBound), range.upperBound) }
+        )
+    }
+}

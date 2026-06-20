@@ -15,6 +15,13 @@ and versions follow [Semantic Versioning](https://semver.org/)
   can choose that month's own bookends — switch back to "2025" and your earlier
   choices reappear. Each month, year, custom span, and "All clips" keeps its own
   cover/ending, and Preview and Save use whichever belongs to the chosen range.
+- When **Cover is None**, the fade button now offers **"Fade in first clip"** —
+  the video opens by fading the first clip up from black. Likewise, when
+  **Ending is None**, **"Fade out last clip"** fades the last clip to black at
+  the end (video, audio and date stamp together). Both are remembered per time
+  range alongside the cover/ending choices. This replaces the old project-wide
+  "Fade out the last clip" setting, which has been removed from Project Settings
+  — the ending fade now lives in the Create Video window, per range.
 
 ## [1.8.0] - 2026-06-19
 

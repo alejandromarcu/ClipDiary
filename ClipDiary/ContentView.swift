@@ -644,12 +644,16 @@ struct RenderSheet: View {
 
     private var calendar: Calendar { Calendar.current }
 
+    /// The clips the current range/tag would render, in play order — also what
+    /// the bookend fades cap themselves to (first/last clip length).
+    private var clips: [Clip] { store.clips(in: range, taggedWith: tagFilter) }
+
     private func setRange(_ new: RenderRange) {
         range = new
     }
 
     var body: some View {
-        let clips = store.clips(in: range, taggedWith: tagFilter)
+        let clips = self.clips
         let total = clips.reduce(0) { $0 + $1.trimmedDuration }
         let videoCount = clips.filter { $0.kind == .video }.count
         let photoCount = clips.count - videoCount
@@ -716,39 +720,95 @@ struct RenderSheet: View {
             store.updateSettings { $0.setBookends(new, for: range) }
         }
         .sheet(item: $editingBookendFade) { which in
-            let isCover = which == .cover
-            TransitionEditorSheet(
-                transition: isCover ? $bookends.coverTransition : $bookends.endingTransition,
-                maxSeconds: cardDuration(isCover ? bookends.coverCardID : bookends.endingCardID)
-            )
+            switch which {
+            case .cover:
+                if bookends.coverCardID != nil {
+                    TransitionEditorSheet(transition: $bookends.coverTransition,
+                                          maxSeconds: cardDuration(bookends.coverCardID))
+                } else {
+                    ClipFadeSheet(
+                        seconds: $bookends.firstClipFadeInSeconds,
+                        title: "Fade In First Clip", fadeLabel: "Fade in",
+                        message: "With no cover card, fade the first clip in from black at the very start of the video.",
+                        maxSeconds: clips.first?.trimmedDuration ?? 0)
+                }
+            case .ending:
+                if bookends.endingCardID != nil {
+                    TransitionEditorSheet(transition: $bookends.endingTransition,
+                                          maxSeconds: cardDuration(bookends.endingCardID))
+                } else {
+                    ClipFadeSheet(
+                        seconds: $bookends.lastClipFadeOutSeconds,
+                        title: "Fade Out Last Clip", fadeLabel: "Fade out",
+                        message: "With no ending card, fade the last clip out to black at the very end of the video.",
+                        maxSeconds: clips.last?.trimmedDuration ?? 0)
+                }
+            }
         }
     }
 
     // MARK: Cover / ending cards
 
-    /// Cover and Ending card selectors, each with a fade control. Persisted per
-    /// project (via `onChange`) and rendered onto the start/end of Preview/Export.
+    /// Cover and Ending selectors, each with a fade control. With a card chosen
+    /// the fade applies to the card; with **None** it instead fades the first
+    /// clip in / the last clip out (the video's own opening/closing fade).
+    /// Persisted per period (via `onChange`) and applied by Preview/Export.
     @ViewBuilder
     private var bookendPicker: some View {
+        let hasClips = !clips.isEmpty
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("Cover")
                     .frame(width: 60, alignment: .leading)
                 cardMenu(selection: $bookends.coverCardID)
-                fadeButton(bookends.coverTransition, enabled: bookends.coverCardID != nil) { editingBookendFade = .cover }
+                fadeButton(label: coverFadeLabel,
+                           enabled: bookends.coverCardID != nil || hasClips,
+                           help: bookends.coverCardID != nil
+                               ? "Fade this card in and/or out"
+                               : "Fade the first clip in from black") {
+                    editingBookendFade = .cover
+                }
             }
             HStack {
                 Text("Ending")
                     .frame(width: 60, alignment: .leading)
                 cardMenu(selection: $bookends.endingCardID)
-                fadeButton(bookends.endingTransition, enabled: bookends.endingCardID != nil) { editingBookendFade = .ending }
+                fadeButton(label: endingFadeLabel,
+                           enabled: bookends.endingCardID != nil || hasClips,
+                           help: bookends.endingCardID != nil
+                               ? "Fade this card in and/or out"
+                               : "Fade the last clip out to black") {
+                    editingBookendFade = .ending
+                }
             }
             if store.cards.isEmpty {
-                Text("No cards yet — design a cover or ending with the Cards button in the toolbar.")
+                Text("No cards yet — design a cover or ending with the Cards button in the toolbar. With None, the fade still works on the first/last clip.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    /// Fade-button label for the Cover row: the card's transition when a card is
+    /// chosen, otherwise the first-clip fade-in state.
+    private var coverFadeLabel: String {
+        if bookends.coverCardID != nil {
+            return bookends.coverTransition.isEmpty ? "Fade…" : bookends.coverTransition.summary
+        }
+        return bookends.firstClipFadeInSeconds > 0
+            ? String(format: "Fade in %.1fs", bookends.firstClipFadeInSeconds)
+            : "Fade in…"
+    }
+
+    /// Fade-button label for the Ending row (mirrors `coverFadeLabel`).
+    private var endingFadeLabel: String {
+        if bookends.endingCardID != nil {
+            return bookends.endingTransition.isEmpty ? "Fade…" : bookends.endingTransition.summary
+        }
+        return bookends.lastClipFadeOutSeconds > 0
+            ? String(format: "Fade out %.1fs", bookends.lastClipFadeOutSeconds)
+            : "Fade out…"
     }
 
     private func cardMenu(selection: Binding<UUID?>) -> some View {
@@ -762,14 +822,13 @@ struct RenderSheet: View {
         .disabled(store.cards.isEmpty)
     }
 
-    private func fadeButton(_ transition: SegmentTransition, enabled: Bool,
+    private func fadeButton(label: String, enabled: Bool, help: String,
                             _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Label(transition.isEmpty ? "Fade…" : transition.summary,
-                  systemImage: "circle.lefthalf.filled")
+            Label(label, systemImage: "circle.lefthalf.filled")
         }
         .disabled(!enabled)
-        .help("Fade this card in and/or out")
+        .help(help)
         .fixedSize()
     }
 
@@ -899,7 +958,7 @@ struct RenderSheet: View {
         errorMessage = nil
         progress = 0
         let renderSize = store.settings.orientation.size
-        let fadeOutSeconds = store.settings.effectiveFadeOutSeconds
+        let (fadeInSeconds, fadeOutSeconds) = bookendClipFades(bookends)
         let creationDate = range.exportCreationDate(clips: clips)
         // Render the Cover/Ending cards now (on the main actor) so the export
         // task just splices the finished images on.
@@ -910,7 +969,8 @@ struct RenderSheet: View {
             do {
                 try await Exporter.exportMovie(
                     clips: clips, store: store, outputURL: url,
-                    renderSize: renderSize, fadeOutSeconds: fadeOutSeconds,
+                    renderSize: renderSize,
+                    fadeInSeconds: fadeInSeconds, fadeOutSeconds: fadeOutSeconds,
                     creationDate: creationDate, leading: leading, trailing: trailing
                 ) { value in
                     Task { @MainActor in progress = value }
@@ -928,6 +988,16 @@ struct RenderSheet: View {
     private func bookend(for id: UUID?, transition: SegmentTransition, renderSize: CGSize) -> Bookend? {
         cardBookend(id, transition: transition, store: store, renderSize: renderSize)
     }
+}
+
+/// The render-level fades a period's bookends imply: a first-clip fade-in when
+/// there's no cover card, a last-clip fade-out when there's no ending card (nil
+/// = none). A chosen card supplies the opening/closing instead, so its side is
+/// nil. Shared by Export and Preview so they stay in sync.
+func bookendClipFades(_ b: BookendSettings) -> (fadeIn: Double?, fadeOut: Double?) {
+    let fadeIn = (b.coverCardID == nil && b.firstClipFadeInSeconds > 0) ? b.firstClipFadeInSeconds : nil
+    let fadeOut = (b.endingCardID == nil && b.lastClipFadeOutSeconds > 0) ? b.lastClipFadeOutSeconds : nil
+    return (fadeIn, fadeOut)
 }
 
 /// Resolves a settings card id to a rendered Cover/Ending segment (nil for
@@ -969,32 +1039,6 @@ struct ProjectSettingsSheet: View {
                 .padding(6)
             }
 
-            GroupBox("Ending") {
-                VStack(alignment: .leading, spacing: 8) {
-                    Toggle("Fade out the last clip", isOn: binding(\.fadeOutLastClip))
-                    HStack(spacing: 6) {
-                        Text("Fade duration")
-                        Spacer()
-                        TextField("Fade duration", value: fadeSecondsBinding,
-                                  format: .number.precision(.fractionLength(1)))
-                            .labelsHidden()
-                            .multilineTextAlignment(.trailing)
-                            .monospacedDigit()
-                            .frame(width: 44)
-                        Text("s")
-                        Stepper("Fade duration", value: fadeSecondsBinding,
-                                in: Self.fadeSecondsRange, step: 0.1)
-                            .labelsHidden()
-                    }
-                    .disabled(!store.settings.fadeOutLastClip)
-                    .foregroundStyle(store.settings.fadeOutLastClip ? .primary : .secondary)
-                    Text("Fades the video, audio and date stamp to black at the very end of the month.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(6)
-            }
-
             GroupBox("Source Folders") {
                 SourceFoldersSection()
                     .padding(6)
@@ -1008,22 +1052,6 @@ struct ProjectSettingsSheet: View {
         }
         .padding(24)
         .frame(width: 580)
-    }
-
-    private static let fadeSecondsRange: ClosedRange<Double> = 0.3...5.0
-
-    /// Fade-duration binding that clamps to the valid range — the `TextField`
-    /// lets the user type any number, so the bounds can't live on the `Stepper`
-    /// alone (those only limit its arrows).
-    private var fadeSecondsBinding: Binding<Double> {
-        Binding(
-            get: { store.settings.fadeOutSeconds },
-            set: { newValue in
-                let clamped = min(max(newValue, Self.fadeSecondsRange.lowerBound),
-                                  Self.fadeSecondsRange.upperBound)
-                store.updateSettings { $0.fadeOutSeconds = clamped }
-            }
-        )
     }
 
     /// A two-way binding into the open project's settings that persists on
@@ -1042,11 +1070,9 @@ struct ProjectSettingsSheet: View {
 struct PreviewRequest: Codable, Hashable {
     var range: RenderRange
     var tagFilter: String?
-    /// The ending fade-to-black is meant for the very last clip of a full
-    /// render, so the day editor's single-day preview opts out of it.
-    var includeEndingFade: Bool = true
-    /// Whether to splice in the project's Cover/Ending cards. Off for the day
-    /// editor's single-day preview (those bookend a whole video, not one day).
+    /// Whether to splice in the period's Cover/Ending cards and their fades (the
+    /// first-clip fade-in / last-clip fade-out included). Off for the day
+    /// editor's single-day preview — those bookend a whole video, not one day.
     var includeBookends: Bool = true
 }
 
@@ -1064,7 +1090,6 @@ struct PreviewWindow: View {
     @Environment(\.dismiss) private var dismiss
     let range: RenderRange
     var tagFilter: String?
-    var includeEndingFade: Bool = true
     var includeBookends: Bool = true
 
     @State private var built: MonthComposition?
@@ -1171,13 +1196,14 @@ struct PreviewWindow: View {
         let clips = store.clips(in: range, taggedWith: tagFilter)
         let renderSize = store.settings.orientation.size
         let bookends = store.settings.bookends(for: range)
+        let (fadeIn, fadeOut) = includeBookends ? bookendClipFades(bookends) : (nil, nil)
         let leading = includeBookends ? cardBookend(bookends.coverCardID, transition: bookends.coverTransition, store: store, renderSize: renderSize) : nil
         let trailing = includeBookends ? cardBookend(bookends.endingCardID, transition: bookends.endingTransition, store: store, renderSize: renderSize) : nil
         do {
             let built = try await Exporter.buildComposition(
                 clips: clips, store: store,
                 renderSize: renderSize,
-                fadeOutSeconds: includeEndingFade ? store.settings.effectiveFadeOutSeconds : nil,
+                fadeInSeconds: fadeIn, fadeOutSeconds: fadeOut,
                 leading: leading, trailing: trailing
             )
             // A settings change cancels and restarts this task; a stale build
