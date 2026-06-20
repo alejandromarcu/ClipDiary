@@ -7,6 +7,12 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.10.1] - 2026-06-20
+
+- **The app now has its own icon.** A colourful filmstrip-with-play-button tile
+  (sunset gradient) replaces the blank default icon, so ClipDiary is
+  recognisable in the Dock, Launchpad, and the app switcher.
+
 ## [1.10.0] - 2026-06-20
 
 - **Cards are now live everywhere they're used.** Editing a card — its text,
