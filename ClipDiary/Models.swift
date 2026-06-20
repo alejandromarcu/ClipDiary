@@ -18,6 +18,11 @@ struct BookendSettings: Codable, Equatable {
     /// Fade in/out for the cover and ending cards (the cards carry none).
     var coverTransition = SegmentTransition()
     var endingTransition = SegmentTransition()
+    /// How long the cover / ending card is shown, in seconds. Cards no longer
+    /// carry a duration, so it's set here per period (only used when the
+    /// matching card is non-nil).
+    var coverDurationSeconds: Double = Card.defaultDisplaySeconds
+    var endingDurationSeconds: Double = Card.defaultDisplaySeconds
     /// With **no cover card**, fade the first clip in from black over this many
     /// seconds at the start of the video (0 = no fade). Ignored when a cover
     /// card is set — the card's own fade opens the video instead.
@@ -41,6 +46,7 @@ struct BookendSettings: Codable, Equatable {
     // field existed (and future additions) load without migration.
     enum CodingKeys: String, CodingKey {
         case coverCardID, endingCardID, coverTransition, endingTransition,
+             coverDurationSeconds, endingDurationSeconds,
              firstClipFadeInSeconds, lastClipFadeOutSeconds
     }
 
@@ -50,6 +56,8 @@ struct BookendSettings: Codable, Equatable {
         endingCardID = try c.decodeIfPresent(UUID.self, forKey: .endingCardID)
         coverTransition = try c.decodeIfPresent(SegmentTransition.self, forKey: .coverTransition) ?? SegmentTransition()
         endingTransition = try c.decodeIfPresent(SegmentTransition.self, forKey: .endingTransition) ?? SegmentTransition()
+        coverDurationSeconds = try c.decodeIfPresent(Double.self, forKey: .coverDurationSeconds) ?? Card.defaultDisplaySeconds
+        endingDurationSeconds = try c.decodeIfPresent(Double.self, forKey: .endingDurationSeconds) ?? Card.defaultDisplaySeconds
         firstClipFadeInSeconds = try c.decodeIfPresent(Double.self, forKey: .firstClipFadeInSeconds) ?? 0
         lastClipFadeOutSeconds = try c.decodeIfPresent(Double.self, forKey: .lastClipFadeOutSeconds) ?? 0
     }
@@ -232,6 +240,36 @@ enum RenderRange: Codable, Hashable {
         }
     }
 
+    /// Reconstructs a range from a `periodKey` (the inverse of `periodKey`), so a
+    /// stored bookend key can be shown with its human `label`. Returns nil for an
+    /// unrecognized key.
+    init?(periodKey key: String) {
+        let cal = Calendar.current
+        if key == "all" {
+            self = .all
+        } else if key.hasPrefix("month:") {
+            let parts = key.dropFirst("month:".count).split(separator: "-")
+            guard parts.count == 2, let y = Int(parts[0]), let m = Int(parts[1]),
+                  let date = cal.date(from: DateComponents(year: y, month: m, day: 1))
+            else { return nil }
+            self = .month(date)
+        } else if key.hasPrefix("year:") {
+            guard let y = Int(key.dropFirst("year:".count)),
+                  let date = cal.date(from: DateComponents(year: y, month: 1, day: 1))
+            else { return nil }
+            self = .year(date)
+        } else if key.hasPrefix("custom:") {
+            let parts = key.dropFirst("custom:".count).components(separatedBy: "..")
+            guard parts.count == 2,
+                  let start = Self.fileDateFormatter.date(from: parts[0]),
+                  let end = Self.fileDateFormatter.date(from: parts[1])
+            else { return nil }
+            self = .custom(start: start, end: end)
+        } else {
+            return nil
+        }
+    }
+
     /// The representative date a range hangs off — its month/year, the start of
     /// a custom range, or today for `.all`. Used to seed the picker controls.
     var anchorDate: Date {
@@ -312,6 +350,12 @@ struct Clip: Identifiable, Codable, Equatable, Hashable {
     var kind: ClipKind = .video
     /// Photos only: normalized crop (nil = whole image).
     var crop: CropRect? = nil
+    /// When set, this `.photo` clip is a **live reference** to a designed card
+    /// (matched by id in `LibraryStore.cards`): it has no media file in `Clips/`
+    /// — the card is rendered fresh from its current document for thumbnails,
+    /// preview and export, so editing the card updates the placement. Its
+    /// display duration stays per-placement (in outSeconds/durationSeconds).
+    var cardID: UUID? = nil
     /// Whether the month render burns this clip's date into the bottom-left
     /// corner. Off by default for 1SE imports, whose frames already carry a
     /// stamp; also handy off for cover photos.
@@ -342,6 +386,9 @@ struct Clip: Identifiable, Codable, Equatable, Hashable {
 
     var trimmedDuration: Double { max(0, outSeconds - inSeconds) }
 
+    /// True when this clip is a live reference to a designed card (no media file).
+    var isCard: Bool { cardID != nil }
+
     /// Changes when the frame a thumbnail shows would change: the clip's
     /// identity, its trim in-point (videos) or its crop (photos). Views use
     /// it as a task id to regenerate thumbnails; the store uses it to drop
@@ -360,7 +407,7 @@ struct Clip: Identifiable, Codable, Equatable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id, fileName, date, inSeconds, outSeconds, durationSeconds, createdAt,
-             tags, kind, crop, showsDateOverlay, caption, sourcePath,
+             tags, kind, crop, cardID, showsDateOverlay, caption, sourcePath,
              sourceHash, sourceBytes, transition, volume
     }
 }
@@ -379,6 +426,7 @@ extension Clip {
         tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
         kind = try container.decodeIfPresent(ClipKind.self, forKey: .kind) ?? .video
         crop = try container.decodeIfPresent(CropRect.self, forKey: .crop)
+        cardID = try container.decodeIfPresent(UUID.self, forKey: .cardID)
         showsDateOverlay = try container.decodeIfPresent(Bool.self, forKey: .showsDateOverlay) ?? true
         caption = try container.decodeIfPresent(String.self, forKey: .caption) ?? ""
         sourcePath = try container.decodeIfPresent(String.self, forKey: .sourcePath)

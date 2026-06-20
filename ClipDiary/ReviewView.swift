@@ -726,7 +726,8 @@ private struct RailClipThumb: View {
     var body: some View {
         RailThumbBox(image: image, isSelected: isSelected) {
             HStack(spacing: 2) {
-                Image(systemName: clip.kind == .photo ? "photo" : "video")
+                Image(systemName: clip.isCard ? "rectangle.on.rectangle.angled"
+                                              : (clip.kind == .photo ? "photo" : "video"))
                 Text(formatTime(clip.trimmedDuration))
             }
             .font(.caption2.monospacedDigit())
@@ -735,7 +736,7 @@ private struct RailClipThumb: View {
             .padding(4)
         }
         .help("Click to edit · drag to reorder")
-        .task(id: clip.thumbnailKey) { image = await store.thumbnail(for: clip) }
+        .task(id: store.thumbnailKey(for: clip)) { image = await store.thumbnail(for: clip) }
     }
 }
 

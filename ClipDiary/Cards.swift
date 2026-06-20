@@ -6,9 +6,12 @@ import SwiftUI
 /// A designed title frame ("card"): a background colour plus stacked text and
 /// image elements. Cards are saved per-project under `Cards/<id>/` (a `card.json`
 /// document next to its copied image assets) and used three ways — as a video's
-/// Cover, its Ending, or a clip on a specific day. Using a card **snapshots** it
-/// to an image at that moment (see `LibraryStore.renderCardImage` / `addCard`),
-/// so later edits don't retro-change already-placed clips.
+/// Cover, its Ending, or a clip on a specific day. Every use is a **live
+/// reference**: the card is re-rendered from its current document at render time
+/// (see `LibraryStore.renderCardImage`), so editing a card flows through to its
+/// covers, endings and day placements on the next preview/export. A card carries
+/// no duration of its own — a day placement keeps its own (editable in the photo
+/// editor) and a cover/ending sets one in the Create Video window.
 
 // MARK: - Colour
 
@@ -96,7 +99,6 @@ struct CardDocument: Identifiable, Codable, Equatable, Hashable {
     var name: String
     var background: CardColor = .black
     var aspect: ProjectSettings.Orientation
-    var displaySeconds: Double = Card.defaultDisplaySeconds
     /// Back (index 0) to front.
     var elements: [CardElement] = []
 
@@ -104,18 +106,16 @@ struct CardDocument: Identifiable, Codable, Equatable, Hashable {
 
     init(id: UUID = UUID(), name: String, background: CardColor = .black,
          aspect: ProjectSettings.Orientation,
-         displaySeconds: Double = Card.defaultDisplaySeconds,
          elements: [CardElement] = []) {
         self.id = id
         self.name = name
         self.background = background
         self.aspect = aspect
-        self.displaySeconds = displaySeconds
         self.elements = elements
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, background, aspect, displaySeconds, elements
+        case id, name, background, aspect, elements
     }
 
     /// Lenient decode (every optional field defaulted) so future card options
@@ -126,7 +126,6 @@ struct CardDocument: Identifiable, Codable, Equatable, Hashable {
         name = try c.decode(String.self, forKey: .name)
         background = try c.decodeIfPresent(CardColor.self, forKey: .background) ?? .black
         aspect = try c.decodeIfPresent(ProjectSettings.Orientation.self, forKey: .aspect) ?? .landscape
-        displaySeconds = try c.decodeIfPresent(Double.self, forKey: .displaySeconds) ?? Card.defaultDisplaySeconds
         elements = try c.decodeIfPresent([CardElement].self, forKey: .elements) ?? []
     }
 }
@@ -145,6 +144,9 @@ enum Card {
         ("Mono", "Menlo"),
     ]
 
+    /// Default seconds a card shows when first used — seeds a new day
+    /// placement's (editable) duration and a cover/ending's duration. Cards
+    /// themselves no longer store a duration.
     static let defaultDisplaySeconds: Double = 3
     static let defaultTextSizeFraction: Double = 0.11
 

@@ -110,7 +110,8 @@ struct CardGalleryView: View {
     }
 
     private func cell(_ card: CardDocument) -> some View {
-        VStack(spacing: 6) {
+        let usage = store.cardUsage(of: card.id)
+        return VStack(spacing: 6) {
             CardThumbnail(card: card)
                 .overlay(
                     RoundedRectangle(cornerRadius: 6)
@@ -123,6 +124,10 @@ struct CardGalleryView: View {
                     .font(.callout)
                     .lineLimit(1)
                 Spacer()
+                Text(usage.total == 1 ? "1 use" : "\(usage.total) uses")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .help(usageHelp(usage))
                 Menu {
                     if isPicker { Button("Use This Card") { onPick(card) } }
                     Button("Edit…") { onEdit(card) }
@@ -137,6 +142,18 @@ struct CardGalleryView: View {
             }
         }
         .help(isPicker ? "Click to use this card" : "Click to edit this card")
+    }
+
+    /// Tooltip breakdown behind a cell's usage count, e.g. "Used on 3 days, as
+    /// 1 cover" (or a reassuring note when unused).
+    private func usageHelp(_ u: LibraryStore.CardUsage) -> String {
+        guard !u.isEmpty else { return "Not used in any video yet — safe to change or delete" }
+        var parts: [String] = []
+        let dayCount = u.days.reduce(0) { $0 + $1.count }
+        if dayCount > 0 { parts.append(dayCount == 1 ? "1 day" : "\(dayCount) days") }
+        if !u.coverPeriods.isEmpty { parts.append("\(u.coverPeriods.count) cover\(u.coverPeriods.count == 1 ? "" : "s")") }
+        if !u.endingPeriods.isEmpty { parts.append("\(u.endingPeriods.count) ending\(u.endingPeriods.count == 1 ? "" : "s")") }
+        return "Used: " + parts.joined(separator: ", ")
     }
 }
 
@@ -323,10 +340,6 @@ struct CardEditorView: View {
                                 Text(o == .portrait ? "Portrait" : "Landscape").tag(o)
                             }
                         }
-                        Stepper(value: $doc.displaySeconds, in: 0.5...30, step: 0.5) {
-                            Text(String(format: "Show for %.1f s", doc.displaySeconds))
-                                .monospacedDigit()
-                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(6)
@@ -383,8 +396,66 @@ struct CardEditorView: View {
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
+
+                usageBox
             }
         }
+    }
+
+    // MARK: Usage
+
+    /// "Where it's used" — the periods this card covers/ends and the days it's
+    /// placed on. Since every use is a live reference, editing the card changes
+    /// all of these on the next render; the panel lets the user weigh that (and
+    /// Duplicate first if they'd rather not).
+    @ViewBuilder
+    private var usageBox: some View {
+        let usage = store.cardUsage(of: doc.id)
+        GroupBox("Where it's used") {
+            VStack(alignment: .leading, spacing: 8) {
+                if usage.isEmpty {
+                    Text("Not used yet — changes won't affect any video.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    if !usage.coverPeriods.isEmpty {
+                        usageRow("rectangle.lefthalf.inset.filled", "Cover", usage.coverPeriods)
+                    }
+                    if !usage.endingPeriods.isEmpty {
+                        usageRow("rectangle.righthalf.inset.filled", "Ending", usage.endingPeriods)
+                    }
+                    if !usage.days.isEmpty {
+                        usageRow("calendar", "Days", usage.days.map(dayLabel))
+                    }
+                    Text("Editing changes every video that uses this card. To keep those as they are, Duplicate it first and edit the copy.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 2)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(6)
+        }
+    }
+
+    /// One usage category: an icon + count title above a wrapped, comma-joined
+    /// list of its entries.
+    private func usageRow(_ icon: String, _ title: String, _ items: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Label("\(title) (\(items.count))", systemImage: icon)
+                .font(.caption.bold())
+            Text(items.joined(separator: ", "))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// e.g. "Jun 3, 2026" — with "×2" when the card appears twice on that day.
+    private func dayLabel(_ day: (date: Date, count: Int)) -> String {
+        let s = day.date.formatted(date: .abbreviated, time: .omitted)
+        return day.count > 1 ? "\(s) ×\(day.count)" : s
     }
 
     /// Binding into the selected element's `TextStyle` (nil unless a text

@@ -7,6 +7,30 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.10.0] - 2026-06-20
+
+- **Cards are now live everywhere they're used.** Editing a card — its text,
+  colours, image, or layout — now flows through to every place it appears the
+  next time you preview or save a video: its covers, its endings, and any day it
+  was placed on. Previously a card was frozen into a snapshot the moment you
+  used it, so later edits didn't show up. (Re-rendering an existing video will
+  now reflect the card's current design.)
+- Because of this, a card no longer carries its own "show for" duration. A card
+  placed on a day keeps its own display duration (adjust it with the duration
+  stepper in the editor, just like a photo), and the **Cover** and **Ending**
+  cards get a new "show for N.Ns" duration control right in the Create Video
+  window, set per time range.
+- The card editor now shows a **"Where it's used"** panel — which time ranges
+  use the card as a cover or ending, and which days it appears on — so before
+  editing you can see what a change will affect, and Duplicate it first if you'd
+  rather leave those videos as they are.
+- Selecting a card in the day editor now has an **"Edit Card…"** button that
+  opens that card straight in the card editor; when you close it, the day's
+  preview updates to the card's new design.
+- The Cards gallery now shows a **usage count** under each card ("3 uses"),
+  with a tooltip breaking it down by days / covers / endings — at a glance you
+  can tell which cards are in use before editing or deleting them.
+
 ## [1.9.0] - 2026-06-20
 
 - The **Cover** and **Ending** cards (and their fades) in the Create Video

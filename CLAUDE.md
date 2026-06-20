@@ -19,12 +19,16 @@ Deliberate improvements over 1SE:
   Project… (⇧⌘O — plain ⌘O is the trim editor's Set Out), Open Recent ▸ submenu
   + Clear Menu.
 - `Models.swift` — `Clip` struct (id, fileName, date, inSeconds, outSeconds,
-  durationSeconds, createdAt, tags, kind, crop, sourcePath, sourceHash,
+  durationSeconds, createdAt, tags, kind, crop, cardID, sourcePath, sourceHash,
   sourceBytes) + date/time helpers. (`id` is a random `UUID`, not a content
   hash.) A clip is a video or a photo (`ClipKind`); photos store their
   display duration in durationSeconds/outSeconds and an optional `CropRect`
-  (unit coords, top-left origin). Trim/crop are metadata only; media files are
-  never modified (non-destructive). Tags are free-form multi-word strings,
+  (unit coords, top-left origin). A clip with `cardID` set is a **live
+  reference to a designed card** (`isCard`): a `.photo` clip with no media file
+  in `Clips/` — the card is rendered fresh from its current document for
+  thumbnails/preview/export, so editing the card updates the placement (its
+  display duration stays per-placement). Trim/crop are metadata only; media
+  files are never modified (non-destructive). Tags are free-form multi-word strings,
   deduped case-insensitively. `sourcePath` records which source-folder file a
   clip was picked from: clips picked twice from one source (two segments of a
   long video) **share one copied media file**, so `delete` only removes the
@@ -36,8 +40,11 @@ Deliberate improvements over 1SE:
   a small per-project Codable blob, every
   field defaulted via `decodeIfPresent` so old projects and future options need
   no migration. `bookendsByPeriod` maps a `RenderRange.periodKey` (a canonical
-  month/year/custom/all string) to a `BookendSettings` (cover + ending card ids
-  and their fades, **plus** `firstClipFadeInSeconds`/`lastClipFadeOutSeconds` —
+  month/year/custom/all string) to a `BookendSettings` (cover + ending card ids,
+  their fades, and their display durations `coverDurationSeconds`/
+  `endingDurationSeconds` — cards no longer carry a duration, so the cover/ending
+  one is set here per period — **plus**
+  `firstClipFadeInSeconds`/`lastClipFadeOutSeconds` —
   applied when the respective card is None to fade the first clip in / last clip
   out), so the Create Video window remembers a distinct Cover/Ending per time
   range; `bookends(for:)`/`setBookends(_:for:)` read/write it (an empty value
@@ -128,9 +135,10 @@ Deliberate improvements over 1SE:
   `RenderSheet` — the unified
   Preview/Export window: a time-range picker (`RenderMode` month/year/all/custom,
   remembered in `settings.renderRange`, defaulting to the current month), a
-  **Cover/Ending** picker (per-period `BookendSettings`; with a card the fade
-  edits the card's transition, with **None** it edits the first-clip fade-in /
-  last-clip fade-out via `ClipFadeSheet`), and
+  **Cover/Ending** picker (per-period `BookendSettings`; with a card a "show
+  for N.Ns" duration stepper appears and the fade edits the card's transition,
+  with **None** the fade edits the first-clip fade-in / last-clip fade-out via
+  `ClipFadeSheet`), and
   **Preview** (opens `PreviewWindow`) and **Save…** (NSSavePanel + progress bar)
   buttons, plus a video/photo count (calendar `video.fill`/`photo.fill` icons)
   and total length for the chosen range; orientation still comes from Project
@@ -154,7 +162,11 @@ Deliberate improvements over 1SE:
   lock picker Free/16:9/9:16, tags, date, delete) and `PhotoCropView`
   (aspect-fit photo, draggable yellow corner handles + move-inside gesture,
   min crop 5%; an aspect lock snaps the crop and constrains corner drags).
-  Same library/review modes as `TrimEditor`.
+  Same library/review modes as `TrimEditor`. For a **card clip** (`isCard`) the
+  editor renders the card document instead of a file, hides the crop/date-stamp
+  controls (only the display duration is editable), and offers an **"Edit Card…"**
+  button that presents `CardEditorView` for the referenced card (re-rendering the
+  preview on close).
 - `MashImport.swift` — "Import 1SE Video": splits a mashed 1 Second Everyday
   export into per-day clips by OCR'ing (Vision) the date stamp burned into
   the bottom-left corner ("MAR 03 2026"). Coarse 0.3s sampling pass, then
@@ -196,7 +208,11 @@ Deliberate improvements over 1SE:
 - `Exporter.swift` — builds an `AVMutableComposition` from the month's clips
   in date order (then createdAt), inserting each clip's in→out range. Photos
   are first rendered (cropped, via AVAssetWriter) into silent temp MP4
-  segments of their display duration, then inserted like videos. Per-
+  segments of their display duration, then inserted like videos. **Card clips**
+  (`cardID` set) have no file: the card is rendered fresh from its current
+  document (on the main actor, in the same pass that collects clip URLs) and the
+  resulting image is written into a segment the same way (a card whose card was
+  since deleted is skipped). Per-
   segment `AVMutableVideoCompositionInstruction` aspect-fits each clip into
   the render size (handles preferredTransform / rotated iPhone video,
   letterboxes mixed orientations). Exports MP4 via `AVAssetExportSession`,
@@ -250,9 +266,19 @@ automatically. The calendar/import/export all operate on the open project.
 Per-project **settings** (`settings.json`) hold the render orientation
 (portrait/landscape — chosen once here, no longer asked per export/preview); the
 toolbar's **Project Settings** sheet (⌘,) edits it and also hosts source-folder
-management. Cover/Ending cards and their fades — including the first-clip
-fade-in / last-clip fade-out used when a side is None — live per render period
-in the Create Video window, not in Project Settings.
+management. Cover/Ending cards, their fades, and their display durations —
+including the first-clip fade-in / last-clip fade-out used when a side is None —
+live per render period in the Create Video window, not in Project Settings.
+**Cards** (designed title frames, managed in the Cards window) are used three
+ways — Cover, Ending, or a clip on a day — and every use is a **live
+reference**: the card is re-rendered from its current document at preview/export
+time, so editing a card updates everywhere it's used on the next render. A card
+itself no longer stores a duration: a day placement keeps its own (editable in
+the photo editor) and a Cover/Ending sets one in the Create Video window. The
+card editor shows a **"Where it's used"** panel (cover/ending periods + days)
+via `LibraryStore.cardUsage(of:)`, so the blast radius of an edit is visible
+before changing it (period labels come from `RenderRange(periodKey:)`, the
+inverse of `periodKey`).
 The main screen has a tag filter (toolbar picker, single tag) that scopes the
 calendar thumbnails/counts and the rendered video. A single **Create Video…**
 toolbar button opens `RenderSheet`, where a time range (a specific month, a
@@ -286,6 +312,9 @@ implemented** — only the data needed for it is stored, going forward (clips
 made before this field carry `sourceHash == nil`). Clips whose bytes have no
 source-folder counterpart — 1SE imports (re-encoded per-day MP4s) and one-off
 `importMedia` files — store a hash for integrity but can't be reconstructed.
+**Card clips** (`cardID` set) have no media bytes at all (no `sourceHash`):
+they render from the card document under `Cards/<id>/`, so backing up the
+`Cards/` folder alongside `clips.json` preserves them.
 
 ## Roadmap ideas (not yet built)
 
