@@ -497,7 +497,7 @@ struct DayCell: View {
             Button(dayClips.isEmpty ? "Open Day…" : "Edit This Day…", action: onEdit)
             Button("Review Sources…", action: onReview)
         }
-        .task(id: dayClips.first?.thumbnailKey) {
+        .task(id: dayClips.first.map { store.thumbnailKey(for: $0) }) {
             if let first = dayClips.first {
                 thumbnail = await store.thumbnail(for: first)
             } else {
@@ -724,7 +724,7 @@ struct RenderSheet: View {
             case .cover:
                 if bookends.coverCardID != nil {
                     TransitionEditorSheet(transition: $bookends.coverTransition,
-                                          maxSeconds: cardDuration(bookends.coverCardID))
+                                          maxSeconds: bookends.coverDurationSeconds)
                 } else {
                     ClipFadeSheet(
                         seconds: $bookends.firstClipFadeInSeconds,
@@ -735,7 +735,7 @@ struct RenderSheet: View {
             case .ending:
                 if bookends.endingCardID != nil {
                     TransitionEditorSheet(transition: $bookends.endingTransition,
-                                          maxSeconds: cardDuration(bookends.endingCardID))
+                                          maxSeconds: bookends.endingDurationSeconds)
                 } else {
                     ClipFadeSheet(
                         seconds: $bookends.lastClipFadeOutSeconds,
@@ -761,6 +761,9 @@ struct RenderSheet: View {
                 Text("Cover")
                     .frame(width: 60, alignment: .leading)
                 cardMenu(selection: $bookends.coverCardID)
+                if bookends.coverCardID != nil {
+                    durationStepper($bookends.coverDurationSeconds)
+                }
                 fadeButton(label: coverFadeLabel,
                            enabled: bookends.coverCardID != nil || hasClips,
                            help: bookends.coverCardID != nil
@@ -773,6 +776,9 @@ struct RenderSheet: View {
                 Text("Ending")
                     .frame(width: 60, alignment: .leading)
                 cardMenu(selection: $bookends.endingCardID)
+                if bookends.endingCardID != nil {
+                    durationStepper($bookends.endingDurationSeconds)
+                }
                 fadeButton(label: endingFadeLabel,
                            enabled: bookends.endingCardID != nil || hasClips,
                            help: bookends.endingCardID != nil
@@ -832,10 +838,16 @@ struct RenderSheet: View {
         .fixedSize()
     }
 
-    /// The chosen card's display length, used to cap its fades (default if none).
-    private func cardDuration(_ id: UUID?) -> Double {
-        id.flatMap { cid in store.cards.first(where: { $0.id == cid })?.displaySeconds }
-            ?? Card.defaultDisplaySeconds
+    /// Compact "show for N.Ns" stepper for a Cover/Ending card's duration,
+    /// shown only when that side has a card selected.
+    private func durationStepper(_ binding: Binding<Double>) -> some View {
+        Stepper(value: binding, in: 0.5...30, step: 0.5) {
+            Text(String(format: "%.1fs", binding.wrappedValue))
+                .monospacedDigit()
+                .frame(minWidth: 34, alignment: .trailing)
+        }
+        .fixedSize()
+        .help("How long this card is shown")
     }
 
     // MARK: Range controls
@@ -962,8 +974,10 @@ struct RenderSheet: View {
         let creationDate = range.exportCreationDate(clips: clips)
         // Render the Cover/Ending cards now (on the main actor) so the export
         // task just splices the finished images on.
-        let leading = bookend(for: bookends.coverCardID, transition: bookends.coverTransition, renderSize: renderSize)
-        let trailing = bookend(for: bookends.endingCardID, transition: bookends.endingTransition, renderSize: renderSize)
+        let leading = bookend(for: bookends.coverCardID, transition: bookends.coverTransition,
+                              seconds: bookends.coverDurationSeconds, renderSize: renderSize)
+        let trailing = bookend(for: bookends.endingCardID, transition: bookends.endingTransition,
+                               seconds: bookends.endingDurationSeconds, renderSize: renderSize)
 
         Task {
             do {
@@ -985,8 +999,9 @@ struct RenderSheet: View {
         }
     }
 
-    private func bookend(for id: UUID?, transition: SegmentTransition, renderSize: CGSize) -> Bookend? {
-        cardBookend(id, transition: transition, store: store, renderSize: renderSize)
+    private func bookend(for id: UUID?, transition: SegmentTransition,
+                         seconds: Double, renderSize: CGSize) -> Bookend? {
+        cardBookend(id, transition: transition, seconds: seconds, store: store, renderSize: renderSize)
     }
 }
 
@@ -1001,13 +1016,15 @@ func bookendClipFades(_ b: BookendSettings) -> (fadeIn: Double?, fadeOut: Double
 }
 
 /// Resolves a settings card id to a rendered Cover/Ending segment (nil for
-/// "None" or a card that's since been deleted). Shared by Export and Preview.
+/// "None" or a card that's since been deleted), shown for `seconds`. The card is
+/// rendered fresh from its current document, so edits flow through. Shared by
+/// Export and Preview.
 @MainActor
-func cardBookend(_ id: UUID?, transition: SegmentTransition,
+func cardBookend(_ id: UUID?, transition: SegmentTransition, seconds: Double,
                  store: LibraryStore, renderSize: CGSize) -> Bookend? {
     guard let id, let doc = store.cards.first(where: { $0.id == id }),
           let cg = store.renderCardImage(doc, size: renderSize) else { return nil }
-    return Bookend(image: cg, seconds: doc.displaySeconds, transition: transition)
+    return Bookend(image: cg, seconds: seconds, transition: transition)
 }
 
 // MARK: - Project settings
@@ -1197,8 +1214,8 @@ struct PreviewWindow: View {
         let renderSize = store.settings.orientation.size
         let bookends = store.settings.bookends(for: range)
         let (fadeIn, fadeOut) = includeBookends ? bookendClipFades(bookends) : (nil, nil)
-        let leading = includeBookends ? cardBookend(bookends.coverCardID, transition: bookends.coverTransition, store: store, renderSize: renderSize) : nil
-        let trailing = includeBookends ? cardBookend(bookends.endingCardID, transition: bookends.endingTransition, store: store, renderSize: renderSize) : nil
+        let leading = includeBookends ? cardBookend(bookends.coverCardID, transition: bookends.coverTransition, seconds: bookends.coverDurationSeconds, store: store, renderSize: renderSize) : nil
+        let trailing = includeBookends ? cardBookend(bookends.endingCardID, transition: bookends.endingTransition, seconds: bookends.endingDurationSeconds, store: store, renderSize: renderSize) : nil
         do {
             let built = try await Exporter.buildComposition(
                 clips: clips, store: store,

@@ -867,9 +867,11 @@ final class LibraryStore: ObservableObject {
 
     func delete(_ clip: Clip) {
         clips.removeAll { $0.id == clip.id }
-        // Clips picked twice from one source share a media file — only
-        // remove it when the last of them goes.
-        if !clips.contains(where: { $0.fileName == clip.fileName }) {
+        // Card clips have no media file in `Clips/` (they render from their card
+        // document). For real media, clips picked twice from one source share a
+        // file — only remove it when the last of them goes.
+        if !clip.isCard,
+           !clips.contains(where: { $0.fileName == clip.fileName }) {
             try? FileManager.default.removeItem(at: fileURL(for: clip))
         }
         thumbnailCache.removeObject(forKey: clip.id as NSUUID)
@@ -877,6 +879,37 @@ final class LibraryStore: ObservableObject {
     }
 
     // MARK: - Cards
+
+    /// Where a card is currently used across the project. Drives the card
+    /// editor's "Where it's used" panel so the user can judge the blast radius of
+    /// an edit (and decide to duplicate first). Since every use is a live
+    /// reference, editing a card affects every entry here on the next render.
+    struct CardUsage {
+        /// Human labels of the render periods using the card as cover / ending.
+        var coverPeriods: [String]
+        var endingPeriods: [String]
+        /// Days the card is placed on, with how many times it appears on each.
+        var days: [(date: Date, count: Int)]
+        var isEmpty: Bool { coverPeriods.isEmpty && endingPeriods.isEmpty && days.isEmpty }
+    }
+
+    /// Tallies the cover/ending periods and the days where card `id` is used.
+    func cardUsage(of id: UUID) -> CardUsage {
+        func periods(_ pick: (BookendSettings) -> UUID?) -> [String] {
+            settings.bookendsByPeriod
+                .filter { pick($0.value) == id }
+                .compactMap { RenderRange(periodKey: $0.key) }
+                .sorted { $0.anchorDate < $1.anchorDate }
+                .map(\.label)
+        }
+        let grouped = Dictionary(grouping: clips.filter { $0.cardID == id },
+                                 by: { $0.date.dayKey })
+        let days = grouped.map { (date: $0.key, count: $0.value.count) }
+            .sorted { $0.date < $1.date }
+        return CardUsage(coverPeriods: periods(\.coverCardID),
+                         endingPeriods: periods(\.endingCardID),
+                         days: days)
+    }
 
     /// Loads every saved card by scanning `Cards/<id>/card.json`, sorted by
     /// name. Unreadable folders are skipped rather than failing the load.
@@ -946,6 +979,12 @@ final class LibraryStore: ObservableObject {
             cards.append(doc)
         }
         cards.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        // Drop cached thumbnails of this card's day placements so the calendar
+        // and rail re-render its new design (their task ids change too, via
+        // `thumbnailKey(for:)`, which folds in the card's hash).
+        for clip in clips where clip.cardID == doc.id {
+            thumbnailCache.removeObject(forKey: clip.id as NSUUID)
+        }
     }
 
     /// Copies a card's folder (assets included) under a new id + "copy" name.
@@ -1032,47 +1071,60 @@ final class LibraryStore: ObservableObject {
         return CardRenderer.drawCard(doc, assets: assets, size: size)
     }
 
-    /// Snapshots `doc` to a PNG in `Clips/` and registers it as a photo clip on
-    /// `day` (date stamp off — cards are already composed). The card document is
-    /// left untouched; later edits won't change this clip.
+    /// Registers `doc` as a **live card reference** clip on `day`: no media file
+    /// is written — the card is rendered fresh from its current document wherever
+    /// the clip is shown (thumbnail, preview, export), so later edits to the card
+    /// flow through. The display duration is per-placement (seeded from the card
+    /// default, editable in the photo editor); the date stamp is off (cards are
+    /// already composed).
     func addCard(_ doc: CardDocument, to day: Date) {
         guard hasProject else { return }
-        guard let cg = renderCardImage(doc, size: settings.orientation.size),
-              let data = cg.pngData() else {
-            lastError = "Could not render card “\(doc.name)”."
-            return
-        }
-        let newName = UUID().uuidString + ".png"
-        let destURL = clipsDir.appendingPathComponent(newName)
-        do {
-            try data.write(to: destURL, options: .atomic)
-        } catch {
-            lastError = "Could not add card “\(doc.name)”: \(error.localizedDescription)"
-            return
-        }
-        var clip = Clip(
-            fileName: newName,
+        let clip = Clip(
+            fileName: "",
             date: day.dayKey,
             inSeconds: 0,
-            outSeconds: doc.displaySeconds,
-            durationSeconds: doc.displaySeconds,
+            outSeconds: Card.defaultDisplaySeconds,
+            durationSeconds: Card.defaultDisplaySeconds,
             kind: .photo,
+            cardID: doc.id,
             showsDateOverlay: false
         )
-        if let digest = Self.contentDigest(of: destURL) {
-            clip.sourceHash = digest.hash
-            clip.sourceBytes = digest.bytes
-        }
         clips.append(clip)
         save()
     }
 
     // MARK: - Thumbnails
 
+    /// Cache/task key for a clip's thumbnail. A card clip folds in its card's
+    /// current design (its `Hashable` value), so editing a card refires the
+    /// views' regeneration tasks and refreshes its placements' thumbnails.
+    func thumbnailKey(for clip: Clip) -> String {
+        guard let cardID = clip.cardID else { return clip.thumbnailKey }
+        let version = cards.first(where: { $0.id == cardID })?.hashValue ?? 0
+        return "\(clip.thumbnailKey)|card:\(version)"
+    }
+
+    /// A card-aspect thumbnail size with the longer side ~480px.
+    private func thumbnailSize(for aspect: ProjectSettings.Orientation) -> CGSize {
+        let s = aspect.size
+        let scale = 480 / max(s.width, s.height)
+        return CGSize(width: s.width * scale, height: s.height * scale)
+    }
+
     /// Thumbnail at the clip's in-point (or the photo itself), cached in memory.
     func thumbnail(for clip: Clip) async -> NSImage? {
         if let cached = thumbnailCache.object(forKey: clip.id as NSUUID) {
             return cached
+        }
+        // Card clips have no media file — render the card document fresh.
+        if let cardID = clip.cardID {
+            guard let doc = cards.first(where: { $0.id == cardID }),
+                  let cg = renderCardImage(doc, size: thumbnailSize(for: doc.aspect)) else {
+                return nil
+            }
+            let image = NSImage(cgImage: cg, size: .zero)
+            thumbnailCache.setObject(image, forKey: clip.id as NSUUID)
+            return image
         }
         if clip.kind == .photo {
             guard var cg = loadOrientedCGImage(from: fileURL(for: clip), maxPixel: 480) else {

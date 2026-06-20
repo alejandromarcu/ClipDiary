@@ -182,9 +182,18 @@ struct Exporter {
         var audioSegments: [(start: CMTime, duration: CMTime,
                              volume: Float, fadeIn: Double, fadeOut: Double)] = []
 
-        // Collect clip file URLs on the main actor before doing AV work.
-        let items: [(clip: Clip, url: URL)] = await MainActor.run {
-            clips.map { ($0, store.fileURL(for: $0)) }
+        // Collect clip file URLs (and, for card clips, a freshly rendered card
+        // image) on the main actor before doing AV work. A card clip has no file
+        // — its image comes from the current card document, so editing a card
+        // changes the next render.
+        let items: [(clip: Clip, url: URL, cardImage: CGImage?)] = await MainActor.run {
+            clips.map { clip in
+                let cardImage = clip.cardID.flatMap { id in
+                    store.cards.first(where: { $0.id == id })
+                        .flatMap { store.renderCardImage($0, size: renderSize) }
+                }
+                return (clip, store.fileURL(for: clip), cardImage)
+            }
         }
 
         // Photos are rendered into short video segments in a temp folder,
@@ -237,12 +246,16 @@ struct Exporter {
 
         if let leading { try await insertBookend(leading, name: "cover") }
 
-        for (index, (clip, url)) in items.enumerated() {
+        for (index, (clip, url, cardImage)) in items.enumerated() {
+            // A card clip whose card was deleted has nothing to render — skip it
+            // rather than fail the whole export.
+            if clip.isCard && cardImage == nil { continue }
+
             let assetURL: URL
             if clip.kind == .photo {
                 assetURL = try await renderPhotoSegment(
-                    clip: clip, photoURL: url, renderSize: renderSize,
-                    in: tempDir, index: index
+                    clip: clip, photoURL: url, cardImage: cardImage,
+                    renderSize: renderSize, in: tempDir, index: index
                 )
             } else {
                 assetURL = url
@@ -717,20 +730,28 @@ struct Exporter {
 
     // MARK: - Photo / image segments
 
-    /// Renders a photo clip (with its crop applied) into a silent MP4 of the
-    /// clip's display duration, at the full `renderSize` (letterboxed).
+    /// Renders a photo clip into a silent MP4 of the clip's display duration, at
+    /// the full `renderSize` (letterboxed). A card clip passes its pre-rendered
+    /// `cardImage` (already full-frame, no crop); a real photo is loaded from
+    /// `photoURL` and cropped.
     private static func renderPhotoSegment(
         clip: Clip,
         photoURL: URL,
+        cardImage: CGImage?,
         renderSize: CGSize,
         in directory: URL,
         index: Int
     ) async throws -> URL {
-        let maxPixel = Int(max(renderSize.width, renderSize.height)) * 2
-        guard let oriented = loadOrientedCGImage(from: photoURL, maxPixel: maxPixel) else {
-            throw ExportError.sessionFailed("Could not read photo \(clip.fileName).")
+        let image: CGImage
+        if let cardImage {
+            image = cardImage
+        } else {
+            let maxPixel = Int(max(renderSize.width, renderSize.height)) * 2
+            guard let oriented = loadOrientedCGImage(from: photoURL, maxPixel: maxPixel) else {
+                throw ExportError.sessionFailed("Could not read photo \(clip.fileName).")
+            }
+            image = clip.crop.map { croppedImage(oriented, to: $0) } ?? oriented
         }
-        let image = clip.crop.map { croppedImage(oriented, to: $0) } ?? oriented
         return try await writeImageSegment(
             image: image, seconds: clip.trimmedDuration,
             renderSize: renderSize, in: directory, name: "photo-\(index)"

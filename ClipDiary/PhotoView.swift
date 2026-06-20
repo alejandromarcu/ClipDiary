@@ -36,6 +36,10 @@ struct PhotoEditor: View {
 
     private var isReview: Bool { onAdd != nil }
 
+    /// A live card reference (no media file, no crop/date stamp): the image is
+    /// rendered from the card document and only the duration is editable here.
+    private var isCard: Bool { clip.cardID != nil }
+
     /// The working copy with the picked date applied — what would be saved.
     private var editedClip: Clip {
         var updated = clip
@@ -147,11 +151,13 @@ struct PhotoEditor: View {
                 Divider()
             }
             TagRow(tags: $clip.tags)
-            captionField
+            // A card carries its own composed text, so the caption overlay and
+            // date stamp don't apply to it.
+            if !isCard { captionField }
             TransitionRow(transition: clip.transition) { showTransition = true }
             Divider()
             DayPickerField(selection: $editedDate)
-            dateStampToggle
+            if !isCard { dateStampToggle }
             Spacer(minLength: 0)
             HStack {
                 revertButton
@@ -168,8 +174,16 @@ struct PhotoEditor: View {
     @ViewBuilder
     private var photoView: some View {
         if let image {
-            PhotoCropView(image: image, crop: cropBinding, aspect: aspectLock.ratio)
-                .frame(minHeight: 300, maxHeight: .infinity)
+            if isCard {
+                // Cards are full-frame compositions — show them as-is, no crop.
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(minHeight: 300, maxHeight: .infinity)
+            } else {
+                PhotoCropView(image: image, crop: cropBinding, aspect: aspectLock.ratio)
+                    .frame(minHeight: 300, maxHeight: .infinity)
+            }
         } else {
             ProgressView()
                 .frame(maxWidth: .infinity, minHeight: 300, maxHeight: .infinity)
@@ -204,18 +218,22 @@ struct PhotoEditor: View {
                 .hidden()
             }
             Spacer()
-            Picker("", selection: $aspectLock) {
-                ForEach(AspectLock.allCases) { Text($0.rawValue).tag($0) }
+            // Crop controls don't apply to a card (it's already a full-frame
+            // composition) — only its display duration is editable here.
+            if !isCard {
+                Picker("", selection: $aspectLock) {
+                    ForEach(AspectLock.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                .help("Lock the crop to an export aspect ratio (16:9 landscape, 9:16 portrait)")
+                Button("Reset Crop") {
+                    clip.crop = nil
+                    aspectLock = .free
+                }
+                .disabled(clip.crop == nil)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
-            .help("Lock the crop to an export aspect ratio (16:9 landscape, 9:16 portrait)")
-            Button("Reset Crop") {
-                clip.crop = nil
-                aspectLock = .free
-            }
-            .disabled(clip.crop == nil)
         }
         .font(.callout)
     }
@@ -272,7 +290,7 @@ struct PhotoEditor: View {
                 dismiss()
             }
         } label: {
-            Label("Delete Photo", systemImage: "trash")
+            Label(isCard ? "Delete Card" : "Delete Photo", systemImage: "trash")
         }
     }
 
@@ -283,6 +301,19 @@ struct PhotoEditor: View {
     }
 
     private func load() {
+        // A card clip has no file — render its card document (on the main actor,
+        // where the store lives) so it reflects the card's current design.
+        if let cardID = clip.cardID {
+            if let doc = store.cards.first(where: { $0.id == cardID }) {
+                let s = doc.aspect.size
+                let scale = 1200 / max(s.width, s.height)
+                let size = CGSize(width: s.width * scale, height: s.height * scale)
+                if let cg = store.renderCardImage(doc, size: size) {
+                    image = NSImage(cgImage: cg, size: .zero)
+                }
+            }
+            return
+        }
         let url = sourceURL ?? store.fileURL(for: clip)
         Task.detached {
             let cg = loadOrientedCGImage(from: url, maxPixel: 2048)
