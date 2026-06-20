@@ -24,6 +24,12 @@ and versions follow [Semantic Versioning](https://semver.org/)
   use the card as a cover or ending, and which days it appears on — so before
   editing you can see what a change will affect, and Duplicate it first if you'd
   rather leave those videos as they are.
+- Selecting a card in the day editor now has an **"Edit Card…"** button that
+  opens that card straight in the card editor; when you close it, the day's
+  preview updates to the card's new design.
+- The Cards gallery now shows a **usage count** under each card ("3 uses"),
+  with a tooltip breaking it down by days / covers / endings — at a glance you
+  can tell which cards are in use before editing or deleting them.
 
 ## [1.9.0] - 2026-06-20
 

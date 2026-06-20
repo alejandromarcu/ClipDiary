@@ -891,6 +891,11 @@ final class LibraryStore: ObservableObject {
         /// Days the card is placed on, with how many times it appears on each.
         var days: [(date: Date, count: Int)]
         var isEmpty: Bool { coverPeriods.isEmpty && endingPeriods.isEmpty && days.isEmpty }
+
+        /// Total placements: covers + endings + every day appearance.
+        var total: Int {
+            coverPeriods.count + endingPeriods.count + days.reduce(0) { $0 + $1.count }
+        }
     }
 
     /// Tallies the cover/ending periods and the days where card `id` is used.

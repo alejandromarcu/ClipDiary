@@ -162,7 +162,11 @@ Deliberate improvements over 1SE:
   lock picker Free/16:9/9:16, tags, date, delete) and `PhotoCropView`
   (aspect-fit photo, draggable yellow corner handles + move-inside gesture,
   min crop 5%; an aspect lock snaps the crop and constrains corner drags).
-  Same library/review modes as `TrimEditor`.
+  Same library/review modes as `TrimEditor`. For a **card clip** (`isCard`) the
+  editor renders the card document instead of a file, hides the crop/date-stamp
+  controls (only the display duration is editable), and offers an **"Edit Card…"**
+  button that presents `CardEditorView` for the referenced card (re-rendering the
+  preview on close).
 - `MashImport.swift` — "Import 1SE Video": splits a mashed 1 Second Everyday
   export into per-day clips by OCR'ing (Vision) the date stamp burned into
   the bottom-left corner ("MAR 03 2026"). Coarse 0.3s sampling pass, then

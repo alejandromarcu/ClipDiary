@@ -13,6 +13,8 @@ struct PhotoEditor: View {
     @State private var editedDate: Date
     @State private var aspectLock: AspectLock = .free
     @State private var showTransition = false
+    /// Card clips only: presents the card editor for the referenced card.
+    @State private var editingCard = false
     /// Width of the review metadata pane; shared with the video editor and
     /// remembered across items and launches.
     @AppStorage("reviewPaneWidth") private var paneWidth: Double = 280
@@ -120,6 +122,25 @@ struct PhotoEditor: View {
         .sheet(isPresented: $showTransition) {
             TransitionEditorSheet(transition: $clip.transition, maxSeconds: clip.trimmedDuration)
         }
+        .sheet(isPresented: $editingCard) {
+            if let card = store.cards.first(where: { $0.id == clip.cardID }) {
+                // Edit the referenced card directly; on close, re-render the
+                // preview so any change shows immediately (the rail thumbnail
+                // refreshes too, via the store's thumbnail invalidation).
+                CardEditorView(card: card, isNew: false) {
+                    editingCard = false
+                    load()
+                }
+                .environmentObject(store)
+                .frame(minWidth: 900, idealWidth: 1040, minHeight: 620, idealHeight: 760)
+            } else {
+                VStack(spacing: 12) {
+                    Text("This card no longer exists.")
+                    Button("Close") { editingCard = false }
+                }
+                .padding(30)
+            }
+        }
     }
 
     // MARK: - Layouts
@@ -158,6 +179,7 @@ struct PhotoEditor: View {
             Divider()
             DayPickerField(selection: $editedDate)
             if !isCard { dateStampToggle }
+            if isCard && !isReview { editCardButton }
             Spacer(minLength: 0)
             HStack {
                 revertButton
@@ -263,6 +285,14 @@ struct PhotoEditor: View {
         }
         .disabled(!hasChanges)
         .help("Discard this photo's unsaved changes")
+    }
+
+    /// Card clips only: opens the referenced card in the card editor.
+    private var editCardButton: some View {
+        Button { editingCard = true } label: {
+            Label("Edit Card…", systemImage: "pencil")
+        }
+        .help("Open this card in the card editor — changes apply everywhere it's used")
     }
 
     @ViewBuilder

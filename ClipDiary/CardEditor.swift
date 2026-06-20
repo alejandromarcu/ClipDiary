@@ -110,7 +110,8 @@ struct CardGalleryView: View {
     }
 
     private func cell(_ card: CardDocument) -> some View {
-        VStack(spacing: 6) {
+        let usage = store.cardUsage(of: card.id)
+        return VStack(spacing: 6) {
             CardThumbnail(card: card)
                 .overlay(
                     RoundedRectangle(cornerRadius: 6)
@@ -123,6 +124,10 @@ struct CardGalleryView: View {
                     .font(.callout)
                     .lineLimit(1)
                 Spacer()
+                Text(usage.total == 1 ? "1 use" : "\(usage.total) uses")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .help(usageHelp(usage))
                 Menu {
                     if isPicker { Button("Use This Card") { onPick(card) } }
                     Button("Edit…") { onEdit(card) }
@@ -137,6 +142,18 @@ struct CardGalleryView: View {
             }
         }
         .help(isPicker ? "Click to use this card" : "Click to edit this card")
+    }
+
+    /// Tooltip breakdown behind a cell's usage count, e.g. "Used on 3 days, as
+    /// 1 cover" (or a reassuring note when unused).
+    private func usageHelp(_ u: LibraryStore.CardUsage) -> String {
+        guard !u.isEmpty else { return "Not used in any video yet — safe to change or delete" }
+        var parts: [String] = []
+        let dayCount = u.days.reduce(0) { $0 + $1.count }
+        if dayCount > 0 { parts.append(dayCount == 1 ? "1 day" : "\(dayCount) days") }
+        if !u.coverPeriods.isEmpty { parts.append("\(u.coverPeriods.count) cover\(u.coverPeriods.count == 1 ? "" : "s")") }
+        if !u.endingPeriods.isEmpty { parts.append("\(u.endingPeriods.count) ending\(u.endingPeriods.count == 1 ? "" : "s")") }
+        return "Used: " + parts.joined(separator: ", ")
     }
 }
 
