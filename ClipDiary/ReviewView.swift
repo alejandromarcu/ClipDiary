@@ -7,10 +7,13 @@ import AVFoundation
 /// button); `day` is still carried as the fallback day for those items.
 /// `focusSources` lands on the day's source media (the + circle) rather than
 /// its already-picked clips (a plain cell click) — both open the same window.
+/// `startClipID` pre-selects a specific picked clip on `day` (the Timeline view
+/// clicking a clip) instead of the day's first.
 struct ReviewRequest: Codable, Hashable {
     let day: Date
     var startUndated: Bool = false
     var focusSources: Bool = false
+    var startClipID: UUID? = nil
 }
 
 /// The day window: one place to both **review** a day's source photos/videos
@@ -37,6 +40,9 @@ struct ReviewWindow: View {
     /// Prefer the day's source media over its picked clips for the initial
     /// selection (the calendar's + circle).
     var focusSources = false
+    /// Pre-select this picked clip on `startDay` (the Timeline view clicking a
+    /// clip) rather than letting `ensurePosition` pick the day's first.
+    var startClipID: UUID?
 
     /// What the editor on the right currently shows.
     private enum Selection: Hashable {
@@ -72,11 +78,16 @@ struct ReviewWindow: View {
     @State private var showSources = false
     @State private var showCardPicker = false
 
-    init(startDay: Date, startUndated: Bool = false, focusSources: Bool = false) {
+    init(startDay: Date, startUndated: Bool = false, focusSources: Bool = false,
+         startClipID: UUID? = nil) {
         self.startDay = startDay
         self.startUndated = startUndated
         self.focusSources = focusSources
+        self.startClipID = startClipID
         _currentDay = State(initialValue: startDay.dayKey)
+        // Seed the selection so the window opens on this exact clip. ensurePosition
+        // keeps it when valid (the clip is on startDay), else repositions as usual.
+        _selection = State(initialValue: startClipID.map { Selection.clip($0) })
     }
 
     private var sourceItems: [SourceItem] { store.sourceItems }
