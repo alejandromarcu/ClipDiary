@@ -617,6 +617,15 @@ final class LibraryStore: ObservableObject {
             .sorted { $0.createdAt < $1.createdAt }
     }
 
+    /// Distinct days (startOfDay), oldest first, that have at least one clip
+    /// matching the tag — the Timeline view's row list. Built from the cached
+    /// `clipsByDay()` grouping, so it only scans the (small) set of distinct days.
+    func contentDays(taggedWith tag: String? = nil) -> [Date] {
+        clipsByDay()
+            .filter { _, clips in clips.contains { $0.matches(tagFilter: tag) } }
+            .keys.sorted()
+    }
+
     /// Source items captured on a day, in capture order — the day window's
     /// "Available" rail. Undated items are excluded (they live in the review
     /// flow's undated bucket, not on any day).

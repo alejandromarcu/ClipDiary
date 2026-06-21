@@ -115,7 +115,10 @@ Deliberate improvements over 1SE:
   ↑/↓); the **rail footer** holds the day-scoped **Add Card…** and **Preview
   Day**; the editor's side pane holds the item-scoped Add/Delete/Revert. Opened
   via `ReviewRequest` (`focusSources` chooses the initial section — the + circle
-  vs. a cell click; `startUndated` opens straight on the bucket). Also `SourceFoldersSheet` (a thin wrapper around
+  vs. a cell click; `startUndated` opens straight on the bucket; `startClipID`
+  pre-selects a specific picked clip — the Timeline view clicking a clip — by
+  seeding the window's `selection`, which `ensurePosition` keeps when valid).
+  Also `SourceFoldersSheet` (a thin wrapper around
   the reusable `SourceFoldersSection`: add/remove/rescan source folders;
   auto-presented when a project has no clips and no sources) and
   `presentAddSourceFolderPanel`.
@@ -124,7 +127,13 @@ Deliberate improvements over 1SE:
   hairline cell borders so cells grow when the window does. Day cells show a
   thumbnail + picked-clip badge and a source-availability footer (video count
   + length, photo count from `store.availability(on:)`); the month header
-  carries the same month-wide tally.
+  carries the same month-wide tally. A toolbar segmented switch (`MainViewMode`,
+  remembered in `@AppStorage("mainViewMode")`) flips the body between this
+  calendar and **`TimelineBody`** — a continuous scroll of every day that has
+  clips (`store.contentDays(taggedWith:)`), grouped under sticky month headers,
+  each day a horizontal strip of `TimelineClipThumb`s; it opens scrolled to the
+  calendar's current month and respects the tag filter. Clicking a timeline clip
+  opens the day window with that clip pre-selected (`ReviewRequest(day:startClipID:)`).
   **Clicking a day cell opens the day window** on the day's picked clips
   (`ReviewRequest(day:)` via openWindow); the cell's **context menu** also offers
   "Review Sources…" (`ReviewRequest(focusSources: true)`, opening the same window

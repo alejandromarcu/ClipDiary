@@ -7,6 +7,16 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.13.0] - 2026-06-21
+
+- **New Timeline view.** A toolbar switch (top-left) now flips the main window
+  between the month **Calendar** and a new **Timeline**: one continuous scroll
+  across your whole project, with every day that has clips shown as a row of its
+  clip thumbnails, grouped under sticky month headers. It opens scrolled to the
+  month you were viewing, and the tag filter still scopes it. Clicking any clip
+  opens that day's editor with that exact clip already selected. Your choice of
+  Calendar vs. Timeline is remembered between launches.
+
 ## [1.12.0] - 2026-06-21
 
 - **Smoother audio at every cut.** The video still cuts hard between clips (no

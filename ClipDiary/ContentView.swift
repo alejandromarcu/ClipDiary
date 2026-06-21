@@ -2,10 +2,15 @@ import SwiftUI
 import UniformTypeIdentifiers
 import AVKit
 
+/// How the main window browses the project: the month `calendar` grid or the
+/// continuous `timeline` of days. Stored in `@AppStorage` so the choice sticks.
+enum MainViewMode: String { case calendar, timeline }
+
 struct ContentView: View {
     @EnvironmentObject var store: LibraryStore
 
     @State private var displayedMonth = Date().dayKey
+    @AppStorage("mainViewMode") private var viewMode: MainViewMode = .calendar
     private enum ImportKind { case media, mash, dataExport }
     @State private var showImporter = false
     @State private var importKind: ImportKind = .media
@@ -64,11 +69,27 @@ struct ContentView: View {
 
     private var calendarBody: some View {
         VStack(spacing: 0) {
-            monthHeader
-            weekdayHeader
-            calendarGrid
+            switch viewMode {
+            case .calendar:
+                monthHeader
+                weekdayHeader
+                calendarGrid
+            case .timeline:
+                TimelineBody(displayedMonth: displayedMonth, tagFilter: tagFilter) { clip in
+                    openWindow(value: ReviewRequest(day: clip.date, startClipID: clip.id))
+                }
+            }
         }
         .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Picker("View", selection: $viewMode) {
+                    Image(systemName: "calendar").tag(MainViewMode.calendar)
+                    Image(systemName: "list.bullet.rectangle").tag(MainViewMode.timeline)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .help("Switch between the month calendar and the timeline")
+            }
             ToolbarItem(placement: .primaryAction) {
                 Picker(selection: $tagFilter) {
                     Text("All Clips").tag(String?.none)
@@ -559,6 +580,226 @@ struct DayCell: View {
             .minimumScaleFactor(0.7)
             .foregroundStyle(hasThumbnail ? .white.opacity(0.95) : .secondary)
         }
+    }
+}
+
+// MARK: - Timeline
+
+/// The Timeline: the calendar's sibling browsing view (toggled in the toolbar).
+/// One continuous scroll across the whole project — every day that has clips is
+/// a row of that day's clip thumbnails, grouped under sticky month headers.
+/// Clicking a clip opens the day editor with that clip selected.
+struct TimelineBody: View {
+    @EnvironmentObject var store: LibraryStore
+    /// The month the calendar is on, so the timeline opens scrolled there.
+    let displayedMonth: Date
+    var tagFilter: String?
+    /// Clicking a clip — opens the day window on it.
+    var onOpenClip: (Clip) -> Void
+
+    private var calendar: Calendar { Calendar.current }
+
+    /// One month's section in the Timeline. A `String` id keeps a section's
+    /// identity from colliding with a day row's `Date` id — a month's first
+    /// day's startOfDay equals the month-start instant, which otherwise makes
+    /// the pinned `LazyVStack` see one id on two child views.
+    private struct Month: Identifiable {
+        let start: Date      // first moment of the month
+        let days: [Date]     // ascending startOfDay days that have clips
+        var id: String { "\(start.timeIntervalSinceReferenceDate)" }
+    }
+
+    /// Days with content (oldest first) grouped into consecutive month sections.
+    private var months: [Month] {
+        var result: [Month] = []
+        var start: Date?
+        var days: [Date] = []
+        func flush() { if let start { result.append(Month(start: start, days: days)) } }
+        for day in store.contentDays(taggedWith: tagFilter) {
+            let month = calendar.dateInterval(of: .month, for: day)?.start ?? day
+            if month == start {
+                days.append(day)
+            } else {
+                flush()
+                start = month
+                days = [day]
+            }
+        }
+        flush()
+        return result
+    }
+
+    var body: some View {
+        let months = self.months
+        if months.isEmpty {
+            emptyState
+        } else {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                        ForEach(months) { section in
+                            Section {
+                                ForEach(section.days, id: \.self) { day in
+                                    TimelineDayRow(day: day, tagFilter: tagFilter,
+                                                   onOpenClip: onOpenClip)
+                                }
+                            } header: {
+                                TimelineMonthHeader(month: section.start, tagFilter: tagFilter)
+                            }
+                        }
+                    }
+                }
+                .onAppear {
+                    // Land near the month the calendar was on. Pinned headers can
+                    // make an immediate scrollTo a no-op, so defer a tick. The
+                    // scroll target is the section's id (its ForEach identity).
+                    let target = targetMonthID(in: months)
+                    DispatchQueue.main.async { proxy.scrollTo(target, anchor: .top) }
+                }
+            }
+        }
+    }
+
+    /// The id of the month section to open on: the one containing
+    /// `displayedMonth`, else the nearest earlier month with content, else the
+    /// first. (`months` is non-empty here — the empty case returns early.)
+    private func targetMonthID(in months: [Month]) -> String {
+        let wanted = calendar.dateInterval(of: .month, for: displayedMonth)?.start ?? displayedMonth
+        if let exact = months.first(where: { $0.start == wanted }) { return exact.id }
+        return (months.last(where: { $0.start <= wanted }) ?? months[0]).id
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "film.stack")
+                .font(.system(size: 40))
+                .foregroundStyle(.secondary)
+            Text(tagFilter.map { "No clips tagged “\($0)”" } ?? "No clips yet")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Sticky section header for a month in the Timeline: the month + year and the
+/// month's picked-clip tally (count + total length).
+private struct TimelineMonthHeader: View {
+    @EnvironmentObject var store: LibraryStore
+    let month: Date
+    var tagFilter: String?
+
+    var body: some View {
+        let clips = store.clips(inMonthOf: month, taggedWith: tagFilter)
+        let total = clips.reduce(0) { $0 + $1.trimmedDuration }
+        HStack(spacing: 12) {
+            Text(month.formatted(.dateTime.month(.wide).year()))
+                .font(.title3.bold())
+            Spacer()
+            Text("\(clips.count) clips · \(formatTime(total))")
+                .foregroundStyle(.secondary)
+                .font(.callout.monospacedDigit())
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.bar)
+    }
+}
+
+/// One day in the Timeline: a fixed date column (weekday + day number) and a
+/// horizontally scrolling strip of that day's clip thumbnails.
+private struct TimelineDayRow: View {
+    @EnvironmentObject var store: LibraryStore
+    let day: Date
+    var tagFilter: String?
+    var onOpenClip: (Clip) -> Void
+
+    private var calendar: Calendar { Calendar.current }
+
+    var body: some View {
+        let clips = store.clips(on: day, taggedWith: tagFilter)
+        let isToday = day.isSameDay(as: Date())
+        VStack(spacing: 0) {
+            HStack(alignment: .center, spacing: 14) {
+                VStack(spacing: 0) {
+                    Text(day.formatted(.dateTime.weekday(.abbreviated)))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("\(calendar.component(.day, from: day))")
+                        .font(.title2.bold().monospacedDigit())
+                        .foregroundStyle(isToday ? Color.accentColor : .primary)
+                }
+                .frame(width: 48)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(clips) { clip in
+                            Button { onOpenClip(clip) } label: {
+                                TimelineClipThumb(clip: clip)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 10)
+            Divider()
+        }
+        .background(isToday ? Color.accentColor.opacity(0.06) : Color.clear)
+    }
+}
+
+/// A clip thumbnail in the Timeline strip: a fixed 16:9 box with the clip's
+/// kind + trimmed length, mirroring the day window's rail thumb.
+private struct TimelineClipThumb: View {
+    @EnvironmentObject var store: LibraryStore
+    let clip: Clip
+
+    @State private var image: NSImage?
+    @State private var hovering = false
+
+    var body: some View {
+        ZStack(alignment: .bottomLeading) {
+            Group {
+                if let image {
+                    Image(nsImage: image).resizable().scaledToFill()
+                } else {
+                    Color.black.opacity(0.15)
+                }
+            }
+            .frame(width: 124, height: 70)
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+
+            HStack(spacing: 2) {
+                Image(systemName: clip.isCard ? "rectangle.on.rectangle.angled"
+                                              : (clip.kind == .photo ? "photo" : "video"))
+                Text(formatTime(clip.trimmedDuration))
+            }
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.white)
+            .shadow(color: .black.opacity(0.8), radius: 2)
+            .padding(5)
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(hovering ? Color.accentColor : Color.black.opacity(0.12),
+                        lineWidth: hovering ? 2 : 0.5)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 7))
+        .onHover { hovering = $0 }
+        .help(tooltip)
+        .task(id: store.thumbnailKey(for: clip)) { image = await store.thumbnail(for: clip) }
+    }
+
+    private var tooltip: String {
+        var parts: [String] = []
+        if !clip.caption.isEmpty { parts.append(clip.caption) }
+        if !clip.tags.isEmpty { parts.append("#" + clip.tags.joined(separator: " #")) }
+        parts.append("Click to edit")
+        return parts.joined(separator: "\n")
     }
 }
 

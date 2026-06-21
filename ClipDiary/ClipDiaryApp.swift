@@ -45,7 +45,8 @@ struct ClipDiaryApp: App {
         WindowGroup("Day", for: ReviewRequest.self) { $request in
             if let request {
                 ReviewWindow(startDay: request.day, startUndated: request.startUndated,
-                             focusSources: request.focusSources)
+                             focusSources: request.focusSources,
+                             startClipID: request.startClipID)
                     .environmentObject(store)
             }
         }
