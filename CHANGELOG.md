@@ -7,6 +7,17 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.12.0] - 2026-06-21
+
+- **Smoother audio at every cut.** The video still cuts hard between clips (no
+  dissolve), but each clip's sound now dips briefly to silence right at the
+  join — fading out over its last ~0.06s and in over the next clip's first
+  ~0.06s. This matches what the 1 Second Everyday app does and removes the
+  abrupt jump in volume / room tone (and the occasional click) you'd hear where
+  two clips with sound were spliced together. The very start and end of the
+  video are unchanged — those are still governed by the per-period cover/ending
+  fades. Applies to both Preview and the saved file.
+
 ## [1.11.1] - 2026-06-20
 
 - **Fixed phantom thumbnails after switching projects.** Creating or opening a
