@@ -341,6 +341,30 @@ struct Exporter {
         guard cursor > .zero else { throw ExportError.noClips }
         let totalDuration = cursor
 
+        // Soften every *internal* clip boundary with a short audio dip, the way
+        // 1SE does: the picture still cuts hard, but each clip's audio ramps down
+        // to silence over its last ~0.06s and up from silence over its first
+        // ~0.06s wherever it abuts another segment, so the splice never clicks or
+        // jumps in level. (Measured against a real 1SE export, whose audio dips
+        // ~0.06s either side of each cut.) A segment that starts the whole
+        // timeline gets no head dip and one that ends it gets no tail dip — those
+        // edges belong to the per-period bookend fades. Folded in with `max` so a
+        // longer explicit clip/bookend fade always wins.
+        let boundaryAudioFade = 0.06
+        for i in audioSegments.indices {
+            let seg = audioSegments[i]
+            let segEnd = (seg.start + seg.duration).seconds
+            let perSide = min(boundaryAudioFade, seg.duration.seconds / 2)
+            if seg.start.seconds > 0.001, perSide > audioSegments[i].fadeIn {
+                audioSegments[i].fadeIn = perSide
+                audioMixUsed = true
+            }
+            if segEnd < totalDuration.seconds - 0.001, perSide > audioSegments[i].fadeOut {
+                audioSegments[i].fadeOut = perSide
+                audioMixUsed = true
+            }
+        }
+
         // Optional first-clip fade-in from black (when there's no cover card):
         // ramp the opening clip's opacity up from zero (the composition behind
         // it is black) and fade its audio + date stamp in over the first stretch
