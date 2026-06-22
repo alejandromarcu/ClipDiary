@@ -7,6 +7,16 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.15.0] - 2026-06-22
+
+- **Keyboard shortcuts cheat sheet.** ClipDiary works best with the keyboard, so
+  there's now a window listing every shortcut, grouped by where it's used —
+  projects, the calendar, the day window, and the trim and photo editors. Open it
+  from **Help ▸ ClipDiary Keyboard Shortcuts** or just press **⌘/** anytime.
+- **Shortcut hints in tooltips.** Hovering a control that has a keyboard shortcut
+  now shows the key in its tooltip, including the Project Settings button (⌘,) and
+  the trim editor's ← / → skip.
+
 ## [1.14.0] - 2026-06-22
 
 - **Audio waveform under the trim filmstrip.** The video trim editor now shows

@@ -118,7 +118,7 @@ struct ContentView: View {
                 Button { showSettingsSheet = true } label: {
                     Label("Project Settings", systemImage: "gearshape")
                 }
-                .help("Project settings: video format, ending fade, and source folders")
+                .help("Project settings: video format and source folders (⌘,)")
                 .keyboardShortcut(",", modifiers: .command)
             }
             ToolbarItem(placement: .primaryAction) {

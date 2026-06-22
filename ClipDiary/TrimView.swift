@@ -386,6 +386,9 @@ struct TrimEditor: View {
             PlayerView(player: player)
                 .frame(minHeight: 260, maxHeight: .infinity)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
+                // The on-screen skip buttons were removed; surface the keys here,
+                // on the natural hover target for jogging playback.
+                .help("← / → skip back / forward 5 seconds")
         }
     }
 
