@@ -247,6 +247,7 @@ struct TrimEditor: View {
     @State private var player: AVPlayer?
     @State private var timeObserver: Any?
     @State private var thumbnails: [NSImage] = []
+    @State private var waveform: [Float] = []
     @State private var isPlayingPreview = false
     @State private var playheadSeconds = 0.0
     @State private var editedDate: Date
@@ -303,6 +304,10 @@ struct TrimEditor: View {
         editorBody
         .onAppear { setUp(); onLiveEdit?(editedClip) }
         .task { await loadThumbnails(url: sourceURL ?? store.fileURL(for: clip)) }
+        .task {
+            waveform = await loadAudioWaveform(
+                url: sourceURL ?? store.fileURL(for: clip), buckets: 600)
+        }
         .onDisappear {
             // Auto-save so switching clips or closing the sheet keeps edits.
             // No-op if the clip was just deleted. Review drafts aren't in the
@@ -392,9 +397,10 @@ struct TrimEditor: View {
                 outSeconds: $clip.outSeconds,
                 playheadSeconds: playheadSeconds,
                 thumbnails: thumbnails,
+                waveform: waveform,
                 onScrub: { seconds in seek(to: seconds) }
             )
-            .frame(height: 56)
+            .frame(height: waveform.isEmpty ? 56 : 92)
 
             HStack {
                 Button {
@@ -650,13 +656,17 @@ struct TrimEditor: View {
     }
 }
 
-/// Thumbnail filmstrip with draggable in/out handles.
+/// Thumbnail filmstrip with draggable in/out handles, plus an optional audio
+/// waveform lane underneath so speech and sound onsets are easy to trim to.
 struct TrimSlider: View {
     let duration: Double
     @Binding var inSeconds: Double
     @Binding var outSeconds: Double
     var playheadSeconds: Double = 0
     let thumbnails: [NSImage]
+    /// Normalized (0...1) peak amplitudes across the whole clip; empty hides the
+    /// waveform lane (the asset has no audio, or it's still loading).
+    var waveform: [Float] = []
     var onScrub: (Double) -> Void
 
     private let handleWidth: CGFloat = 12
@@ -665,48 +675,50 @@ struct TrimSlider: View {
     var body: some View {
         GeometryReader { geo in
             let width = geo.size.width
+            let totalH = geo.size.height
+            // The waveform takes a slim lane at the bottom; the filmstrip keeps
+            // the rest. Both are full-width so the same x is the same time.
+            let waveH: CGFloat = waveform.isEmpty ? 0 : min(34, totalH * 0.42)
+            let stripH = totalH - waveH
             let inX = position(of: inSeconds, width: width)
             let outX = position(of: outSeconds, width: width)
 
             ZStack(alignment: .leading) {
-                // Filmstrip
-                HStack(spacing: 0) {
-                    ForEach(Array(thumbnails.enumerated()), id: \.offset) { _, image in
-                        Image(nsImage: image)
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: max(1, width / CGFloat(max(1, thumbnails.count))),
-                                   height: geo.size.height)
-                            .clipped()
+                // Filmstrip on top, audio waveform lane below.
+                VStack(spacing: 0) {
+                    filmstrip(width: width, height: stripH)
+                    if waveH > 0 {
+                        WaveformView(samples: waveform)
+                            .frame(width: width, height: waveH)
+                            .background(Color.black.opacity(0.55))
                     }
                 }
-                .frame(width: width, height: geo.size.height)
-                .background(Color.black.opacity(0.4))
+                .frame(width: width, height: totalH)
                 .clipShape(RoundedRectangle(cornerRadius: 6))
 
-                // Dimmed (cut) regions
+                // Dimmed (cut) regions — over filmstrip and waveform both
                 Rectangle().fill(.black.opacity(0.6))
-                    .frame(width: max(0, inX), height: geo.size.height)
+                    .frame(width: max(0, inX), height: totalH)
                 Rectangle().fill(.black.opacity(0.6))
-                    .frame(width: max(0, width - outX), height: geo.size.height)
+                    .frame(width: max(0, width - outX), height: totalH)
                     .offset(x: outX)
 
                 // Selection border
                 RoundedRectangle(cornerRadius: 4)
                     .stroke(Color.yellow, lineWidth: 3)
-                    .frame(width: max(handleWidth * 2, outX - inX), height: geo.size.height)
+                    .frame(width: max(handleWidth * 2, outX - inX), height: totalH)
                     .offset(x: inX)
 
                 // Playhead (current playback position)
                 Rectangle()
                     .fill(Color.white)
-                    .frame(width: 2, height: geo.size.height)
+                    .frame(width: 2, height: totalH)
                     .shadow(color: .black.opacity(0.6), radius: 1)
                     .offset(x: position(of: playheadSeconds, width: width) - 1)
                     .allowsHitTesting(false)
 
                 // In handle
-                handle()
+                handle(height: totalH)
                     .offset(x: inX)
                     .gesture(
                         DragGesture(minimumDistance: 0)
@@ -718,7 +730,7 @@ struct TrimSlider: View {
                     )
 
                 // Out handle
-                handle()
+                handle(height: totalH)
                     .offset(x: outX - handleWidth)
                     .gesture(
                         DragGesture(minimumDistance: 0)
@@ -732,10 +744,25 @@ struct TrimSlider: View {
         }
     }
 
-    private func handle() -> some View {
+    private func filmstrip(width: CGFloat, height: CGFloat) -> some View {
+        HStack(spacing: 0) {
+            ForEach(Array(thumbnails.enumerated()), id: \.offset) { _, image in
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: max(1, width / CGFloat(max(1, thumbnails.count))),
+                           height: height)
+                    .clipped()
+            }
+        }
+        .frame(width: width, height: height)
+        .background(Color.black.opacity(0.4))
+    }
+
+    private func handle(height: CGFloat) -> some View {
         RoundedRectangle(cornerRadius: 3)
             .fill(Color.yellow)
-            .frame(width: handleWidth)
+            .frame(width: handleWidth, height: height)
             .overlay(
                 RoundedRectangle(cornerRadius: 1)
                     .fill(.black.opacity(0.5))
@@ -753,4 +780,100 @@ struct TrimSlider: View {
         guard width > 0 else { return 0 }
         return Double(min(max(0, x), width) / width) * duration
     }
+}
+
+/// A mirrored bar waveform (peaks above and below a center line) for the trim
+/// slider's audio lane. `samples` are normalized 0...1 amplitudes, left→right.
+struct WaveformView: View {
+    let samples: [Float]
+    var color: Color = .white.opacity(0.55)
+
+    var body: some View {
+        Canvas { context, size in
+            guard !samples.isEmpty, size.width > 0 else { return }
+            let midY = size.height / 2
+            let step = size.width / CGFloat(samples.count)
+            let barWidth = max(0.6, step * 0.85)
+            for (i, amp) in samples.enumerated() {
+                let x = (CGFloat(i) + 0.5) * step
+                let half = max(0.5, CGFloat(amp) * (midY - 1))
+                var bar = Path()
+                bar.move(to: CGPoint(x: x, y: midY - half))
+                bar.addLine(to: CGPoint(x: x, y: midY + half))
+                context.stroke(bar, with: .color(color),
+                               style: StrokeStyle(lineWidth: barWidth, lineCap: .round))
+            }
+        }
+    }
+}
+
+/// Reads `url`'s audio track and returns `buckets` normalized peak amplitudes
+/// (0...1) spanning the whole clip, for the trim slider's waveform lane.
+/// Returns an empty array when the asset has no audio. Decodes to 16 kHz mono
+/// PCM (ample for a visual) and runs off the main actor.
+func loadAudioWaveform(url: URL, buckets: Int) async -> [Float] {
+    let asset = AVURLAsset(url: url)
+    guard buckets > 0,
+          let track = try? await asset.loadTracks(withMediaType: .audio).first,
+          let durationTime = try? await asset.load(.duration) else { return [] }
+    let duration = durationTime.seconds
+    guard duration.isFinite, duration > 0 else { return [] }
+    guard let reader = try? AVAssetReader(asset: asset) else { return [] }
+
+    let sampleRate = 16_000.0
+    let settings: [String: Any] = [
+        AVFormatIDKey: kAudioFormatLinearPCM,
+        AVLinearPCMBitDepthKey: 16,
+        AVLinearPCMIsBigEndianKey: false,
+        AVLinearPCMIsFloatKey: false,
+        AVLinearPCMIsNonInterleaved: false,
+        AVNumberOfChannelsKey: 1,
+        AVSampleRateKey: sampleRate
+    ]
+    let output = AVAssetReaderTrackOutput(track: track, outputSettings: settings)
+    output.alwaysCopiesSampleData = false
+    guard reader.canAdd(output) else { return [] }
+    reader.add(output)
+    guard reader.startReading() else { return [] }
+
+    let totalFrames = max(1, Int(duration * sampleRate))
+    var peaks = [Float](repeating: 0, count: buckets)
+    var frameIndex = 0
+
+    while reader.status == .reading {
+        guard let sampleBuffer = output.copyNextSampleBuffer() else { break }
+        if let block = CMSampleBufferGetDataBuffer(sampleBuffer) {
+            let length = CMBlockBufferGetDataLength(block)
+            var dataPointer: UnsafeMutablePointer<Int8>?
+            if CMBlockBufferGetDataPointer(block, atOffset: 0, lengthAtOffsetOut: nil,
+                                           totalLengthOut: nil,
+                                           dataPointerOut: &dataPointer) == noErr,
+               let dataPointer {
+                let count = length / MemoryLayout<Int16>.size
+                dataPointer.withMemoryRebound(to: Int16.self, capacity: count) { samples in
+                    for i in 0..<count {
+                        let amp = Float(abs(Int32(samples[i]))) / Float(Int16.max)
+                        let bucket = min(buckets - 1, (frameIndex + i) * buckets / totalFrames)
+                        if amp > peaks[bucket] { peaks[bucket] = amp }
+                    }
+                }
+                frameIndex += count
+            }
+        }
+        CMSampleBufferInvalidate(sampleBuffer)
+        if Task.isCancelled { reader.cancelReading(); return [] }
+    }
+
+    guard reader.status != .failed else { return [] }
+    return normalizedWaveform(peaks)
+}
+
+/// Scales peaks so the 95th-percentile level maps to 1.0 — that way a lone loud
+/// transient (a clap, a bump) doesn't flatten quieter speech to nothing.
+private func normalizedWaveform(_ peaks: [Float]) -> [Float] {
+    let positive = peaks.filter { $0 > 0 }.sorted()
+    guard let loudest = positive.last, loudest > 0 else { return peaks }
+    let reference = positive[Int(Double(positive.count - 1) * 0.95)]
+    let denom = max(reference, loudest * 0.15, 0.0001)
+    return peaks.map { min(1, $0 / denom) }
 }

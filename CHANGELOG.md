@@ -7,6 +7,15 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.14.0] - 2026-06-22
+
+- **Audio waveform under the trim filmstrip.** The video trim editor now shows
+  a waveform of the clip's audio in a slim lane beneath the thumbnail strip,
+  aligned to the same timeline. You can see at a glance where someone starts and
+  stops speaking, making it easy to set the in/out points right at those moments.
+  The waveform dims along with the filmstrip outside the selected range, and
+  clips with no audio simply show the filmstrip as before.
+
 ## [1.13.0] - 2026-06-21
 
 - **New Timeline view.** A toolbar switch (top-left) now flips the main window
