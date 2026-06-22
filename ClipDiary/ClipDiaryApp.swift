@@ -27,6 +27,12 @@ struct ClipDiaryApp: App {
                 }
                 .disabled(store.recentProjects.isEmpty)
             }
+            // Replace the dead default "ClipDiary Help" (there's no help book)
+            // with the keyboard-shortcuts cheat sheet — the standard macOS home
+            // for "how do I learn the shortcuts".
+            CommandGroup(replacing: .help) {
+                ShortcutsHelpButton()
+            }
         }
 
         // Month preview opens in its own (resizable) window — sheets on
@@ -57,5 +63,22 @@ struct ClipDiaryApp: App {
             CardsManagerView()
                 .environmentObject(store)
         }
+
+        // The keyboard-shortcuts cheat sheet, a single shared window opened from
+        // the Help menu or ⌘/.
+        Window("Keyboard Shortcuts", id: "shortcuts") {
+            ShortcutsView()
+        }
+        .windowResizability(.contentMinSize)
+    }
+}
+
+/// Help-menu item that opens the keyboard-shortcuts window. A small view so it
+/// can reach `openWindow` from the environment inside the commands builder.
+private struct ShortcutsHelpButton: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        Button("ClipDiary Keyboard Shortcuts") { openWindow(id: "shortcuts") }
+            .keyboardShortcut("/", modifiers: .command)
     }
 }
