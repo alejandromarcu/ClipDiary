@@ -7,6 +7,15 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.16.0] - 2026-06-24
+
+- **Crop videos.** The trim editor now shows a yellow crop box right on the
+  video, just like the photo editor — drag the corners to zoom in and drag inside
+  to reposition. The crop keeps the video's shape (it zooms and pans, never
+  stretches) and the same crop applies to the whole clip, showing up in the day
+  window, the preview, and the exported video. Use **Reset Crop** to go back to
+  the whole frame.
+
 ## [1.15.0] - 2026-06-22
 
 - **Keyboard shortcuts cheat sheet.** ClipDiary works best with the keyboard, so

@@ -348,7 +348,9 @@ struct Clip: Identifiable, Codable, Equatable, Hashable {
     /// Video file or still photo. For photos, durationSeconds/outSeconds hold
     /// the chosen display duration and inSeconds is 0.
     var kind: ClipKind = .video
-    /// Photos only: normalized crop (nil = whole image).
+    /// Normalized crop (nil = whole frame), in oriented top-left unit coords.
+    /// Photos crop the rendered still; videos keep their native aspect ratio and
+    /// the same crop is applied to every frame of the clip.
     var crop: CropRect? = nil
     /// When set, this `.photo` clip is a **live reference** to a designed card
     /// (matched by id in `LibraryStore.cards`): it has no media file in `Clips/`

@@ -367,15 +367,40 @@ struct PhotoCropView: View {
     /// Desired pixel width/height ratio of the crop, nil = unconstrained.
     var aspect: Double?
 
+    var body: some View {
+        CropOverlay(contentSize: image.size, crop: $crop, aspect: aspect) { fit in
+            Image(nsImage: image)
+                .resizable()
+                .frame(width: fit.width, height: fit.height)
+                .offset(x: fit.minX, y: fit.minY)
+        }
+    }
+}
+
+/// The interactive crop rectangle — dimming, a yellow border, draggable corner
+/// handles and drag-inside-to-move — laid over a base layer that is aspect-fit
+/// into the available space. Shared by the photo editor (base = the still
+/// image) and the video editor (base = the live player), so both crop with the
+/// same gestures. `contentSize` is the displayed content's pixel size, used to
+/// fit the box and (with `aspect`) to lock its ratio; the base builder is given
+/// the fitted rect (an image sizes itself to it, a player fills and letterboxes
+/// to the same rect).
+struct CropOverlay<Base: View>: View {
+    let contentSize: CGSize
+    @Binding var crop: CropRect
+    /// Desired pixel width/height ratio of the crop, nil = unconstrained.
+    var aspect: Double?
+    @ViewBuilder var base: (CGRect) -> Base
+
     private let handleRadius: CGFloat = 8
-    /// Minimum crop width/height as a fraction of the image.
+    /// Minimum crop width/height as a fraction of the content.
     private let minCrop = 0.05
 
     /// `aspect` converted to unit-coordinate width/height (crop coords are
-    /// fractions of the image, so the image's own ratio factors in).
+    /// fractions of the content, so its own ratio factors in).
     private var unitRatio: Double? {
-        guard let aspect, image.size.width > 0, image.size.height > 0 else { return nil }
-        return aspect * Double(image.size.height / image.size.width)
+        guard let aspect, contentSize.width > 0, contentSize.height > 0 else { return nil }
+        return aspect * Double(contentSize.height / contentSize.width)
     }
 
     /// Crop at the start of an interior (move) drag.
@@ -400,12 +425,9 @@ struct PhotoCropView: View {
             let rect = viewRect(in: fit)
 
             ZStack(alignment: .topLeading) {
-                Image(nsImage: image)
-                    .resizable()
-                    .frame(width: fit.width, height: fit.height)
-                    .offset(x: fit.minX, y: fit.minY)
+                base(fit)
 
-                // Dim the cropped-away part of the photo.
+                // Dim the cropped-away part of the content.
                 Path { path in
                     path.addRect(fit)
                     path.addRect(rect)
@@ -524,7 +546,7 @@ struct PhotoCropView: View {
     // MARK: - Geometry
 
     private func fittedRect(in size: CGSize) -> CGRect {
-        let imageSize = image.size
+        let imageSize = contentSize
         guard imageSize.width > 0, imageSize.height > 0 else { return .zero }
         let scale = min(size.width / imageSize.width, size.height / imageSize.height)
         let w = imageSize.width * scale

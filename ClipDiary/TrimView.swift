@@ -252,6 +252,9 @@ struct TrimEditor: View {
     @State private var playheadSeconds = 0.0
     @State private var editedDate: Date
     @State private var showTransition = false
+    /// The video's oriented display size, loaded once — the crop box is fit and
+    /// aspect-locked to it. Nil until known (the plain player shows meanwhile).
+    @State private var videoDisplaySize: CGSize?
     /// Width of the review metadata pane; shared with the photo editor and
     /// remembered across items and launches.
     @AppStorage("reviewPaneWidth") private var paneWidth: Double = 280
@@ -308,6 +311,7 @@ struct TrimEditor: View {
             waveform = await loadAudioWaveform(
                 url: sourceURL ?? store.fileURL(for: clip), buckets: 600)
         }
+        .task { await loadVideoDisplaySize() }
         .onDisappear {
             // Auto-save so switching clips or closing the sheet keeps edits.
             // No-op if the clip was just deleted. Review drafts aren't in the
@@ -338,6 +342,7 @@ struct TrimEditor: View {
             VStack(spacing: 14) {
                 mediaAccessory
                 mediaView
+                cropControls
                 trimControls
                 Spacer(minLength: 0)
             }
@@ -383,13 +388,40 @@ struct TrimEditor: View {
     @ViewBuilder
     private var mediaView: some View {
         if let player {
-            PlayerView(player: player)
-                .frame(minHeight: 260, maxHeight: .infinity)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                // The on-screen skip buttons were removed; surface the keys here,
-                // on the natural hover target for jogging playback.
-                .help("← / → skip back / forward 5 seconds")
+            Group {
+                if let videoDisplaySize {
+                    // The yellow crop box is drawn right on the player, like the
+                    // photo editor crops the still. The player fills and
+                    // letterboxes to the video, and the box fits the same rect.
+                    CropOverlay(contentSize: videoDisplaySize,
+                                crop: cropBinding, aspect: nativeAspect) { _ in
+                        PlayerView(player: player)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                } else {
+                    PlayerView(player: player)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+            }
+            .frame(minHeight: 260, maxHeight: .infinity)
+            // The on-screen skip buttons were removed; surface the keys here,
+            // on the natural hover target for jogging playback.
+            .help("Drag the yellow box to crop · ← / → skip back / forward 5 seconds")
         }
+    }
+
+    private var cropBinding: Binding<CropRect> {
+        Binding(
+            get: { clip.crop ?? .full },
+            set: { clip.crop = $0.isFull ? nil : $0 }
+        )
+    }
+
+    /// The video's display width/height, once known — the ratio the crop is
+    /// locked to, so it only zooms/pans and never reshapes the video.
+    private var nativeAspect: Double? {
+        guard let size = videoDisplaySize, size.width > 0, size.height > 0 else { return nil }
+        return Double(size.width / size.height)
     }
 
     private var trimControls: some View {
@@ -455,6 +487,26 @@ struct TrimEditor: View {
             TextField("Caption (optional)", text: $clip.caption)
                 .textFieldStyle(.roundedBorder)
         }
+    }
+
+    /// Slim row under the player: a hint that the box on the video crops it, and
+    /// a Reset back to the whole frame. Mirrors the photo editor's crop controls.
+    private var cropControls: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "crop")
+                .foregroundStyle(.secondary)
+            Text(clip.crop == nil
+                 ? "Drag the box on the video to crop — keeps the video's shape"
+                 : "Cropped — the box applies to the whole clip")
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer()
+            Button("Reset Crop") { clip.crop = nil }
+                .disabled(clip.crop == nil)
+                .help("Clear the crop and show the whole video frame")
+        }
+        .font(.callout)
     }
 
     /// Audio level for this clip in the rendered video: 0% mutes, 100% is the
@@ -656,6 +708,19 @@ struct TrimEditor: View {
             }
         }
         thumbnails = images
+    }
+
+    /// Loads the video's oriented display size (natural size with its
+    /// preferred transform applied), so the crop box can fit and lock to the
+    /// video's real on-screen shape.
+    private func loadVideoDisplaySize() async {
+        let url = sourceURL ?? store.fileURL(for: clip)
+        let asset = AVURLAsset(url: url)
+        guard let track = try? await asset.loadTracks(withMediaType: .video).first,
+              let naturalSize = try? await track.load(.naturalSize),
+              let preferred = try? await track.load(.preferredTransform) else { return }
+        let oriented = CGRect(origin: .zero, size: naturalSize).applying(preferred)
+        videoDisplaySize = CGSize(width: abs(oriented.width), height: abs(oriented.height))
     }
 }
 

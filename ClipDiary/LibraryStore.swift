@@ -1308,7 +1308,12 @@ final class LibraryStore: ObservableObject {
         generator.maximumSize = CGSize(width: 480, height: 480)
         let time = CMTime(seconds: clip.inSeconds, preferredTimescale: 600)
         do {
-            let (cgImage, _) = try await generator.image(at: time)
+            var (cgImage, _) = try await generator.image(at: time)
+            // The frame is oriented (appliesPreferredTrackTransform), so the
+            // crop maps the same way it does for photos and the export.
+            if let crop = clip.crop {
+                cgImage = croppedImage(cgImage, to: crop)
+            }
             let image = NSImage(cgImage: cgImage, size: .zero)
             thumbnailCache.setObject(image, forKey: clip.id as NSUUID)
             return image
