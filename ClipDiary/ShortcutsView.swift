@@ -54,6 +54,8 @@ let shortcutGroups: [ShortcutGroup] = [
     ShortcutGroup("Trim Editor", subtitle: "Editing a video clip in the day window", [
         ShortcutEntry(["I"], "Set the in point at the playhead"),
         ShortcutEntry(["O"], "Set the out point at the playhead"),
+        ShortcutEntry(["Space"], "Play / pause the clip"),
+        ShortcutEntry(["P"], "Preview the trimmed in → out segment"),
         ShortcutEntry(["←"], "Skip back 5 seconds"),
         ShortcutEntry(["→"], "Skip forward 5 seconds"),
         ShortcutEntry(["⌘", "↩"], "Add the clip to the day"),

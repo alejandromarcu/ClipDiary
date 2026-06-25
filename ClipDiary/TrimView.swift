@@ -472,10 +472,18 @@ struct TrimEditor: View {
                 Button {
                     isPreviewingTrim ? pausePlayback() : playTrimmedPreview()
                 } label: {
-                    Label(isPreviewingTrim ? "Stop" : "Preview Trim",
-                          systemImage: isPreviewingTrim ? "stop.fill" : "play.rectangle.fill")
+                    // A hidden "Preview Trim" reserves the wider width (left
+                    // aligned, so the icon stays put) — the row doesn't shift
+                    // when the label flips to the shorter "Pause".
+                    ZStack(alignment: .leading) {
+                        Label("Preview Trim", systemImage: "play.rectangle.fill")
+                            .hidden()
+                        Label(isPreviewingTrim ? "Pause" : "Preview Trim",
+                              systemImage: isPreviewingTrim ? "pause.fill" : "play.rectangle.fill")
+                    }
                 }
-                .help("Play just the trimmed in → out segment")
+                .keyboardShortcut("p", modifiers: [])
+                .help("Play just the trimmed in → out segment (P)")
                 Text("Trim \(formatTime(clip.trimmedDuration)) of \(formatTime(clip.durationSeconds))")
                     .foregroundStyle(.secondary)
                     .help("Length of the trimmed segment, out of the clip's full length")
