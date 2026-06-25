@@ -15,6 +15,10 @@ and versions follow [Semantic Versioning](https://semver.org/)
   stretches) and the same crop applies to the whole clip, showing up in the day
   window, the preview, and the exported video. Use **Reset Crop** to go back to
   the whole frame.
+- **Player controls moved off the video.** Because the crop box sits on top of
+  the video, the floating controls that used to overlay the picture are gone.
+  Instead there's a play/pause button next to Preview Trim, and **Space** toggles
+  play/pause (as the old controls did). The filmstrip still shows the playhead.
 
 ## [1.15.0] - 2026-06-22
 

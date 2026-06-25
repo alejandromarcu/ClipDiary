@@ -395,6 +395,11 @@ struct CropOverlay<Base: View>: View {
     private let handleRadius: CGFloat = 8
     /// Minimum crop width/height as a fraction of the content.
     private let minCrop = 0.05
+    /// Margin kept between the fitted content and the container edges. A corner
+    /// handle's tap area extends ~16pt past the corner (`handleRadius` + the
+    /// `contentShape` inset); without this room a handle sitting on the very
+    /// edge gets its tap area clipped and can't be grabbed.
+    private let edgeInset: CGFloat = 18
 
     /// `aspect` converted to unit-coordinate width/height (crop coords are
     /// fractions of the content, so its own ratio factors in).
@@ -548,7 +553,11 @@ struct CropOverlay<Base: View>: View {
     private func fittedRect(in size: CGSize) -> CGRect {
         let imageSize = contentSize
         guard imageSize.width > 0, imageSize.height > 0 else { return .zero }
-        let scale = min(size.width / imageSize.width, size.height / imageSize.height)
+        // Fit within an inset area (leaving room for the edge handles), but
+        // center within the full size.
+        let available = CGSize(width: max(1, size.width - 2 * edgeInset),
+                               height: max(1, size.height - 2 * edgeInset))
+        let scale = min(available.width / imageSize.width, available.height / imageSize.height)
         let w = imageSize.width * scale
         let h = imageSize.height * scale
         return CGRect(x: (size.width - w) / 2, y: (size.height - h) / 2, width: w, height: h)

@@ -247,7 +247,10 @@ struct ReviewWindow: View {
             .help("Play this day's clips in a preview window")
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.top, 10)
+        // Match the editor content's 16pt bottom inset so Preview Day lines up
+        // with the trim row (Set In / Set Out) and the side pane's actions.
+        .padding(.bottom, 16)
     }
 
     private var pickedSection: some View {
