@@ -287,11 +287,14 @@ struct Exporter {
                 clipHasAudio = true
             }
 
-            // Aspect-fit transform for this segment.
+            // Aspect-fit transform for this segment. Videos can carry a crop
+            // (zoom into a sub-rectangle); photos and cards already baked any
+            // crop into their rendered image, so the segment is fit whole.
             let naturalSize = try await srcVideo.load(.naturalSize)
             let preferred = try await srcVideo.load(.preferredTransform)
             let transform = Self.aspectFitTransform(
-                naturalSize: naturalSize, preferred: preferred, renderSize: renderSize
+                naturalSize: naturalSize, preferred: preferred, renderSize: renderSize,
+                crop: clip.kind == .video ? clip.crop : nil
             )
 
             let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: videoTrack)
@@ -669,17 +672,30 @@ struct Exporter {
     /// The transform that aspect-fits a source track (honoring its
     /// `preferredTransform`, e.g. rotated iPhone video) centered into
     /// `renderSize`, letterboxing as needed. Shared by every stitched segment.
+    ///
+    /// With a `crop` (oriented top-left unit coords), only that sub-rectangle of
+    /// the frame is fit into the render — i.e. the clip is zoomed/panned to the
+    /// crop. The video composition's transform space is top-left origin (y down),
+    /// matching the crop coords, so the crop maps straight across. With no crop
+    /// (or a full one) this reduces exactly to the whole-frame aspect fit.
     static func aspectFitTransform(
-        naturalSize: CGSize, preferred: CGAffineTransform, renderSize: CGSize
+        naturalSize: CGSize, preferred: CGAffineTransform, renderSize: CGSize,
+        crop: CropRect? = nil
     ) -> CGAffineTransform {
         let orientedRect = CGRect(origin: .zero, size: naturalSize).applying(preferred)
         let orientedSize = CGSize(width: abs(orientedRect.width), height: abs(orientedRect.height))
-        let scale = min(renderSize.width / orientedSize.width,
-                        renderSize.height / orientedSize.height)
-        let scaledSize = CGSize(width: orientedSize.width * scale,
-                                height: orientedSize.height * scale)
-        let tx = (renderSize.width - scaledSize.width) / 2 - orientedRect.minX * scale
-        let ty = (renderSize.height - scaledSize.height) / 2 - orientedRect.minY * scale
+        let crop = crop ?? .full
+        // The fit-and-center target is the crop sub-rectangle, expressed in the
+        // oriented frame's own (top-left) coordinate space.
+        let cropOriginX = orientedRect.minX + crop.x * orientedSize.width
+        let cropOriginY = orientedRect.minY + crop.y * orientedSize.height
+        let cropWidth = crop.width * orientedSize.width
+        let cropHeight = crop.height * orientedSize.height
+        let scale = min(renderSize.width / cropWidth,
+                        renderSize.height / cropHeight)
+        let scaledSize = CGSize(width: cropWidth * scale, height: cropHeight * scale)
+        let tx = (renderSize.width - scaledSize.width) / 2 - cropOriginX * scale
+        let ty = (renderSize.height - scaledSize.height) / 2 - cropOriginY * scale
         var transform = preferred
         transform = transform.concatenating(CGAffineTransform(scaleX: scale, y: scale))
         transform = transform.concatenating(CGAffineTransform(translationX: tx, y: ty))

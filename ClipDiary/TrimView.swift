@@ -248,10 +248,21 @@ struct TrimEditor: View {
     @State private var timeObserver: Any?
     @State private var thumbnails: [NSImage] = []
     @State private var waveform: [Float] = []
-    @State private var isPlayingPreview = false
+    /// Whether the player is currently playing (driven by the transport bar's
+    /// play button or Preview Trim).
+    @State private var isPlaying = false
+    /// True while a Preview Trim is running, so playback stops at the out-point
+    /// instead of running to the end of the clip.
+    @State private var stopAtOut = false
     @State private var playheadSeconds = 0.0
+    /// Local key monitor that makes Space toggle play/pause (unless a text field
+    /// is being edited). Installed on appear, removed on disappear.
+    @State private var spaceKeyMonitor: Any?
     @State private var editedDate: Date
     @State private var showTransition = false
+    /// The video's oriented display size, loaded once — the crop box is fit and
+    /// aspect-locked to it. Nil until known (the plain player shows meanwhile).
+    @State private var videoDisplaySize: CGSize?
     /// Width of the review metadata pane; shared with the photo editor and
     /// remembered across items and launches.
     @AppStorage("reviewPaneWidth") private var paneWidth: Double = 280
@@ -308,6 +319,7 @@ struct TrimEditor: View {
             waveform = await loadAudioWaveform(
                 url: sourceURL ?? store.fileURL(for: clip), buckets: 600)
         }
+        .task { await loadVideoDisplaySize() }
         .onDisappear {
             // Auto-save so switching clips or closing the sheet keeps edits.
             // No-op if the clip was just deleted. Review drafts aren't in the
@@ -338,8 +350,11 @@ struct TrimEditor: View {
             VStack(spacing: 14) {
                 mediaAccessory
                 mediaView
+                // The video (above) takes the slack, so the trim row sits at the
+                // bottom — level with the side pane's Revert/Delete and the rail
+                // footer. No trailing Spacer (it would fight the video for space
+                // and leave this row floating mid-column).
                 trimControls
-                Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             ResizablePaneDivider(width: $paneWidth)
@@ -370,6 +385,12 @@ struct TrimEditor: View {
             Spacer(minLength: 0)
             HStack {
                 revertButton
+                // Precise full-frame reset for the video crop (hand-dragging the
+                // box never lands exactly on the edges); only when there's a crop.
+                if clip.crop != nil {
+                    Button("Reset Crop") { clip.crop = nil }
+                        .help("Clear the crop and show the whole video frame")
+                }
                 Spacer()
                 // Review adds a draft; library edits an existing clip.
                 if isReview { addButton } else { deleteButton }
@@ -383,13 +404,41 @@ struct TrimEditor: View {
     @ViewBuilder
     private var mediaView: some View {
         if let player {
-            PlayerView(player: player)
-                .frame(minHeight: 260, maxHeight: .infinity)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                // The on-screen skip buttons were removed; surface the keys here,
-                // on the natural hover target for jogging playback.
-                .help("← / → skip back / forward 5 seconds")
+            Group {
+                if let videoDisplaySize {
+                    // The yellow crop box is drawn right on the player, like the
+                    // photo editor crops the still. The player is sized to the
+                    // same fitted rect as the box, so the two stay aligned.
+                    CropOverlay(contentSize: videoDisplaySize,
+                                crop: cropBinding, aspect: nativeAspect) { fit in
+                        PlayerView(player: player, controlsStyle: .none)
+                            .frame(width: fit.width, height: fit.height)
+                            .offset(x: fit.minX, y: fit.minY)
+                    }
+                } else {
+                    PlayerView(player: player, controlsStyle: .none)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+            }
+            .frame(minHeight: 260, maxHeight: .infinity)
+            // The on-screen skip buttons were removed; surface the keys here,
+            // on the natural hover target for jogging playback.
+            .help("Drag the yellow box to crop · ← / → skip back / forward 5 seconds")
         }
+    }
+
+    private var cropBinding: Binding<CropRect> {
+        Binding(
+            get: { clip.crop ?? .full },
+            set: { clip.crop = $0.isFull ? nil : $0 }
+        )
+    }
+
+    /// The video's display width/height, once known — the ratio the crop is
+    /// locked to, so it only zooms/pans and never reshapes the video.
+    private var nativeAspect: Double? {
+        guard let size = videoDisplaySize, size.width > 0, size.height > 0 else { return nil }
+        return Double(size.width / size.height)
     }
 
     private var trimControls: some View {
@@ -415,14 +464,29 @@ struct TrimEditor: View {
                 .help("Mark the current playback time as the start of the trim (I)")
                 Text(formatTime(clip.inSeconds))
                 Spacer()
-                Button {
-                    isPlayingPreview ? stopPreview() : playTrimmedPreview()
-                } label: {
-                    Label(isPlayingPreview ? "Stop" : "Preview Trim",
-                          systemImage: isPlayingPreview ? "stop.fill" : "play.fill")
+                Button { togglePlay() } label: {
+                    Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                        .frame(width: 14)
                 }
-                Text("Length: \(formatTime(clip.trimmedDuration))")
+                .help("Play / pause the whole clip (Space)")
+                Button {
+                    isPreviewingTrim ? pausePlayback() : playTrimmedPreview()
+                } label: {
+                    // A hidden "Preview Trim" reserves the wider width (left
+                    // aligned, so the icon stays put) — the row doesn't shift
+                    // when the label flips to the shorter "Pause".
+                    ZStack(alignment: .leading) {
+                        Label("Preview Trim", systemImage: "play.rectangle.fill")
+                            .hidden()
+                        Label(isPreviewingTrim ? "Pause" : "Preview Trim",
+                              systemImage: isPreviewingTrim ? "pause.fill" : "play.rectangle.fill")
+                    }
+                }
+                .keyboardShortcut("p", modifiers: [])
+                .help("Play just the trimmed in → out segment (P)")
+                Text("Trim \(formatTime(clip.trimmedDuration)) of \(formatTime(clip.durationSeconds))")
                     .foregroundStyle(.secondary)
+                    .help("Length of the trimmed segment, out of the clip's full length")
                 Spacer()
                 Text(formatTime(clip.outSeconds))
                 Button {
@@ -512,7 +576,7 @@ struct TrimEditor: View {
 
     private var revertButton: some View {
         Button {
-            stopPreview()
+            pausePlayback()
             clip = original
             editedDate = original.date
         } label: {
@@ -526,7 +590,7 @@ struct TrimEditor: View {
     private var addButton: some View {
         if let onAdd {
             Button {
-                stopPreview()
+                pausePlayback()
                 var added = clip
                 added.date = editedDate.dayKey
                 onAdd(added)
@@ -541,7 +605,7 @@ struct TrimEditor: View {
 
     private var deleteButton: some View {
         Button(role: .destructive) {
-            stopPreview()
+            pausePlayback()
             if let onDelete {
                 onDelete()
             } else {
@@ -580,7 +644,7 @@ struct TrimEditor: View {
     /// Seek relative to the current playback time, clamped to the clip bounds.
     private func skip(by delta: Double) {
         guard let now = currentPlayerSeconds else { return }
-        if isPlayingPreview { stopPreview() }
+        if isPlaying { pausePlayback() }
         let target = min(max(0, now + delta), clip.durationSeconds)
         seek(to: target)
     }
@@ -606,20 +670,48 @@ struct TrimEditor: View {
         timeObserver = newPlayer.addPeriodicTimeObserver(
             forInterval: CMTime(value: 1, timescale: 30), queue: .main
         ) { time in
-            if time.seconds.isFinite { playheadSeconds = time.seconds }
-            if isPlayingPreview && time.seconds >= clip.outSeconds {
-                stopPreview()
+            let seconds = time.seconds
+            guard seconds.isFinite else { return }
+            playheadSeconds = seconds
+            guard isPlaying else { return }
+            // Preview Trim stops at the out-point; the transport play runs to the
+            // end of the clip.
+            if stopAtOut {
+                if seconds >= clip.outSeconds { pausePlayback() }
+            } else if seconds >= clip.durationSeconds - 0.03 {
+                pausePlayback()
             }
+        }
+
+        // Space toggles play/pause, like the player's old built-in controls did —
+        // but only when the user isn't typing in a text field (caption, tags…),
+        // so it doesn't swallow spaces.
+        spaceKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard event.keyCode == 49, // Space
+                  event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
+                  !isEditingText() else { return event }
+            togglePlay()
+            return nil
         }
     }
 
+    /// Whether a text field is currently being edited in the key window, so the
+    /// Space shortcut should yield to it.
+    private func isEditingText() -> Bool {
+        NSApp.keyWindow?.firstResponder is NSText
+    }
+
     private func tearDown() {
-        stopPreview()
+        pausePlayback()
         if let timeObserver, let player {
             player.removeTimeObserver(timeObserver)
         }
         timeObserver = nil
         player = nil
+        if let spaceKeyMonitor {
+            NSEvent.removeMonitor(spaceKeyMonitor)
+            self.spaceKeyMonitor = nil
+        }
     }
 
     private func seek(to seconds: Double) {
@@ -629,15 +721,36 @@ struct TrimEditor: View {
         )
     }
 
-    private func playTrimmedPreview() {
-        seek(to: clip.inSeconds)
-        player?.play()
-        isPlayingPreview = true
+    /// True while a Preview Trim is playing (so its button shows "Stop").
+    private var isPreviewingTrim: Bool { isPlaying && stopAtOut }
+
+    /// Transport play/pause: plays the whole clip from the current position
+    /// (restarting from the top if parked at the end), or pauses.
+    private func togglePlay() {
+        guard let player else { return }
+        if isPlaying {
+            pausePlayback()
+        } else {
+            if let now = currentPlayerSeconds, now >= clip.durationSeconds - 0.05 {
+                seek(to: 0)
+            }
+            stopAtOut = false
+            player.play()
+            isPlaying = true
+        }
     }
 
-    private func stopPreview() {
+    private func playTrimmedPreview() {
+        seek(to: clip.inSeconds)
+        stopAtOut = true
+        player?.play()
+        isPlaying = true
+    }
+
+    private func pausePlayback() {
         player?.pause()
-        isPlayingPreview = false
+        isPlaying = false
+        stopAtOut = false
     }
 
     private func loadThumbnails(url: URL) async {
@@ -656,6 +769,19 @@ struct TrimEditor: View {
             }
         }
         thumbnails = images
+    }
+
+    /// Loads the video's oriented display size (natural size with its
+    /// preferred transform applied), so the crop box can fit and lock to the
+    /// video's real on-screen shape.
+    private func loadVideoDisplaySize() async {
+        let url = sourceURL ?? store.fileURL(for: clip)
+        let asset = AVURLAsset(url: url)
+        guard let track = try? await asset.loadTracks(withMediaType: .video).first,
+              let naturalSize = try? await track.load(.naturalSize),
+              let preferred = try? await track.load(.preferredTransform) else { return }
+        let oriented = CGRect(origin: .zero, size: naturalSize).applying(preferred)
+        videoDisplaySize = CGSize(width: abs(oriented.width), height: abs(oriented.height))
     }
 }
 
