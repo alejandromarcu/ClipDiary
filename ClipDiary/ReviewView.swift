@@ -641,8 +641,14 @@ struct ReviewWindow: View {
 
     private func add(_ clip: Clip) {
         guard let item = selectedSource else { return }
-        // A Live Photo added as its motion copies the video, not the still.
-        let source = (useMotion && item.isLivePhoto) ? item.motionURL : nil
+        // For a Live Photo, copy the file that matches what the clip actually is:
+        // the motion video for a video clip, the still for a photo clip. Keyed off
+        // the clip's own `kind` (not the transient `useMotion` picker) so the
+        // copied file and the recorded kind can never disagree — the picker can
+        // lag a frame behind the editor that produced the clip, which used to copy
+        // a still .JPG while saving it as a `.video` (an unplayable clip that
+        // breaks its thumbnail, the trim editor, and the whole month's export).
+        let source = (item.isLivePhoto && clip.kind == .video) ? item.motionURL : nil
         store.pick(item, draft: clip, from: source)
         next()
     }
