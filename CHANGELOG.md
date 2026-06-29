@@ -7,6 +7,16 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.16.1] - 2026-06-29
+
+- **Fixed: cropping a Live Photo's still could save it as an unplayable
+  video.** When adding a Live Photo, switching between its **Photo** and
+  **Video** options could leave the still image saved as a video clip — it
+  showed a blank thumbnail, wouldn't play in the editor, and broke that whole
+  month's preview/export with a "Cannot Open" error. The copied file now always
+  matches what the clip actually is. (An existing bad clip can be fixed by
+  removing and re-adding the photo.)
+
 ## [1.16.0] - 2026-06-24
 
 - **Crop videos.** The trim editor now shows a yellow crop box right on the
