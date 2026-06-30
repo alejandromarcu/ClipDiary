@@ -211,34 +211,21 @@ struct Exporter {
             [(url: URL, startGlobal: Double, spanEndGlobal: Double, track: AudioTrack)],
             [UUID: Double]
         ) = await MainActor.run {
-            let ordered = store.clips.sorted {
-                $0.date == $1.date ? $0.createdAt < $1.createdAt : $0.date < $1.date
-            }
-            func dur(_ c: Clip) -> Double {
-                c.kind == .photo ? max(0.5, c.trimmedDuration) : c.trimmedDuration
-            }
-            var gStart: [UUID: Double] = [:]
-            var gEnd: [UUID: Double] = [:]
-            var cursor = 0.0
-            for c in ordered {
-                gStart[c.id] = cursor
-                cursor += dur(c)
-                gEnd[c.id] = cursor
-            }
-            let total = cursor
+            let layout = store.timelineLayout()
             var placements: [(url: URL, startGlobal: Double, spanEndGlobal: Double, track: AudioTrack)] = []
-            for c in ordered {
-                guard let track = c.audio, let s = gStart[c.id] else { continue }
+            for c in layout.order {
+                guard let track = c.audio, let s = layout.startByID[c.id] else { continue }
                 let spanEnd: Double
-                if let e = track.endClipID {
-                    if e == c.id { spanEnd = gEnd[c.id] ?? total }   // this clip only
-                    else { spanEnd = gEnd[e] ?? total }              // later clip / stale id
+                if let e = track.endClipID, let es = layout.startByID[e], let ee = layout.endByID[e] {
+                    // Ends mid-clip (endWithinSeconds) or at the end clip's full
+                    // end. A stale id falls through to the timeline end.
+                    spanEnd = track.endWithinSeconds.map { es + $0 } ?? ee
                 } else {
-                    spanEnd = total                                  // open-ended
+                    spanEnd = layout.total                                           // open-ended / stale
                 }
                 placements.append((store.audioURL(for: track), s, spanEnd, track))
             }
-            return (placements, gStart)
+            return (placements, layout.startByID)
         }
 
         // Photos are rendered into short video segments in a temp folder,

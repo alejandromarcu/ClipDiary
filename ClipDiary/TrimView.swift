@@ -246,6 +246,9 @@ struct AudioSection: View {
         Binding(get: { clip.audio?.endClipID == clip.id },
                 set: { thisClipOnly in
                     clip.audio?.endClipID = thisClipOnly ? clip.id : nil
+                    // Toggling span reverts to whole-clip ends (drop any mid-clip
+                    // stop the Soundtrack timeline may have set).
+                    clip.audio?.endWithinSeconds = nil
                     commit()
                 })
     }

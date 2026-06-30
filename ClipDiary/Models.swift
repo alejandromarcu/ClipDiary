@@ -352,6 +352,12 @@ struct AudioTrack: Codable, Equatable, Hashable {
     /// - any other clip's id → plays through that clip's segment, then stops.
     /// A stale/out-of-order id is clamped to the end of the timeline at render.
     var endClipID: UUID? = nil
+    /// Where inside the **end clip** the audio stops, in seconds from that clip's
+    /// start. `nil` → it plays through the end clip's full segment (the per-clip
+    /// "End audio here" behaviour). Set by the Soundtrack timeline so an end can
+    /// fall mid-clip — letting a drag keep the song's exact length instead of
+    /// snapping to a clip boundary. Ignored when `endClipID` is nil.
+    var endWithinSeconds: Double? = nil
     /// The track's own playback level, 1.0 = 100% (0 mutes, up to 4.0 = 400%),
     /// mirroring `Clip.volume`.
     var volume: Double = 1.0
@@ -362,18 +368,19 @@ struct AudioTrack: Codable, Equatable, Hashable {
     var label: String { displayName.isEmpty ? fileName : displayName }
 
     init(fileName: String, displayName: String = "", offsetSeconds: Double = 0,
-         endClipID: UUID? = nil, volume: Double = 1.0,
+         endClipID: UUID? = nil, endWithinSeconds: Double? = nil, volume: Double = 1.0,
          transition: SegmentTransition = SegmentTransition()) {
         self.fileName = fileName
         self.displayName = displayName
         self.offsetSeconds = offsetSeconds
         self.endClipID = endClipID
+        self.endWithinSeconds = endWithinSeconds
         self.volume = volume
         self.transition = transition
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, fileName, displayName, offsetSeconds, endClipID, volume, transition
+        case id, fileName, displayName, offsetSeconds, endClipID, endWithinSeconds, volume, transition
     }
 
     // Every field decoded with `decodeIfPresent` so a track stored before a
@@ -385,6 +392,7 @@ struct AudioTrack: Codable, Equatable, Hashable {
         displayName = try c.decodeIfPresent(String.self, forKey: .displayName) ?? ""
         offsetSeconds = try c.decodeIfPresent(Double.self, forKey: .offsetSeconds) ?? 0
         endClipID = try c.decodeIfPresent(UUID.self, forKey: .endClipID)
+        endWithinSeconds = try c.decodeIfPresent(Double.self, forKey: .endWithinSeconds)
         volume = try c.decodeIfPresent(Double.self, forKey: .volume) ?? 1.0
         transition = try c.decodeIfPresent(SegmentTransition.self, forKey: .transition) ?? SegmentTransition()
     }

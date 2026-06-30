@@ -26,6 +26,12 @@ and versions follow [Semantic Versioning](https://semver.org/)
   - Audio files are copied into a new **`Audio/`** folder in the project, and
     are cleaned up when the clip using them is deleted. Back up `Audio/`
     alongside `Clips/`.
+- **New: a Soundtrack timeline.** A new **Soundtrack** toolbar button opens a
+  timeline of your clips laid end-to-end, with an audio lane beneath. Click an
+  empty part of the lane to add a song; drag a song to reposition it, drag its
+  right edge to set where it stops and its left edge where it starts. Songs
+  never overlap, and what you see is exactly what renders. Zoom in/out and
+  preview the month from the same window.
 
 ## [1.16.1] - 2026-06-29
 

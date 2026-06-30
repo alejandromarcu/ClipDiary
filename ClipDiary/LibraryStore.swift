@@ -1072,6 +1072,43 @@ final class LibraryStore: ObservableObject {
         save()
     }
 
+    // MARK: - Timeline layout
+
+    /// All clips in the canonical render order (`date` then `createdAt`) — the
+    /// order the exporter stitches and audio spans are measured in.
+    var orderedClips: [Clip] {
+        clips.sorted { $0.date == $1.date ? $0.createdAt < $1.createdAt : $0.date < $1.date }
+    }
+
+    /// Where each clip sits on the project-wide rendered timeline (seconds),
+    /// using the same per-clip durations the exporter lays down. The single
+    /// source of truth shared by the exporter's audio positioning and the
+    /// Soundtrack view, so the lane shows exactly what renders.
+    struct TimelineLayout {
+        var order: [Clip]
+        var startByID: [UUID: Double]
+        var endByID: [UUID: Double]
+        var total: Double
+        /// Per-clip rendered length, matching the exporter's segment lengths
+        /// (videos = trimmed length; photos/cards floored to 0.5s).
+        static func duration(of clip: Clip) -> Double {
+            clip.kind == .photo ? max(0.5, clip.trimmedDuration) : clip.trimmedDuration
+        }
+    }
+
+    func timelineLayout() -> TimelineLayout {
+        let order = orderedClips
+        var startByID: [UUID: Double] = [:]
+        var endByID: [UUID: Double] = [:]
+        var cursor = 0.0
+        for c in order {
+            startByID[c.id] = cursor
+            cursor += TimelineLayout.duration(of: c)
+            endByID[c.id] = cursor
+        }
+        return TimelineLayout(order: order, startByID: startByID, endByID: endByID, total: cursor)
+    }
+
     // MARK: - Audio tracks
 
     /// Copies `fileURL` (an audio file the user chose) into the project's
@@ -1110,6 +1147,36 @@ final class LibraryStore: ObservableObject {
         guard let index = clips.firstIndex(where: { $0.id == startClipID }),
               clips[index].audio != nil else { return }
         clips[index].audio?.endClipID = endClipID
+        clips[index].audio?.endWithinSeconds = nil   // play through the end clip's full segment
+        save()
+    }
+
+    /// Sets, replaces, or clears (`nil`) a clip's audio track, pruning a
+    /// now-unreferenced previous file. Used by the Soundtrack timeline.
+    func setAudioTrack(_ track: AudioTrack?, onClip clipID: UUID) {
+        guard let index = clips.firstIndex(where: { $0.id == clipID }) else { return }
+        let previous = clips[index].audio
+        clips[index].audio = track
+        if let previous, previous.fileName != track?.fileName {
+            pruneUnusedAudioFile(previous)
+        }
+        save()
+    }
+
+    /// Relocates an existing audio block (matched by track id) to a new start
+    /// clip, carrying its file/name/volume/fades, with a recomputed
+    /// `offset`/`endClipID`. Used when the Soundtrack timeline drags a block
+    /// onto a different clip. No-op if the track or new clip isn't found.
+    func moveAudioTrack(_ trackID: UUID, toStartClip newStart: UUID,
+                        offset: Double, endClipID: UUID?, endWithin: Double?) {
+        guard let oldIndex = clips.firstIndex(where: { $0.audio?.id == trackID }),
+              var track = clips[oldIndex].audio,
+              let newIndex = clips.firstIndex(where: { $0.id == newStart }) else { return }
+        track.offsetSeconds = offset
+        track.endClipID = endClipID
+        track.endWithinSeconds = endWithin
+        if clips[oldIndex].id != newStart { clips[oldIndex].audio = nil }
+        clips[newIndex].audio = track
         save()
     }
 
@@ -1118,9 +1185,7 @@ final class LibraryStore: ObservableObject {
     /// "End audio here" banner. A track covers `clip` when its start clip comes
     /// strictly before `clip` and its span (per `endClipID`) reaches `clip`.
     func activeAudio(over clip: Clip) -> [ActiveAudioRef] {
-        let ordered = clips.sorted {
-            $0.date == $1.date ? $0.createdAt < $1.createdAt : $0.date < $1.date
-        }
+        let ordered = orderedClips
         guard let pos = ordered.firstIndex(where: { $0.id == clip.id }) else { return [] }
         func position(of id: UUID) -> Int? { ordered.firstIndex(where: { $0.id == id }) }
         var result: [ActiveAudioRef] = []

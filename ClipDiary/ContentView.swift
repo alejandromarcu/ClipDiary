@@ -137,6 +137,15 @@ struct ContentView: View {
                 .help("Design and manage title cards (covers, endings, captioned slides)")
             }
             ToolbarItem(placement: .primaryAction) {
+                Button {
+                    openWindow(value: SoundtrackRequest(anchorMonth: displayedMonth))
+                } label: {
+                    Label("Soundtrack", systemImage: "waveform")
+                }
+                .help("Lay background music over the clips on a timeline")
+                .disabled(!store.hasClips())
+            }
+            ToolbarItem(placement: .primaryAction) {
                 Button { showRenderSheet = true } label: {
                     Label("Create Video…", systemImage: "film.stack")
                 }

@@ -17,7 +17,10 @@ Deliberate improvements over 1SE:
 - `ClipDiaryApp.swift` — app entry, injects `LibraryStore` as environment
   object. File-menu commands (replacing `.newItem`): New Project… (⌘N), Open
   Project… (⇧⌘O — plain ⌘O is the trim editor's Set Out), Open Recent ▸ submenu
-  + Clear Menu.
+  + Clear Menu. Declares the windows: the main calendar, plus value-keyed
+  WindowGroups for Preview (`PreviewRequest`), the day window (`ReviewRequest`),
+  and the **Soundtrack** timeline (`SoundtrackRequest`), and id-keyed Cards /
+  Keyboard Shortcuts windows.
 - `Models.swift` — `Clip` struct (id, fileName, date, inSeconds, outSeconds,
   durationSeconds, createdAt, tags, kind, crop, cardID, sourcePath, sourceHash,
   sourceBytes, audio) + date/time helpers. (`id` is a random `UUID`, not a content
@@ -82,8 +85,12 @@ Deliberate improvements over 1SE:
   (`audioURL(for:)`); `copyAudioFile(from:)` copies a user-picked file in (the
   editor then sets the `AudioTrack` on its clip draft), `pruneUnusedAudioFile`
   deletes it when no clip references it (also from `delete`), `setAudioEnd`
-  caps a spanning track from a later clip, and `activeAudio(over:)` lists the
-  tracks playing over a clip (by global render order) for the editor banner.
+  caps a spanning track from a later clip, `setAudioTrack`/`moveAudioTrack`
+  set/clear/relocate a block (the Soundtrack timeline), and `activeAudio(over:)`
+  lists the tracks playing over a clip (by global render order) for the editor
+  banner. `timelineLayout()` (+ `orderedClips`) is the **shared source of truth**
+  for where each clip sits on the rendered timeline (seconds), used by both the
+  exporter's audio positioning and the Soundtrack view so the lane is WYSIWYG.
   `importMedia` routes by UTType. Imported clips default to the recording
   date (video creationDate / photo EXIF DateTimeOriginal, fallback file
   creation date). Also home of `loadOrientedCGImage` (EXIF orientation baked
@@ -195,6 +202,19 @@ Deliberate improvements over 1SE:
   controls (only the display duration is editable), and offers an **"Edit Card…"**
   button that presents `CardEditorView` for the referenced card (re-rendering the
   preview on close).
+- `SoundtrackView.swift` — `SoundtrackView` (+ `SoundtrackRequest`), the
+  background-audio **timeline** window opened from the calendar's Soundtrack
+  toolbar button. Lays the project's clips on a horizontal time axis (widths ∝
+  `LibraryStore.TimelineLayout.duration`, scrolled to the anchor month, zoomable)
+  with an audio lane beneath. Each `clip.audio` is a draggable block (positions
+  come from `store.timelineLayout()`, identical to what the exporter renders):
+  click an empty lane spot to add a file (`store.copyAudioFile` +
+  `setAudioTrack`), drag the body to reposition (`moveAudioTrack` reassigns the
+  start clip + offset), drag the right edge to set the stop (`setAudioEnd`), the
+  left edge to set the start; every drag clamps to neighbours so songs never
+  overlap. A bottom inspector edits the selected block's offset/volume or removes
+  it, and a Preview button opens the month's `PreviewWindow`. Waveforms reuse
+  `loadAudioWaveform`; thumbnails reuse `store.thumbnail(for:)`.
 - `MashImport.swift` — "Import 1SE Video": splits a mashed 1 Second Everyday
   export into per-day clips by OCR'ing (Vision) the date stamp burned into
   the bottom-left corner ("MAR 03 2026"). Coarse 0.3s sampling pass, then
@@ -255,9 +275,10 @@ Deliberate improvements over 1SE:
   After the clip loop (which records each clip's placed `segmentByClipID`
   range), an **audio-track pass** lays each `clip.audio` onto its *own*
   composition audio track — so it mixes with the clips' own audio and keeps
-  playing over silent photo segments. Positions are computed over the
-  **project-wide global render order** (all clips, date then createdAt; durations
-  from metadata, photos floored to 0.5s), not just the clips in this render:
+  playing over silent photo segments. Positions come from
+  `store.timelineLayout()` — the **project-wide global render order** (all clips,
+  durations from metadata, photos floored to 0.5s), shared with the Soundtrack
+  view — not just the clips in this render:
   each track gets a global `[startGlobal, spanEndGlobal]`. The rendered clips are
   a contiguous window into that timeline, so `k = firstLocalStart − sliceG0` maps
   a global time to this render's local time and the render's global span
