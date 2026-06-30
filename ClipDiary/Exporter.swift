@@ -151,6 +151,9 @@ struct Exporter {
         var instructions: [AVMutableVideoCompositionInstruction] = []
         var overlays: [DateOverlay] = []
         var cursor = CMTime.zero
+        // Each clip's placed timeline range, so an overlaid audio track can be
+        // positioned by its start clip and span to its end clip's segment.
+        var segmentByClipID: [UUID: CMTimeRange] = [:]
         // The first inserted **clip's** layer + timeline range (never the cover
         // card, which is handled before the loop), so a first-clip fade-in can
         // ramp exactly the opening clip.
@@ -194,6 +197,48 @@ struct Exporter {
                 }
                 return (clip, store.fileURL(for: clip), cardImage)
             }
+        }
+
+        // Audio tracks are positioned over the **whole project's** render order
+        // (date then createdAt), not just the clips in this render — so a song
+        // that started on an earlier day/month keeps playing into the rendered
+        // window (a single-day "Preview Day" included). For each clip that owns
+        // an `audio`, record where the file sits on that global timeline and how
+        // far it spans; the AV pass below maps the overlap onto this render's
+        // local timeline. Durations come from clip metadata (no asset loads),
+        // mirroring how each segment is laid out (photos floored to 0.5s).
+        let (audioPlacements, globalStartByID): (
+            [(url: URL, startGlobal: Double, spanEndGlobal: Double, track: AudioTrack)],
+            [UUID: Double]
+        ) = await MainActor.run {
+            let ordered = store.clips.sorted {
+                $0.date == $1.date ? $0.createdAt < $1.createdAt : $0.date < $1.date
+            }
+            func dur(_ c: Clip) -> Double {
+                c.kind == .photo ? max(0.5, c.trimmedDuration) : c.trimmedDuration
+            }
+            var gStart: [UUID: Double] = [:]
+            var gEnd: [UUID: Double] = [:]
+            var cursor = 0.0
+            for c in ordered {
+                gStart[c.id] = cursor
+                cursor += dur(c)
+                gEnd[c.id] = cursor
+            }
+            let total = cursor
+            var placements: [(url: URL, startGlobal: Double, spanEndGlobal: Double, track: AudioTrack)] = []
+            for c in ordered {
+                guard let track = c.audio, let s = gStart[c.id] else { continue }
+                let spanEnd: Double
+                if let e = track.endClipID {
+                    if e == c.id { spanEnd = gEnd[c.id] ?? total }   // this clip only
+                    else { spanEnd = gEnd[e] ?? total }              // later clip / stale id
+                } else {
+                    spanEnd = total                                  // open-ended
+                }
+                placements.append((store.audioURL(for: track), s, spanEnd, track))
+            }
+            return (placements, gStart)
         }
 
         // Photos are rendered into short video segments in a temp folder,
@@ -317,6 +362,7 @@ struct Exporter {
             instruction.backgroundColor = Self.letterboxColor
             instruction.layerInstructions = [layer]
             instructions.append(instruction)
+            segmentByClipID[clip.id] = instruction.timeRange
             if firstClipLayer == nil {
                 firstClipLayer = layer
                 firstClipSegment = instruction.timeRange
@@ -343,6 +389,72 @@ struct Exporter {
 
         guard cursor > .zero else { throw ExportError.noClips }
         let totalDuration = cursor
+
+        // Overlaid audio tracks. Each lays its file onto *its own* composition
+        // audio track, so it mixes with the clips' own audio and keeps playing
+        // over silent photo segments. Positions come from the project-wide
+        // global timeline (above): the rendered clips are a window into it, so
+        // `k` maps a global time onto this render's local timeline and the
+        // render's global span [sliceG0, sliceG1] clips each track to what's
+        // actually on screen. A track started before this window is therefore
+        // picked up mid-file. Played once — a file shorter than its span leaves
+        // a silent tail. Per-track volume/fade params are attached only when
+        // non-default (an unlisted track already plays at 100%).
+        var musicParams: [AVMutableAudioMixInputParameters] = []
+        if !audioPlacements.isEmpty {
+            var sliceG0 = Double.greatestFiniteMagnitude
+            var sliceG1 = -Double.greatestFiniteMagnitude
+            var sliceLocalStart = Double.greatestFiniteMagnitude
+            for (id, seg) in segmentByClipID {
+                guard let gs = globalStartByID[id] else { continue }
+                sliceG0 = min(sliceG0, gs)
+                sliceG1 = max(sliceG1, gs + seg.duration.seconds)
+                sliceLocalStart = min(sliceLocalStart, seg.start.seconds)
+            }
+            if sliceG1 > sliceG0 {
+                let k = sliceLocalStart - sliceG0   // localTime = globalTime + k
+                func cm(_ s: Double) -> CMTime { CMTime(seconds: s, preferredTimescale: 600) }
+                for p in audioPlacements {
+                    let offset = p.track.offsetSeconds
+                    let audibleGlobalStart = p.startGlobal + max(0, offset)
+                    let sourceStartBase = max(0, -offset)
+                    let asset = AVURLAsset(url: p.url)
+                    guard let srcAudio = try? await asset.loadTracks(withMediaType: .audio).first,
+                          let fileDuration = try? await asset.load(.duration) else { continue }
+                    // Play once: cap the audible span to where the file runs out.
+                    let audibleGlobalEnd = min(p.spanEndGlobal,
+                                               audibleGlobalStart + (fileDuration.seconds - sourceStartBase))
+                    // Overlap with what this render actually shows.
+                    let oStart = max(audibleGlobalStart, sliceG0)
+                    let oEnd = min(audibleGlobalEnd, sliceG1)
+                    guard oEnd > oStart else { continue }
+                    // File position at the overlap start (mid-file if it began earlier).
+                    let fileStart = sourceStartBase + (oStart - audibleGlobalStart)
+                    let localStart = oStart + k
+                    let duration = oEnd - oStart
+
+                    guard let musicTrack = composition.addMutableTrack(
+                        withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid
+                    ) else { continue }
+                    do {
+                        try musicTrack.insertTimeRange(
+                            CMTimeRange(start: cm(fileStart), duration: cm(duration)),
+                            of: srcAudio, at: cm(localStart))
+                    } catch { continue }
+
+                    let fadeIn = p.track.transition.hasFadeIn ? p.track.transition.fadeInSeconds : 0
+                    let fadeOut = p.track.transition.hasFadeOut ? p.track.transition.fadeOutSeconds : 0
+                    if p.track.volume != 1 || fadeIn > 0 || fadeOut > 0 {
+                        let params = AVMutableAudioMixInputParameters(track: musicTrack)
+                        Self.applyVolumeEnvelope(
+                            volume: Float(max(0, p.track.volume)), fadeIn: fadeIn, fadeOut: fadeOut,
+                            to: params, start: cm(localStart), duration: cm(duration)
+                        )
+                        musicParams.append(params)
+                    }
+                }
+            }
+        }
 
         // Soften every *internal* clip boundary with a short audio dip, the way
         // 1SE does: the picture still cuts hard, but each clip's audio ramps down
@@ -441,10 +553,16 @@ struct Exporter {
             }
         }
 
+        // The clips' own audio track (when its level/dips need a mix) plus every
+        // overlaid audio track that changes its level/fades. Unlisted tracks
+        // simply play at 100%.
+        var mixParams: [AVMutableAudioMixInputParameters] = []
+        if audioMixUsed, let audioParams { mixParams.append(audioParams) }
+        mixParams.append(contentsOf: musicParams)
         var audioMix: AVMutableAudioMix?
-        if audioMixUsed, let audioParams {
+        if !mixParams.isEmpty {
             let mix = AVMutableAudioMix()
-            mix.inputParameters = [audioParams]
+            mix.inputParameters = mixParams
             audioMix = mix
         }
 

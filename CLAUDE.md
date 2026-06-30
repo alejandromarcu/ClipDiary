@@ -20,7 +20,7 @@ Deliberate improvements over 1SE:
   + Clear Menu.
 - `Models.swift` — `Clip` struct (id, fileName, date, inSeconds, outSeconds,
   durationSeconds, createdAt, tags, kind, crop, cardID, sourcePath, sourceHash,
-  sourceBytes) + date/time helpers. (`id` is a random `UUID`, not a content
+  sourceBytes, audio) + date/time helpers. (`id` is a random `UUID`, not a content
   hash.) A clip is a video or a photo (`ClipKind`); photos store their
   display duration in durationSeconds/outSeconds and an optional `CropRect`
   (unit coords, top-left origin). A clip with `cardID` set is a **live
@@ -32,7 +32,16 @@ Deliberate improvements over 1SE:
   deduped case-insensitively. `sourcePath` records which source-folder file a
   clip was picked from: clips picked twice from one source (two segments of a
   long video) **share one copied media file**, so `delete` only removes the
-  file when the last clip referencing it goes. `sourceHash` (lowercase-hex
+  file when the last clip referencing it goes. A clip may also carry an optional
+  `AudioTrack` (`audio`): a music/audio file (copied into the project's `Audio/`
+  folder, keeping its original name in `displayName` for the editor) laid over
+  the video — with an `offsetSeconds` (± relative to the clip
+  start), its own `volume`/`transition`, and an `endClipID` marking how far it
+  spans in render order (`==` the start clip = this clip only; `nil` =
+  open-ended; another clip id = ends after that clip). It mixes with the clip's
+  own audio and plays alone over silent photos. `ActiveAudioRef` pairs a
+  spanning track with its start clip for the editor's "End audio here" UI.
+  `sourceHash` (lowercase-hex
   SHA-256 of the copied media bytes) + `sourceBytes` (file size) are recorded at
   pick/import time so the project can be rebuilt by content if `Clips/` is lost
   — see "Backup / reconstruction" below. Also `ProjectSettings`
@@ -69,7 +78,13 @@ Deliberate improvements over 1SE:
   ProjectPanel(store:)` are the shared NSSavePanel/NSOpenPanel flows used by both
   the File menu and the welcome screen. Copies imported media into the project's
   `Clips/`, generates cached thumbnails via `AVAssetImageGenerator` (videos) or
-  ImageIO (photos). `importMedia` routes by UTType. Imported clips default to the recording
+  ImageIO (photos). A parallel `Audio/` subfolder holds copied audio-track files
+  (`audioURL(for:)`); `copyAudioFile(from:)` copies a user-picked file in (the
+  editor then sets the `AudioTrack` on its clip draft), `pruneUnusedAudioFile`
+  deletes it when no clip references it (also from `delete`), `setAudioEnd`
+  caps a spanning track from a later clip, and `activeAudio(over:)` lists the
+  tracks playing over a clip (by global render order) for the editor banner.
+  `importMedia` routes by UTType. Imported clips default to the recording
   date (video creationDate / photo EXIF DateTimeOriginal, fallback file
   creation date). Also home of `loadOrientedCGImage` (EXIF orientation baked
   in — crop coords are always relative to the oriented image). Owns the
@@ -155,7 +170,11 @@ Deliberate improvements over 1SE:
 - `TrimView.swift` — `TrimEditor` (the video editor), plus the shared pieces:
   `LiveEditBuffer` (lets the day window flush an editor's in-flight edit before
   Preview Day, since editors only persist on disappear), `TagRow` (tag chips +
-  new-tag field + reuse menu), `DayPickerField`, `ReviewItemInfo`/
+  new-tag field + reuse menu), `AudioSection` (the side-pane audio-track UI used
+  by both editors: Add Audio… file picker, start-offset/volume controls, a "This
+  clip / Multiple clips" span toggle, and — library mode — an "End audio here"
+  banner for tracks owned by earlier clips, via `store.activeAudio(over:)`),
+  `DayPickerField`, `ReviewItemInfo`/
   `ReviewItemHeader`, `ResizablePaneDivider` (drag-resizes the side pane), and
   `TrimSlider` (filmstrip of 10 thumbnails with draggable yellow in/out handles,
   min gap 0.1s). Set In/Set Out buttons (⌘I/⌘O) mark trim points at the current
@@ -233,6 +252,22 @@ Deliberate improvements over 1SE:
   stamp to 0 — each skipped if that clip already fades itself. The `audioMix`
   and the date `dateOverlays`' fade fields carry the same spans so preview and
   export stay in sync (the preview dims its SwiftUI stamp over the same ranges).
+  After the clip loop (which records each clip's placed `segmentByClipID`
+  range), an **audio-track pass** lays each `clip.audio` onto its *own*
+  composition audio track — so it mixes with the clips' own audio and keeps
+  playing over silent photo segments. Positions are computed over the
+  **project-wide global render order** (all clips, date then createdAt; durations
+  from metadata, photos floored to 0.5s), not just the clips in this render:
+  each track gets a global `[startGlobal, spanEndGlobal]`. The rendered clips are
+  a contiguous window into that timeline, so `k = firstLocalStart − sliceG0` maps
+  a global time to this render's local time and the render's global span
+  `[sliceG0, sliceG1]` clips each track to what's on screen — so **a track that
+  started on an earlier day/month is picked up mid-file** (a single-day "Preview
+  Day" included). A negative offset skips into the file; it plays once (silent
+  tail if the file is shorter than the span). Each track's `volume`/`transition`
+  becomes an `AVMutableAudioMixInputParameters` entry (only when non-default),
+  folded into the same `audioMix`. Preview and export need no further work —
+  `MonthComposition.audioMix` already flows to both.
 
 ## Conventions & constraints
 
@@ -323,7 +358,9 @@ source-folder counterpart — 1SE imports (re-encoded per-day MP4s) and one-off
 `importMedia` files — store a hash for integrity but can't be reconstructed.
 **Card clips** (`cardID` set) have no media bytes at all (no `sourceHash`):
 they render from the card document under `Cards/<id>/`, so backing up the
-`Cards/` folder alongside `clips.json` preserves them.
+`Cards/` folder alongside `clips.json` preserves them. **Audio tracks**
+(`clip.audio`) reference copied files in the project's `Audio/` folder (no
+`sourceHash` either), so back up `Audio/` alongside `Clips/`.
 
 ## Roadmap ideas (not yet built)
 

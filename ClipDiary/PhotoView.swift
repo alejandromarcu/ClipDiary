@@ -176,6 +176,7 @@ struct PhotoEditor: View {
             // date stamp don't apply to it.
             if !isCard { captionField }
             TransitionRow(transition: clip.transition) { showTransition = true }
+            AudioSection(clip: $clip, isLibrary: !isReview, commit: { if !isReview { saveEdits() } })
             Divider()
             DayPickerField(selection: $editedDate)
             if !isCard { dateStampToggle }

@@ -7,6 +7,26 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.17.0] - 2026-06-29
+
+- **New: lay audio tracks over your clips.** In the clip editor (video or
+  photo) you can now **Add Audio…** — pick an mp3, wav, m4a, etc. — to play a
+  song or sound over a clip in the rendered video. The audio **mixes** with the
+  clip's own sound and **plays on its own over photos** (which are silent).
+  - **Start offset:** choose when the audio begins relative to the clip — `0`
+    plays them together, a **positive** value starts it later (silence first),
+    a **negative** value means the song is already partway in when the clip
+    begins.
+  - **Spanning multiple clips:** set a track to play for *Multiple clips* and it
+    keeps going across the following clips. To stop it, open a later clip and
+    click **"End audio here."** If the file is shorter than the span, it plays
+    once and then goes silent (no looping).
+  - **Volume:** each audio track has its own 0–400% level (boosts above 100% are
+    only audible in the saved file, like clip volume).
+  - Audio files are copied into a new **`Audio/`** folder in the project, and
+    are cleaned up when the clip using them is deleted. Back up `Audio/`
+    alongside `Clips/`.
+
 ## [1.16.1] - 2026-06-29
 
 - **Fixed: cropping a Live Photo's still could save it as an unplayable

@@ -40,6 +40,8 @@ final class LibraryStore: ObservableObject {
     @Published private(set) var cards: [CardDocument] = []
 
     private var clipsDir: URL!
+    /// Subfolder of copied audio-track files (`Audio/`), parallel to `Clips/`.
+    private var audioDir: URL!
     private var metadataURL: URL!
     private var sourcesURL: URL!
     private var settingsURL: URL!
@@ -75,6 +77,11 @@ final class LibraryStore: ObservableObject {
 
     func fileURL(for clip: Clip) -> URL {
         clipsDir.appendingPathComponent(clip.fileName)
+    }
+
+    /// Location of an audio track's copied file in the project's `Audio/` folder.
+    func audioURL(for track: AudioTrack) -> URL {
+        audioDir.appendingPathComponent(track.fileName)
     }
 
     // MARK: - Persistence
@@ -220,11 +227,13 @@ final class LibraryStore: ObservableObject {
 
         currentProjectURL = url
         clipsDir = url.appendingPathComponent("Clips", isDirectory: true)
+        audioDir = url.appendingPathComponent("Audio", isDirectory: true)
         metadataURL = metaURL
         sourcesURL = url.appendingPathComponent("sources.json")
         settingsURL = url.appendingPathComponent("settings.json")
         cardsDir = url.appendingPathComponent("Cards", isDirectory: true)
         try? FileManager.default.createDirectory(at: clipsDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: audioDir, withIntermediateDirectories: true)
         thumbnailCache.removeAllObjects()
         sourceThumbnailCache.removeAllObjects()
         clips = loadedClips
@@ -442,6 +451,25 @@ final class LibraryStore: ObservableObject {
                 copy.fileName = newName
                 copy.sourceHash = digest.hash
                 copy.sourceBytes = digest.bytes
+            }
+        }
+
+        // Bring an attached audio track along: copy its file into the target's
+        // Audio/ folder and cap it to just this copied clip (a span's
+        // `endClipID` references source-project clip ids that don't exist here).
+        if let track = copy.audio {
+            let srcAudio = audioURL(for: track)
+            let targetAudioDir = targetURL.appendingPathComponent("Audio", isDirectory: true)
+            let ext = srcAudio.pathExtension.isEmpty ? "m4a" : srcAudio.pathExtension
+            let newAudioName = UUID().uuidString + "." + ext
+            try? FileManager.default.createDirectory(at: targetAudioDir, withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: srcAudio.path),
+               (try? FileManager.default.copyItem(
+                   at: srcAudio, to: targetAudioDir.appendingPathComponent(newAudioName))) != nil {
+                copy.audio?.fileName = newAudioName
+                copy.audio?.endClipID = copy.id
+            } else {
+                copy.audio = nil   // couldn't bring the audio — drop it, don't dangle
             }
         }
 
@@ -948,7 +976,11 @@ final class LibraryStore: ObservableObject {
         guard hasProject else { return }
         let source = sourceURL ?? item.url
         var clip = draft
-        clip.id = UUID()
+        let newID = UUID()
+        // A "this clip only" audio track added during review caps itself with the
+        // draft's id; carry that over to the new id so it stays this-clip-only.
+        if clip.audio?.endClipID == clip.id { clip.audio?.endClipID = newID }
+        clip.id = newID
         clip.createdAt = Date()
         let sourcePath = source.canonicalSourcePath
         clip.sourcePath = sourcePath
@@ -1034,8 +1066,77 @@ final class LibraryStore: ObservableObject {
            !clips.contains(where: { $0.fileName == clip.fileName }) {
             try? FileManager.default.removeItem(at: fileURL(for: clip))
         }
+        // Drop the attached audio file too, unless another clip still uses it.
+        if let track = clip.audio { pruneUnusedAudioFile(track) }
         thumbnailCache.removeObject(forKey: clip.id as NSUUID)
         save()
+    }
+
+    // MARK: - Audio tracks
+
+    /// Copies `fileURL` (an audio file the user chose) into the project's
+    /// `Audio/` folder and returns the new file name to store in an
+    /// `AudioTrack`, or nil on failure. The editor sets the resulting track on
+    /// its clip draft (persisted via the usual save path), so this only handles
+    /// the security-scoped copy — mirroring `importVideo`.
+    func copyAudioFile(from fileURL: URL) -> String? {
+        guard hasProject, let audioDir else { return nil }
+        let didStart = fileURL.startAccessingSecurityScopedResource()
+        defer { if didStart { fileURL.stopAccessingSecurityScopedResource() } }
+
+        let ext = fileURL.pathExtension.isEmpty ? "m4a" : fileURL.pathExtension
+        let newName = UUID().uuidString + "." + ext
+        do {
+            try FileManager.default.copyItem(at: fileURL, to: audioDir.appendingPathComponent(newName))
+            return newName
+        } catch {
+            lastError = "Could not add audio \(fileURL.lastPathComponent): \(error.localizedDescription)"
+            return nil
+        }
+    }
+
+    /// Deletes `track`'s file unless a clip's audio still points at it — called
+    /// by the editor after a removal/replacement is saved, and by `delete(_:)`.
+    func pruneUnusedAudioFile(_ track: AudioTrack) {
+        guard audioDir != nil,
+              !clips.contains(where: { $0.audio?.fileName == track.fileName }) else { return }
+        try? FileManager.default.removeItem(at: audioURL(for: track))
+    }
+
+    /// Sets where the audio that *starts* on `startClipID` stops — called by the
+    /// later-clip "End audio here" control. `endClipID == nil` lets it keep
+    /// playing (open-ended); a clip id caps it after that clip's segment.
+    func setAudioEnd(startClipID: UUID, endClipID: UUID?) {
+        guard let index = clips.firstIndex(where: { $0.id == startClipID }),
+              clips[index].audio != nil else { return }
+        clips[index].audio?.endClipID = endClipID
+        save()
+    }
+
+    /// The audio tracks (with their start clips) that are *playing over* `clip`
+    /// in the global render order but didn't start on it — drives the later-clip
+    /// "End audio here" banner. A track covers `clip` when its start clip comes
+    /// strictly before `clip` and its span (per `endClipID`) reaches `clip`.
+    func activeAudio(over clip: Clip) -> [ActiveAudioRef] {
+        let ordered = clips.sorted {
+            $0.date == $1.date ? $0.createdAt < $1.createdAt : $0.date < $1.date
+        }
+        guard let pos = ordered.firstIndex(where: { $0.id == clip.id }) else { return [] }
+        func position(of id: UUID) -> Int? { ordered.firstIndex(where: { $0.id == id }) }
+        var result: [ActiveAudioRef] = []
+        for (i, start) in ordered.enumerated() {
+            guard i < pos, let track = start.audio else { continue }
+            let endPos: Int
+            if let endID = track.endClipID {
+                // "This clip only" (endID == start) never reaches a later clip;
+                // an unknown/out-of-order id clamps to the end of the timeline.
+                endPos = position(of: endID) ?? ordered.count - 1
+            } else {
+                endPos = ordered.count - 1   // open-ended
+            }
+            if endPos >= pos { result.append(ActiveAudioRef(track: track, startClip: start)) }
+        }
+        return result
     }
 
     // MARK: - Cards
