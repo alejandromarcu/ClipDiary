@@ -7,6 +7,13 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.17.4] - 2026-06-30
+
+- **Soundtrack timeline: bigger clip thumbnails.** The clip strip is 50%
+  taller so thumbnails are easier to make out, each clip now has rounded
+  corners, and the "Clips"/"Audio" row captions (redundant once you've used it
+  once) are gone.
+
 ## [1.17.3] - 2026-06-30
 
 - **Soundtrack opens where you're already looking.** The Soundtrack window now

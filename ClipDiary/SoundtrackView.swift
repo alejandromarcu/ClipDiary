@@ -53,7 +53,7 @@ struct SoundtrackView: View {
     private let labelRowH: CGFloat = 22   // day numbers above the clips
     /// y of the top hairline rule (kept just inside the canvas so it isn't clipped).
     private let topRuleY: CGFloat = 0.5
-    private let stripHeight: CGFloat = 60
+    private let stripHeight: CGFloat = 90
     private let laneHeight: CGFloat = 74
     private let rowGap: CGFloat = 12
     private let topPad: CGFloat = 12
@@ -156,52 +156,41 @@ struct SoundtrackView: View {
 
     private func timeline(layout: LibraryStore.TimelineLayout, grid: LibraryStore.TimelineGrid,
                           blocks: [Block], totalWidth: CGFloat) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            // Fixed, non-scrolling row labels so the two lanes are unambiguous.
-            VStack(alignment: .trailing, spacing: rowGap) {
-                Text("Clips").frame(height: stripHeight)
-                Text("Audio").frame(height: laneHeight)
+        ScrollView([.horizontal]) {
+            VStack(alignment: .leading, spacing: 0) {
+                Color.clear.frame(width: totalWidth, height: monthRowH + labelRowH)
+                clipStrip(layout, width: totalWidth)
+                Color.clear.frame(height: rowGap)
+                audioLane(layout: layout, blocks: blocks, width: totalWidth)
             }
-            .font(.caption).foregroundStyle(.secondary)
-            .padding(.top, topPad + monthRowH + labelRowH)
-            .frame(width: 42)
-
-            ScrollView([.horizontal]) {
-                VStack(alignment: .leading, spacing: 0) {
-                    Color.clear.frame(width: totalWidth, height: monthRowH + labelRowH)
-                    clipStrip(layout, width: totalWidth)
-                    Color.clear.frame(height: rowGap)
-                    audioLane(layout: layout, blocks: blocks, width: totalWidth)
-                }
-                // Day separators + labels and dotted clip separators, drawn
-                // across the whole content (above the clips, down to the
-                // bottom of the audio). Non-interactive so gestures pass through.
-                .overlay(alignment: .topLeading) {
-                    dayClipLines(grid, width: totalWidth,
-                                visibleLeft: visibleLeft, visibleRight: visibleRight)
-                        .allowsHitTesting(false)
-                }
-                .padding(.top, topPad)
-                .padding(.trailing, 16)
+            // Day separators + labels and dotted clip separators, drawn
+            // across the whole content (above the clips, down to the
+            // bottom of the audio). Non-interactive so gestures pass through.
+            .overlay(alignment: .topLeading) {
+                dayClipLines(grid, width: totalWidth,
+                            visibleLeft: visibleLeft, visibleRight: visibleRight)
+                    .allowsHitTesting(false)
             }
-            .scrollPosition($scrollPosition)
-            .onScrollGeometryChange(for: ScrollMetrics.self) { geo in
-                ScrollMetrics(left: geo.contentOffset.x, width: geo.containerSize.width)
-            } action: { _, m in
-                scrollLeft = m.left
-                viewportWidth = m.width
-            }
-            .onAppear {
-                // Scroll to the anchor day. It's positioned by a raw content
-                // offset (not a scrollTo-an-id, which would resolve the anchor's
-                // *layout* frame — always the strip's origin, since the clips are
-                // placed by `.offset`, so it would always jump to the start).
-                guard let s = anchorStartSeconds(grid), !didInitialScroll else { return }
-                didInitialScroll = true
-                let targetX = xPos(s)
-                DispatchQueue.main.async {
-                    scrollPosition.scrollTo(x: targetX)
-                }
+            .padding(.top, topPad)
+            .padding(.trailing, 16)
+        }
+        .scrollPosition($scrollPosition)
+        .onScrollGeometryChange(for: ScrollMetrics.self) { geo in
+            ScrollMetrics(left: geo.contentOffset.x, width: geo.containerSize.width)
+        } action: { _, m in
+            scrollLeft = m.left
+            viewportWidth = m.width
+        }
+        .onAppear {
+            // Scroll to the anchor day. It's positioned by a raw content
+            // offset (not a scrollTo-an-id, which would resolve the anchor's
+            // *layout* frame — always the strip's origin, since the clips are
+            // placed by `.offset`, so it would always jump to the start).
+            guard let s = anchorStartSeconds(grid), !didInitialScroll else { return }
+            didInitialScroll = true
+            let targetX = xPos(s)
+            DispatchQueue.main.async {
+                scrollPosition.scrollTo(x: targetX)
             }
         }
         .padding(.leading, 12)
@@ -690,7 +679,8 @@ private struct ClipStripCell: View {
             }
         }
         .frame(width: cellWidth, height: height, alignment: .leading)
-        .overlay(Rectangle().stroke(Color.black.opacity(0.15), lineWidth: 0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.black.opacity(0.15), lineWidth: 0.5))
         .help(clip.date.formatted(date: .abbreviated, time: .omitted))
         .task(id: thumbTaskID) {
             // Don't decode a thumbnail for a sliver too thin to show one (zoomed
