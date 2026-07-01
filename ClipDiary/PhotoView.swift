@@ -115,8 +115,16 @@ struct PhotoEditor: View {
         editorBody
         .onAppear { load(); onLiveEdit?(editedClip) }
         // Auto-save so switching clips or closing the sheet keeps edits.
-        // No-op if the clip was just deleted. Review drafts aren't saved.
-        .onDisappear { if !isReview { saveEdits() } }
+        // No-op if the clip was just deleted. Review drafts aren't saved — but a
+        // draft that picked up music and was never added leaves an orphan copy in
+        // Audio/, so drop it (a no-op once a real clip references the file).
+        .onDisappear {
+            if !isReview {
+                saveEdits()
+            } else if let track = clip.audio {
+                store.pruneUnusedAudioFile(track)
+            }
+        }
         .onChange(of: clip) { _, _ in onLiveEdit?(editedClip) }
         .onChange(of: editedDate) { _, _ in onLiveEdit?(editedClip) }
         .sheet(isPresented: $showTransition) {
@@ -155,6 +163,9 @@ struct PhotoEditor: View {
                 mediaAccessory
                 photoView
                 cropControls
+                // A photo has no audio of its own, but a song can still play
+                // over it — the same music bar the video editor shows.
+                ClipMusicLane(clip: clip, isReview: isReview, draftAudio: $clip.audio)
                 Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -176,7 +187,6 @@ struct PhotoEditor: View {
             // date stamp don't apply to it.
             if !isCard { captionField }
             TransitionRow(transition: clip.transition) { showTransition = true }
-            SoundtrackSection(clip: clip, isReview: isReview)
             Divider()
             DayPickerField(selection: $editedDate)
             if !isCard { dateStampToggle }
@@ -283,6 +293,9 @@ struct PhotoEditor: View {
 
     private var revertButton: some View {
         Button {
+            // Reverting a review draft drops any music it picked up, so delete
+            // that now-orphan copy before the wholesale reset loses the ref.
+            if isReview, let track = clip.audio { store.pruneUnusedAudioFile(track) }
             clip = original
             editedDate = original.date
             aspectLock = .free

@@ -87,102 +87,214 @@ struct TagRow: View {
     }
 }
 
-/// Read-only Soundtrack status for the clip editors' side pane. Music now lives
-/// on the dedicated Soundtrack timeline window, so this only *reports* what plays
-/// over the current clip — its own track and any that spans in from an earlier
-/// clip — and hands all editing off to that window. "Add Music…" (shown only
-/// when nothing plays over the clip yet) copies a file, starts a track on this
-/// clip, and opens the Soundtrack window on this day with it selected; when audio
-/// is already present, "Open in Soundtrack" jumps there to adjust it. In review
-/// (a source not yet added to the day, so it isn't on the timeline) it shows a
-/// disabled hint instead. Status is read live from the store so it reflects
-/// Soundtrack-window edits immediately.
-struct SoundtrackSection: View {
+/// A music bar shown directly under a clip's own audio in the editors, so laying
+/// a song over a clip looks like the rest of the editor. Empty, it reads "＋ Add
+/// music" and a click picks a file, laid over this clip (starting at the clip's
+/// start, ending at its end) with its waveform drawn in place. Once a track is
+/// present the bar is **read-only** for a picked clip — clicking it opens the
+/// Soundtrack window for anything finer (offset, span, volume). In **review** (a
+/// source not yet added, so it isn't on the timeline and has no Soundtrack entry)
+/// the bar instead offers a small ✕ to drop the just-added track, since there's
+/// no Soundtrack window to defer to yet. A picked clip reads live from the store,
+/// so Soundtrack-window edits show immediately; a review draft reads/writes the
+/// draft's `audio` through `draftAudio` and never touches the store's clips.
+struct ClipMusicLane: View {
     @EnvironmentObject var store: LibraryStore
     @Environment(\.openWindow) private var openWindow
-    /// The clip being edited (read-only here).
+    /// The clip (or draft) being edited.
     var clip: Clip
     /// True while reviewing a source not yet added to the day.
     var isReview: Bool
+    /// Review mode only: the draft's audio track, written directly (the draft
+    /// isn't in the store). Unused for picked clips, which read/write the store.
+    @Binding var draftAudio: AudioTrack?
 
     @State private var showImporter = false
+    @State private var waveform: [Float] = []
 
     private static let audioTypes: [UTType] = [.mp3, .wav, .mpeg4Audio, .aiff, .audio]
+    private let laneHeight: CGFloat = 44
+    private var accent: Color { .accentColor }
+
+    /// The track that starts on this clip: the draft's in review, the store's
+    /// live value for a picked clip.
+    private var own: AudioTrack? {
+        isReview ? draftAudio : store.clips.first(where: { $0.id == clip.id })?.audio
+    }
+
+    /// Music started on an earlier clip that plays over this one — picked clips
+    /// only (a review draft isn't on the timeline).
+    private var spanning: [ActiveAudioRef] {
+        isReview ? [] : store.activeAudio(over: clip)
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Soundtrack")
-                .font(.caption).foregroundStyle(.secondary)
-
-            if isReview {
-                Text("Add this clip to place music")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else {
-                libraryBody
+        content
+            .frame(height: laneHeight)
+            .fileImporter(isPresented: $showImporter,
+                          allowedContentTypes: Self.audioTypes,
+                          allowsMultipleSelection: false) { result in
+                if case .success(let urls) = result, let url = urls.first { add(url) }
             }
-        }
-        .fileImporter(isPresented: $showImporter,
-                      allowedContentTypes: Self.audioTypes,
-                      allowsMultipleSelection: false) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                addMusic(from: url)
-            }
-        }
+            .task(id: own?.fileName) { await loadWaveform() }
     }
 
-    /// Live status for a picked clip, read from the store.
     @ViewBuilder
-    private var libraryBody: some View {
-        let own = store.clips.first(where: { $0.id == clip.id })?.audio
-        let spanning = store.activeAudio(over: clip)
-
+    private var content: some View {
         if own == nil && spanning.isEmpty {
-            Text("No music over this clip")
-                .font(.caption).foregroundStyle(.secondary)
-            Button { showImporter = true } label: {
-                Label("Add Music…", systemImage: "music.note")
-            }
-            .help("Lay a music/audio file over this clip, then place it on the Soundtrack timeline")
+            // Nothing over the clip yet — a plain, full-width prompt.
+            addBar
         } else {
-            if let own {
-                statusRow(own.label, detail: "Starts on this clip")
-            }
-            ForEach(spanning) { entry in
-                statusRow(entry.track.label,
-                          detail: "From \(entry.startClip.date.formatted(date: .abbreviated, time: .omitted))")
-            }
-            Button {
-                openWindow(value: SoundtrackRequest(anchorDate: clip.date,
-                                                    selectTrackID: own?.id))
-            } label: {
-                Label("Open in Soundtrack", systemImage: "waveform")
-            }
-            .help("Adjust this music on the Soundtrack timeline")
-        }
-    }
-
-    private func statusRow(_ label: String, detail: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "music.note").foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(label).lineLimit(1).truncationMode(.middle).help(label)
-                Text(detail).font(.caption).foregroundStyle(.secondary)
+            // A song plays over the clip: draw its block aligned to the trimmed
+            // [in, out] region so it tracks the yellow handles above — it starts
+            // where the clip starts and ends where it ends.
+            GeometryReader { geo in
+                let width = geo.size.width
+                let inX = position(of: clip.inSeconds, width: width)
+                let outX = position(of: clip.outSeconds, width: width)
+                let blockW = min(width - inX, max(28, outX - inX))
+                ZStack(alignment: .leading) {
+                    laneBackdrop
+                    Group {
+                        if let own {
+                            filledBar(own)
+                        } else if let first = spanning.first {
+                            spanningBar(first)
+                        }
+                    }
+                    .frame(width: blockW)
+                    .offset(x: inX)
+                }
             }
         }
     }
 
-    /// Copy the picked file, start a track on this clip, and jump to the
-    /// Soundtrack timeline to position it (reusing the Soundtrack window's own
-    /// add path). Only reachable when the clip has no music over it yet, so it
-    /// never clobbers or overlaps an existing track.
-    private func addMusic(from url: URL) {
+    /// Where `seconds` falls across the lane, using the clip's full length — the
+    /// same mapping the trim slider uses, so the block lines up with the handles.
+    private func position(of seconds: Double, width: CGFloat) -> CGFloat {
+        let d = clip.durationSeconds
+        guard d > 0 else { return 0 }
+        return CGFloat(min(max(0, seconds / d), 1)) * width
+    }
+
+    /// The full-width track lane behind an aligned music block.
+    private var laneBackdrop: some View {
+        RoundedRectangle(cornerRadius: 6)
+            .fill(Color.secondary.opacity(0.06))
+            .frame(maxWidth: .infinity)
+    }
+
+    // MARK: - Bars
+
+    /// Empty and addable: the whole bar is a button that opens the file picker.
+    private var addBar: some View {
+        Button { showImporter = true } label: {
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                .foregroundStyle(.secondary.opacity(0.6))
+                .overlay(
+                    Label("Add music", systemImage: "music.note")
+                        .font(.caption).foregroundStyle(.secondary)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Lay a music file over this clip — it starts when the clip starts and ends when it ends. Adjust anything else in the Soundtrack window.")
+    }
+
+    /// Music started on this clip: waveform + name, read-only for a picked clip
+    /// (tap → Soundtrack); a review draft shows a ✕ to drop it instead.
+    private func filledBar(_ track: AudioTrack) -> some View {
+        ZStack {
+            blockBackground
+            WaveformView(samples: waveform, color: accent.opacity(0.7))
+                .padding(.top, 18).padding(.bottom, 6).padding(.horizontal, 8)
+                .allowsHitTesting(false)
+            VStack {
+                HStack(spacing: 4) {
+                    Label(track.label, systemImage: "music.note")
+                        .font(.caption2.weight(.medium)).foregroundStyle(accent)
+                        .lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    if isReview {
+                        Button { remove() } label: {
+                            Image(systemName: "xmark.circle.fill")
+                        }
+                        .buttonStyle(.plain).foregroundStyle(.secondary)
+                        .help("Remove this music from the clip")
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8).padding(.top, 4)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { if !isReview { openSoundtrack(track.id) } }
+        .help(isReview
+              ? "Music over this clip. Drop it with ✕, or fine-tune it in the Soundtrack window after adding the clip."
+              : "Music over this clip — click to adjust it in the Soundtrack window.")
+    }
+
+    /// Music that spans in from an earlier clip (picked clips only): read-only.
+    private func spanningBar(_ entry: ActiveAudioRef) -> some View {
+        ZStack {
+            blockBackground
+            VStack {
+                VStack(alignment: .leading, spacing: 1) {
+                    Label(entry.track.label, systemImage: "music.note")
+                        .font(.caption2.weight(.medium)).lineLimit(1).truncationMode(.middle)
+                    Text("Plays from \(entry.startClip.date.formatted(date: .abbreviated, time: .omitted))")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                .foregroundStyle(accent)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 4)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { openSoundtrack(entry.track.id) }
+        .help("Music playing over this clip from an earlier day — click to adjust it in the Soundtrack window.")
+    }
+
+    private var blockBackground: some View {
+        RoundedRectangle(cornerRadius: 6)
+            .fill(accent.opacity(0.13))
+            .overlay(RoundedRectangle(cornerRadius: 6)
+                .stroke(accent.opacity(0.4), lineWidth: 1))
+    }
+
+    // MARK: - Actions
+
+    /// Copy the picked file and lay a this-clip-only track over the clip. A
+    /// picked clip goes through the store (persisted + pruned on replace); a
+    /// review draft is written to `draftAudio` and carried into the library by
+    /// `pick` when the clip is added.
+    private func add(_ url: URL) {
         guard let name = store.copyAudioFile(from: url) else { return }
         let track = AudioTrack(fileName: name, displayName: url.lastPathComponent,
                                endClipID: clip.id)
-        store.setAudioTrack(track, onClip: clip.id)
-        openWindow(value: SoundtrackRequest(anchorDate: clip.date,
-                                            selectTrackID: track.id))
+        if isReview {
+            draftAudio = track
+        } else {
+            store.setAudioTrack(track, onClip: clip.id)
+        }
+    }
+
+    /// Review only: drop the draft's track and delete its now-unused copy.
+    private func remove() {
+        guard isReview, let track = draftAudio else { return }
+        draftAudio = nil
+        store.pruneUnusedAudioFile(track)
+    }
+
+    private func openSoundtrack(_ trackID: UUID?) {
+        openWindow(value: SoundtrackRequest(anchorDate: clip.date, selectTrackID: trackID))
+    }
+
+    private func loadWaveform() async {
+        guard let track = own else { waveform = []; return }
+        waveform = await loadAudioWaveform(url: store.audioURL(for: track), buckets: 400)
     }
 }
 
@@ -344,6 +456,10 @@ struct TrimEditor: View {
 
     @State var clip: Clip
     @State private var player: AVPlayer?
+    /// A second player for the music laid over this clip (`clip.audio`), so
+    /// Preview Trim and Play can be auditioned with the song on top. Synced to
+    /// the video and confined to the trimmed [in, out] segment.
+    @State private var musicPlayer: AVAudioPlayer?
     @State private var timeObserver: Any?
     @State private var thumbnails: [NSImage] = []
     @State private var waveform: [Float] = []
@@ -399,6 +515,12 @@ struct TrimEditor: View {
 
     private var isReview: Bool { onAdd != nil }
 
+    /// The music track playing over this clip right now — the draft's in review,
+    /// the store's live value once picked. Drives the Preview/Play music player.
+    private var currentAudioTrack: AudioTrack? {
+        isReview ? clip.audio : store.clips.first(where: { $0.id == clip.id })?.audio
+    }
+
     /// The working copy with the picked date applied — what would be saved.
     private var editedClip: Clip {
         var updated = clip
@@ -422,8 +544,14 @@ struct TrimEditor: View {
         .onDisappear {
             // Auto-save so switching clips or closing the sheet keeps edits.
             // No-op if the clip was just deleted. Review drafts aren't in the
-            // library, so there's nothing to save.
-            if !isReview { saveEdits() }
+            // library, so there's nothing to save — but a draft that picked up
+            // music and was never added leaves an orphan copy in Audio/, so drop
+            // it (a no-op once a real clip references the file, i.e. it was added).
+            if !isReview {
+                saveEdits()
+            } else if let track = clip.audio {
+                store.pruneUnusedAudioFile(track)
+            }
             tearDown()
         }
         .onChange(of: clip) { _, _ in onLiveEdit?(editedClip) }
@@ -433,6 +561,7 @@ struct TrimEditor: View {
         .onChange(of: clip.volume) { _, newValue in
             player?.volume = Float(min(1, max(0, newValue)))
         }
+        .onChange(of: currentAudioTrack?.fileName) { _, _ in loadMusicPlayer() }
         .sheet(isPresented: $showTransition) {
             TransitionEditorSheet(transition: $clip.transition, maxSeconds: clip.trimmedDuration)
         }
@@ -473,7 +602,6 @@ struct TrimEditor: View {
             captionField
             TransitionRow(transition: clip.transition) { showTransition = true }
             volumeRow
-            SoundtrackSection(clip: clip, isReview: isReview)
             Divider()
             DayPickerField(selection: $editedDate)
             dateStampToggle
@@ -553,6 +681,11 @@ struct TrimEditor: View {
                 onScrub: { seconds in seek(to: seconds) }
             )
             .frame(height: waveform.isEmpty ? 56 : 92)
+
+            // A music bar sits right under the clip's own audio waveform: lay a
+            // song over the clip here, or (picked clips) jump to the Soundtrack
+            // window to fine-tune it.
+            ClipMusicLane(clip: clip, isReview: isReview, draftAudio: $clip.audio)
 
             HStack {
                 Button {
@@ -677,6 +810,9 @@ struct TrimEditor: View {
     private var revertButton: some View {
         Button {
             pausePlayback()
+            // Reverting a review draft drops any music it picked up, so delete
+            // that now-orphan copy before the wholesale reset loses the ref.
+            if isReview, let track = clip.audio { store.pruneUnusedAudioFile(track) }
             clip = original
             editedDate = original.date
         } label: {
@@ -766,6 +902,7 @@ struct TrimEditor: View {
         newPlayer.volume = Float(min(1, max(0, clip.volume)))
         player = newPlayer
         seek(to: clip.inSeconds)
+        loadMusicPlayer()
 
         timeObserver = newPlayer.addPeriodicTimeObserver(
             forInterval: CMTime(value: 1, timescale: 30), queue: .main
@@ -781,6 +918,10 @@ struct TrimEditor: View {
             } else if seconds >= clip.durationSeconds - 0.03 {
                 pausePlayback()
             }
+            // Keep the overlaid music aligned, and start/stop it as playback
+            // enters/leaves the trimmed segment (it ends at the clip's out-point
+            // even when the video plays on to its natural end).
+            syncMusic(at: seconds)
         }
 
         // Space toggles play/pause, like the player's old built-in controls did —
@@ -808,6 +949,8 @@ struct TrimEditor: View {
         }
         timeObserver = nil
         player = nil
+        musicPlayer?.stop()
+        musicPlayer = nil
         if let spaceKeyMonitor {
             NSEvent.removeMonitor(spaceKeyMonitor)
             self.spaceKeyMonitor = nil
@@ -837,6 +980,7 @@ struct TrimEditor: View {
             stopAtOut = false
             player.play()
             isPlaying = true
+            syncMusic(at: currentPlayerSeconds ?? clip.inSeconds)
         }
     }
 
@@ -845,12 +989,44 @@ struct TrimEditor: View {
         stopAtOut = true
         player?.play()
         isPlaying = true
+        syncMusic(at: clip.inSeconds)
     }
 
     private func pausePlayback() {
         player?.pause()
+        musicPlayer?.pause()
         isPlaying = false
         stopAtOut = false
+    }
+
+    /// (Re)load the music player from the current audio track, or clear it when
+    /// there's none. Kept in step with the track via `currentAudioTrack`.
+    private func loadMusicPlayer() {
+        guard let track = currentAudioTrack else { musicPlayer = nil; return }
+        let loaded = try? AVAudioPlayer(contentsOf: store.audioURL(for: track))
+        // Like the video player, the preview tops out at 100%; a >100% boost
+        // still applies in the rendered file.
+        loaded?.volume = Float(min(1, max(0, track.volume)))
+        loaded?.prepareToPlay()
+        musicPlayer = loaded
+    }
+
+    /// Align the music to video time `v` and start/stop it so the song is heard
+    /// only over the trimmed segment, beginning at the clip's in-point (matching
+    /// how the export lays a this-clip track down). Called on play and each tick.
+    private func syncMusic(at v: Double) {
+        guard let musicPlayer, let track = currentAudioTrack else { return }
+        let fileTime = track.offsetSeconds + (v - clip.inSeconds)
+        guard isPlaying, v >= clip.inSeconds, v < clip.outSeconds,
+              fileTime >= 0, fileTime < musicPlayer.duration else {
+            musicPlayer.pause()
+            return
+        }
+        // Only reseek on real drift so the 30 Hz observer doesn't stutter it.
+        if abs(musicPlayer.currentTime - fileTime) > 0.15 {
+            musicPlayer.currentTime = fileTime
+        }
+        if !musicPlayer.isPlaying { musicPlayer.play() }
     }
 
     private func loadThumbnails(url: URL) async {

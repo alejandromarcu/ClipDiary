@@ -7,6 +7,22 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.19.0] - 2026-06-30
+
+- **Add music right in the day editor, as a bar under the clip.** The side-pane
+  "Soundtrack" status is gone; in its place a music bar sits directly beneath the
+  clip's own audio waveform (and under the photo for photo clips). When nothing
+  is playing over the clip it reads "＋ Add music" — click it, pick a song, and
+  it's laid over the clip (starting when the clip starts, ending when it ends)
+  with its waveform shown right there. Once music is on a picked clip the bar is
+  read-only and clicking it opens the Soundtrack window to fine-tune the timing,
+  span, or volume.
+- **You can now add music while reviewing an "available" clip**, before adding it
+  to the day — just like trimming or cropping. Preview Trim and Play both play
+  the video with the song mixed on top, so you can hear the combination first;
+  when you add the clip, the music comes with it. (A song added to a clip you
+  then skip without adding is cleaned up automatically.)
+
 ## [1.18.1] - 2026-06-30
 
 - **Fixed: black video when previewing/exporting a range that a song spills out
