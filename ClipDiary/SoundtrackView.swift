@@ -7,6 +7,10 @@ import UniformTypeIdentifiers
 /// topmost visible day) so the soundtrack lands on the same stretch of time.
 struct SoundtrackRequest: Codable, Hashable {
     var anchorDate: Date
+    /// A track to pre-select and scroll to (the day window's "Add Music" / "Open
+    /// in Soundtrack" hands off the clip's track here). Nil → just anchor to the
+    /// day.
+    var selectTrackID: UUID? = nil
 }
 
 /// The scrolled-into-view window of the timeline, in timeline points: the
@@ -27,6 +31,8 @@ struct SoundtrackView: View {
     @Environment(\.dismissWindow) private var dismissWindow
     /// The day to land near (see `SoundtrackRequest`).
     let anchorDate: Date
+    /// A track to pre-select and scroll to on open (see `SoundtrackRequest`).
+    var selectTrackID: UUID? = nil
 
     /// The month `anchorDate` falls in — what the Preview button renders and
     /// labels itself with (the soundtrack previews a whole month).
@@ -182,11 +188,14 @@ struct SoundtrackView: View {
             viewportWidth = m.width
         }
         .onAppear {
-            // Scroll to the anchor day. It's positioned by a raw content
-            // offset (not a scrollTo-an-id, which would resolve the anchor's
-            // *layout* frame — always the strip's origin, since the clips are
-            // placed by `.offset`, so it would always jump to the start).
-            guard let s = anchorStartSeconds(grid), !didInitialScroll else { return }
+            if let selectTrackID { selected = selectTrackID }
+            // Scroll to the selected track's clip (if any) or the anchor day. It's
+            // positioned by a raw content offset (not a scrollTo-an-id, which
+            // would resolve the anchor's *layout* frame — always the strip's
+            // origin, since the clips are placed by `.offset`, so it would always
+            // jump to the start).
+            guard let s = selectedTrackStartSeconds() ?? anchorStartSeconds(grid),
+                  !didInitialScroll else { return }
             didInitialScroll = true
             let targetX = xPos(s)
             DispatchQueue.main.async {
@@ -435,6 +444,15 @@ struct SoundtrackView: View {
         let dated = grid.days.compactMap { span in Double(span.key).map { ($0, span.start) } }
         if let after = dated.filter({ $0.0 >= dayInterval }).min(by: { $0.0 < $1.0 }) { return after.1 }
         return dated.max(by: { $0.0 < $1.0 })?.1
+    }
+
+    /// Timeline start (render seconds) of the clip owning `selectTrackID`, so an
+    /// opened-from-the-day-window track scrolls precisely into view. Nil when no
+    /// track is requested or it can't be located.
+    private func selectedTrackStartSeconds() -> Double? {
+        guard let selectTrackID,
+              let owner = store.clips.first(where: { $0.audio?.id == selectTrackID }) else { return nil }
+        return store.timelineLayout().startByID[owner.id]
     }
 
     /// Build the placed blocks from clips that own audio.

@@ -7,6 +7,17 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.18.0] - 2026-06-30
+
+- **Day window: music moves to the Soundtrack timeline.** The clip editor no
+  longer has inline audio controls. Instead it shows a read-only **Soundtrack**
+  status — which song plays over the current clip, and whether it starts here or
+  carries in from an earlier day — and a button to jump to the Soundtrack window
+  to make changes. When a clip has no music, **Add Music…** lets you pick a file:
+  it's placed starting on that clip and the Soundtrack timeline opens on that day
+  with the new song selected, ready to position. All timing, volume, and
+  start/stop editing now lives in one place — the Soundtrack window.
+
 ## [1.17.4] - 2026-06-30
 
 - **Soundtrack timeline: bigger clip thumbnails.** The clip strip is 50%

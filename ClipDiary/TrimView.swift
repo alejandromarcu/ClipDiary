@@ -87,192 +87,102 @@ struct TagRow: View {
     }
 }
 
-/// Audio-track controls for the clip editors' side pane. Lay an overlaid
-/// music/audio file over this clip (its "start"): set the file's start offset
-/// relative to the clip (± seconds), its volume, and whether it plays over just
-/// this clip or spans following ones. A separate banner lists any audio that
-/// began on an *earlier* clip and is playing over this one, with an "End audio
-/// here" action (library mode only — it caps a track owned by another clip).
-///
-/// Own-audio edits are made on the bound `clip` draft and flushed via `commit`
-/// (mirroring the volume slider), so an open Preview Day rebuilds with them.
-struct AudioSection: View {
+/// Read-only Soundtrack status for the clip editors' side pane. Music now lives
+/// on the dedicated Soundtrack timeline window, so this only *reports* what plays
+/// over the current clip — its own track and any that spans in from an earlier
+/// clip — and hands all editing off to that window. "Add Music…" (shown only
+/// when nothing plays over the clip yet) copies a file, starts a track on this
+/// clip, and opens the Soundtrack window on this day with it selected; when audio
+/// is already present, "Open in Soundtrack" jumps there to adjust it. In review
+/// (a source not yet added to the day, so it isn't on the timeline) it shows a
+/// disabled hint instead. Status is read live from the store so it reflects
+/// Soundtrack-window edits immediately.
+struct SoundtrackSection: View {
     @EnvironmentObject var store: LibraryStore
-    @Binding var clip: Clip
-    /// True in the day editor (a committed clip): enables the "End audio here"
-    /// banner for audio that other clips own.
-    var isLibrary: Bool
-    /// Push the draft to the store immediately (no-op in review).
-    var commit: () -> Void
+    @Environment(\.openWindow) private var openWindow
+    /// The clip being edited (read-only here).
+    var clip: Clip
+    /// True while reviewing a source not yet added to the day.
+    var isReview: Bool
 
     @State private var showImporter = false
 
     private static let audioTypes: [UTType] = [.mp3, .wav, .mpeg4Audio, .aiff, .audio]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let track = clip.audio {
-                ownAudio(track)
-            } else {
-                Button { showImporter = true } label: {
-                    Label("Add Audio…", systemImage: "music.note")
-                }
-                .help("Lay a music/audio file over this clip in the rendered video")
-            }
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Soundtrack")
+                .font(.caption).foregroundStyle(.secondary)
 
-            // Audio that started on an earlier clip and plays over this one.
-            if isLibrary {
-                ForEach(store.activeAudio(over: clip)) { entry in
-                    activeBanner(entry.track, startClip: entry.startClip)
-                }
+            if isReview {
+                Text("Add this clip to place music")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                libraryBody
             }
         }
         .fileImporter(isPresented: $showImporter,
                       allowedContentTypes: Self.audioTypes,
                       allowsMultipleSelection: false) { result in
             if case .success(let urls) = result, let url = urls.first {
-                addAudio(from: url)
+                addMusic(from: url)
             }
         }
     }
 
-    /// The clip's own attached audio (file, offset, volume, span).
+    /// Live status for a picked clip, read from the store.
     @ViewBuilder
-    private func ownAudio(_ track: AudioTrack) -> some View {
+    private var libraryBody: some View {
+        let own = store.clips.first(where: { $0.id == clip.id })?.audio
+        let spanning = store.activeAudio(over: clip)
+
+        if own == nil && spanning.isEmpty {
+            Text("No music over this clip")
+                .font(.caption).foregroundStyle(.secondary)
+            Button { showImporter = true } label: {
+                Label("Add Music…", systemImage: "music.note")
+            }
+            .help("Lay a music/audio file over this clip, then place it on the Soundtrack timeline")
+        } else {
+            if let own {
+                statusRow(own.label, detail: "Starts on this clip")
+            }
+            ForEach(spanning) { entry in
+                statusRow(entry.track.label,
+                          detail: "From \(entry.startClip.date.formatted(date: .abbreviated, time: .omitted))")
+            }
+            Button {
+                openWindow(value: SoundtrackRequest(anchorDate: clip.date,
+                                                    selectTrackID: own?.id))
+            } label: {
+                Label("Open in Soundtrack", systemImage: "waveform")
+            }
+            .help("Adjust this music on the Soundtrack timeline")
+        }
+    }
+
+    private func statusRow(_ label: String, detail: String) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "music.note").foregroundStyle(.secondary)
-            Text(track.label)
-                .lineLimit(1).truncationMode(.middle)
-                .help(track.label)
-            Spacer()
-            Button { removeAudio(track) } label: {
-                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .help("Remove this audio track")
-        }
-
-        HStack(spacing: 8) {
-            Text("Start")
-            TextField("", value: offsetBinding, format: .number.precision(.fractionLength(1)))
-                .labelsHidden().multilineTextAlignment(.trailing)
-                .monospacedDigit().frame(width: 52)
-            Text("s")
-            Stepper("", value: offsetBinding, in: -600...600, step: 0.1).labelsHidden()
-        }
-        .help("Where the audio starts relative to this clip: 0 = together, + starts later (silence first), − means it's already playing when the clip begins.")
-
-        HStack(spacing: 8) {
-            Button {
-                volumeBinding.wrappedValue = 1
-                commit()
-            } label: {
-                Image(systemName: volumeSymbol(track.volume))
-                    .foregroundStyle(.secondary).frame(width: 18)
-            }
-            .buttonStyle(.plain)
-            .help("Reset volume to 100%")
-            Slider(value: volumeBinding, in: 0...4) { editing in
-                if !editing { commit() }
-            }
-            Text("\(Int((track.volume * 100).rounded()))%")
-                .font(.callout.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 44, alignment: .trailing)
-        }
-        .help("How loud this audio plays in the rendered video (0–400%). Boosts above 100% are only audible in the saved file.")
-
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Plays for").font(.caption).foregroundStyle(.secondary)
-            Picker("", selection: spanBinding) {
-                Text("This clip").tag(true)
-                Text("Multiple clips").tag(false)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            if clip.audio?.endClipID == nil {
-                Text("Plays from here onward — open a later clip to end it.")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(label).lineLimit(1).truncationMode(.middle).help(label)
+                Text(detail).font(.caption).foregroundStyle(.secondary)
             }
         }
     }
 
-    /// Banner for audio owned by an earlier clip that plays over this one.
-    @ViewBuilder
-    private func activeBanner(_ track: AudioTrack, startClip: Clip) -> some View {
-        let endsHere = track.endClipID == clip.id
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Image(systemName: "music.note")
-                Text(track.label).lineLimit(1).truncationMode(.middle)
-            }
-            .font(.callout)
-            Text("From \(startClip.date.formatted(date: .abbreviated, time: .omitted))")
-                .font(.caption).foregroundStyle(.secondary)
-            if endsHere {
-                HStack(spacing: 8) {
-                    Label("Ends after this clip", systemImage: "checkmark.circle.fill")
-                        .font(.caption).foregroundStyle(.green)
-                    Spacer()
-                    Button("Keep playing") {
-                        store.setAudioEnd(startClipID: startClip.id, endClipID: nil)
-                    }
-                    .font(.caption)
-                }
-            } else {
-                Button("End audio here") {
-                    store.setAudioEnd(startClipID: startClip.id, endClipID: clip.id)
-                }
-            }
-        }
-        .padding(8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Color.yellow.opacity(0.12)))
-    }
-
-    // MARK: - Bindings & helpers
-
-    private var offsetBinding: Binding<Double> {
-        Binding(get: { clip.audio?.offsetSeconds ?? 0 },
-                set: { clip.audio?.offsetSeconds = $0; commit() })
-    }
-    private var volumeBinding: Binding<Double> {
-        Binding(get: { clip.audio?.volume ?? 1 },
-                set: { clip.audio?.volume = $0 })
-    }
-    /// true = "This clip" (`endClipID == clip.id`); false = "Multiple clips" (nil).
-    private var spanBinding: Binding<Bool> {
-        Binding(get: { clip.audio?.endClipID == clip.id },
-                set: { thisClipOnly in
-                    clip.audio?.endClipID = thisClipOnly ? clip.id : nil
-                    // Toggling span reverts to whole-clip ends (drop any mid-clip
-                    // stop the Soundtrack timeline may have set).
-                    clip.audio?.endWithinSeconds = nil
-                    commit()
-                })
-    }
-
-    private func volumeSymbol(_ volume: Double) -> String {
-        switch volume {
-        case ..<0.01: return "speaker.slash.fill"
-        case ..<0.67: return "speaker.wave.1.fill"
-        case ..<1.34: return "speaker.wave.2.fill"
-        default: return "speaker.wave.3.fill"
-        }
-    }
-
-    private func addAudio(from url: URL) {
+    /// Copy the picked file, start a track on this clip, and jump to the
+    /// Soundtrack timeline to position it (reusing the Soundtrack window's own
+    /// add path). Only reachable when the clip has no music over it yet, so it
+    /// never clobbers or overlaps an existing track.
+    private func addMusic(from url: URL) {
         guard let name = store.copyAudioFile(from: url) else { return }
-        clip.audio = AudioTrack(fileName: name, displayName: url.lastPathComponent,
-                                endClipID: clip.id)
-        commit()
-    }
-
-    private func removeAudio(_ track: AudioTrack) {
-        clip.audio = nil
-        commit()
-        store.pruneUnusedAudioFile(track)
+        let track = AudioTrack(fileName: name, displayName: url.lastPathComponent,
+                               endClipID: clip.id)
+        store.setAudioTrack(track, onClip: clip.id)
+        openWindow(value: SoundtrackRequest(anchorDate: clip.date,
+                                            selectTrackID: track.id))
     }
 }
 
@@ -563,7 +473,7 @@ struct TrimEditor: View {
             captionField
             TransitionRow(transition: clip.transition) { showTransition = true }
             volumeRow
-            AudioSection(clip: $clip, isLibrary: !isReview, commit: commitLiveEdit)
+            SoundtrackSection(clip: clip, isReview: isReview)
             Divider()
             DayPickerField(selection: $editedDate)
             dateStampToggle
@@ -742,7 +652,7 @@ struct TrimEditor: View {
 
     /// Push the current edit straight to the store so an open Preview Day
     /// window (and the calendar) reflect it immediately. Editors otherwise only
-    /// persist on disappear, which leaves an open preview playing the old audio.
+    /// persist on disappear, which leaves an open preview playing the old value.
     /// Library mode only — review drafts aren't in the store yet.
     private func commitLiveEdit() {
         guard !isReview else { return }

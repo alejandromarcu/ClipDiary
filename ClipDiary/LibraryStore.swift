@@ -1032,6 +1032,12 @@ final class LibraryStore: ObservableObject {
         // reorder made while an editor is open would be clobbered by its stale
         // snapshot on save.
         clip.createdAt = clips[idx].createdAt
+        // Audio is owned by the Soundtrack window and the dedicated audio
+        // methods (setAudioTrack/moveAudioTrack/setAudioEnd). Editors snapshot a
+        // clip on open and write it back wholesale here, so keep the stored
+        // audio — otherwise an audio edit made in the Soundtrack window while an
+        // editor is open would be clobbered by its stale snapshot on save.
+        clip.audio = clips[idx].audio
         // The day/photo editors save on disappear, so just clicking through a
         // day's clips (or closing the editor untouched) would otherwise
         // re-encode and rewrite the entire library each time — skip the write

@@ -62,7 +62,8 @@ struct ClipDiaryApp: App {
         // toolbar, seeded with the day to scroll to.
         WindowGroup("Soundtrack", for: SoundtrackRequest.self) { $request in
             if let request {
-                SoundtrackView(anchorDate: request.anchorDate)
+                SoundtrackView(anchorDate: request.anchorDate,
+                               selectTrackID: request.selectTrackID)
                     .environmentObject(store)
             }
         }

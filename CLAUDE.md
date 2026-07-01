@@ -177,11 +177,15 @@ Deliberate improvements over 1SE:
 - `TrimView.swift` — `TrimEditor` (the video editor), plus the shared pieces:
   `LiveEditBuffer` (lets the day window flush an editor's in-flight edit before
   Preview Day, since editors only persist on disappear), `TagRow` (tag chips +
-  new-tag field + reuse menu), `AudioSection` (the side-pane audio-track UI used
-  by both editors: Add Audio… file picker, start-offset/volume controls, a "This
-  clip / Multiple clips" span toggle, and — library mode — an "End audio here"
-  banner for tracks owned by earlier clips, via `store.activeAudio(over:)`),
-  `DayPickerField`, `ReviewItemInfo`/
+  new-tag field + reuse menu), `SoundtrackSection` (the side-pane **read-only**
+  audio status used by both editors: it reports the clip's own track and any
+  spanning in from an earlier clip via `store.activeAudio(over:)`, with **Add
+  Music…** — shown only when nothing plays over the clip — copying a file,
+  starting a track on the clip (`copyAudioFile`+`setAudioTrack`) and opening the
+  Soundtrack window on that day with it selected, and **Open in Soundtrack** to
+  jump there and adjust; all audio editing lives in the Soundtrack window now, so
+  a review draft — not yet on the timeline — just shows a disabled "Add this clip
+  to place music" hint), `DayPickerField`, `ReviewItemInfo`/
   `ReviewItemHeader`, `ResizablePaneDivider` (drag-resizes the side pane), and
   `TrimSlider` (filmstrip of 10 thumbnails with draggable yellow in/out handles,
   min gap 0.1s). Set In/Set Out buttons (⌘I/⌘O) mark trim points at the current
