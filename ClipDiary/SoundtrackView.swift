@@ -104,12 +104,12 @@ struct SoundtrackView: View {
                 timeline(layout: layout, grid: grid, blocks: blocks, totalWidth: totalWidth)
                     .frame(height: contentHeight + topPad + 24)
                 Divider()
-                inspector(blocks: blocks)
-                Spacer(minLength: 0)
+                bottomSection(blocks: blocks)
             }
         }
-        .frame(minWidth: 640, idealWidth: 1000, maxWidth: .infinity,
-               minHeight: 300, idealHeight: 360, maxHeight: .infinity, alignment: .top)
+        .onChange(of: selected) { _, id in revealTrack(id) }
+        .frame(minWidth: 720, idealWidth: 1040, maxWidth: .infinity,
+               minHeight: 460, idealHeight: 620, maxHeight: .infinity, alignment: .top)
         .background {
             Button("Close") { /* window close via Esc */ }
                 .keyboardShortcut(.cancelAction).hidden()
@@ -349,74 +349,135 @@ struct SoundtrackView: View {
         .frame(width: width, height: laneHeight, alignment: .topLeading)
     }
 
-    // MARK: - Inspector
+    // MARK: - Tracks list + inspector
 
-    @ViewBuilder
-    private func inspector(blocks: [Block]) -> some View {
-        if let b = blocks.first(where: { $0.track.id == selected }) {
-            HStack(spacing: 14) {
+    /// The bottom area: a table of every track (in the order they appear) on the
+    /// left, and an editor for the selected track on the right. Selecting a row
+    /// highlights that block in the timeline above and scrolls it into view.
+    private func bottomSection(blocks: [Block]) -> some View {
+        HStack(spacing: 0) {
+            tracksTable(blocks)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Divider()
+            selectedInspector(blocks)
+        }
+        .frame(maxHeight: .infinity)
+    }
+
+    /// The track table: one row per placed track, already in appearance order
+    /// (`audioBlocks` walks the timeline). Row selection is the same `selected`
+    /// the timeline highlights, so clicking a row and clicking a block agree.
+    /// "Used" is how much of the track plays here (its span on the timeline),
+    /// "Total" the full length of the audio file.
+    private func tracksTable(_ blocks: [Block]) -> some View {
+        Table(blocks, selection: $selected) {
+            TableColumn("Track") { b in
                 Label(b.track.label, systemImage: "music.note")
-                    .lineLimit(1).truncationMode(.middle).frame(maxWidth: 200, alignment: .leading)
-
-                if let day = store.clips.first(where: { $0.id == b.startClipID })?.date {
-                    Text("Starts \(day.formatted(date: .abbreviated, time: .omitted))")
-                        .foregroundStyle(.secondary)
-                }
-                HStack(spacing: 6) {
-                    Text("at").foregroundStyle(.secondary)
-                    TextField("", value: positionBinding(b), format: .number.precision(.fractionLength(1)))
-                        .labelsHidden().multilineTextAlignment(.trailing)
-                        .monospacedDigit().frame(width: 58)
-                    Text("s").foregroundStyle(.secondary)
-                    Stepper("", value: positionBinding(b), in: 0...100_000, step: 0.1).labelsHidden()
-                }
-                .help("Where the song starts on the timeline, in seconds from the start of the video.")
-
-                HStack(spacing: 6) {
-                    Image(systemName: "speaker.wave.2.fill").foregroundStyle(.secondary)
-                    Slider(value: volumeBinding(b), in: 0...4).frame(width: 120)
-                    Text("\(Int((b.track.volume * 100).rounded()))%")
-                        .font(.callout.monospacedDigit()).foregroundStyle(.secondary).frame(width: 44, alignment: .trailing)
-                }
-
-                Spacer()
-                Button(role: .destructive) {
-                    store.setAudioTrack(nil, onClip: b.startClipID)
-                    selected = nil
-                } label: { Label("Remove", systemImage: "trash") }
+                    .lineLimit(1).truncationMode(.middle)
             }
-            .padding(.horizontal, 14).padding(.vertical, 10)
-        } else {
-            HStack {
-                Text("Select a song to edit it, or click an empty part of the lane to add one.")
-                    .font(.callout).foregroundStyle(.secondary)
-                Spacer()
+            TableColumn("Day") { b in
+                Text(startDay(b).map { $0.formatted(date: .abbreviated, time: .omitted) } ?? "—")
+                    .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 14).padding(.vertical, 10)
+            .width(min: 96, ideal: 116)
+            TableColumn("Used") { b in
+                Text(formatDurationShort(b.end - b.start))
+                    .monospacedDigit().foregroundStyle(.secondary)
+            }
+            .width(min: 56, ideal: 64)
+            TableColumn("Total") { b in
+                Text(durations[b.track.fileName].map(formatDurationShort) ?? "—")
+                    .monospacedDigit().foregroundStyle(.secondary)
+            }
+            .width(min: 56, ideal: 64)
+        }
+        .overlay {
+            if blocks.isEmpty {
+                VStack(spacing: 6) {
+                    Image(systemName: "music.note").font(.title2).foregroundStyle(.secondary)
+                    Text("No tracks yet — click the lane above to add one.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+            }
         }
     }
 
-    /// The block's absolute start on the timeline (seconds). Editing it moves
-    /// the block — recomputing its start clip + offset and shifting its end to
-    /// preserve length.
-    private func positionBinding(_ b: Block) -> Binding<Double> {
-        Binding(get: { b.start }, set: { newPos in
-            let l = store.timelineLayout()
-            let len = b.end - b.start
-            let pos = max(0, newPos)
-            let (clipID, off) = clipAndOffset(atSeconds: pos, layout: l)
-            let (eClip, eWithin) = endAnchor(atSeconds: pos + len, layout: l)
-            store.moveAudioTrack(b.track.id, toStartClip: clipID, offset: off,
-                                 endClipID: eClip, endWithin: eWithin)
-        })
+    @ViewBuilder
+    private func selectedInspector(_ blocks: [Block]) -> some View {
+        if let b = blocks.first(where: { $0.track.id == selected }) {
+            TrackInspector(track: b.track, startClipID: b.startClipID,
+                           day: startDay(b), used: b.end - b.start,
+                           total: durations[b.track.fileName],
+                           onRestore: { restoreFullLength(b) },
+                           onRemove: {
+                               let next = neighborToSelect(after: b, in: blocks)
+                               store.setAudioTrack(nil, onClip: b.startClipID)
+                               selected = next
+                           })
+                .id(b.track.id)
+                .frame(width: 300)
+                .frame(maxHeight: .infinity, alignment: .top)
+        } else {
+            VStack(spacing: 8) {
+                Image(systemName: "hand.tap").font(.title2).foregroundStyle(.secondary)
+                Text("Select a track to rename it, change its volume, or remove it.")
+                    .font(.callout).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(14)
+            .frame(width: 300)
+            .frame(maxHeight: .infinity)
+        }
     }
-    private func volumeBinding(_ b: Block) -> Binding<Double> {
-        Binding(get: { b.track.volume },
-                set: { v in updateTrack(b) { $0.volume = v } })
+
+    /// The calendar day a track starts on (its start clip's date).
+    private func startDay(_ b: Block) -> Date? {
+        store.clips.first(where: { $0.id == b.startClipID })?.date
     }
-    private func updateTrack(_ b: Block, _ mutate: (inout AudioTrack) -> Void) {
-        var t = b.track; mutate(&t)
-        store.setAudioTrack(t, onClip: b.startClipID)
+
+    /// The track to select after removing `b`: the following one, or the previous
+    /// one when `b` is the last in the list (nil if it was the only track).
+    private func neighborToSelect(after b: Block, in blocks: [Block]) -> UUID? {
+        guard let i = blocks.firstIndex(where: { $0.track.id == b.track.id }) else { return nil }
+        if i + 1 < blocks.count { return blocks[i + 1].track.id }
+        if i > 0 { return blocks[i - 1].track.id }
+        return nil
+    }
+
+    /// Extends a track back to its full original file length, clamped so it can't
+    /// overlap the next track or run past the timeline. Returns a warning message
+    /// when a following track cut the restore short, else nil. A no-op (nil) when
+    /// the file duration isn't loaded yet or the track is already at full length.
+    private func restoreFullLength(_ b: Block) -> String? {
+        let l = store.timelineLayout()
+        let full = b.start + fileLength(b)                              // audible end if the whole file played
+        let hi = neighborBounds(b, blocks: audioBlocks(l), total: l.total).hi
+        let target = min(full, hi)
+        guard target > (b.end + 0.05) else {                           // already as long as it can be
+            return hi < full - 0.05 && hi < l.total - 0.05
+                ? "This track already reaches the next track — can't make it any longer."
+                : nil
+        }
+        let (eClip, eWithin) = endAnchor(atSeconds: target, layout: l)
+        store.moveAudioTrack(b.track.id, toStartClip: b.startClipID,
+                             offset: b.track.offsetSeconds, endClipID: eClip, endWithin: eWithin)
+        // Warn when a following track (not just the timeline end) held it back.
+        if hi < full - 0.05 && hi < l.total - 0.05 {
+            return "The next track was in the way, so this was restored only as far as it fits."
+        }
+        return nil
+    }
+
+    /// Scrolls the timeline so the selected song's block is visible — but only
+    /// when it isn't already on screen, so clicking a block that's already in
+    /// view (in the lane) doesn't yank the scroll around.
+    private func revealTrack(_ id: UUID?) {
+        guard let id,
+              let b = audioBlocks(store.timelineLayout()).first(where: { $0.track.id == id })
+        else { return }
+        let x0 = xPos(b.start), x1 = xPos(b.end)
+        guard x0 < visibleLeft + 8 || x1 > visibleRight - 8 else { return }   // already fully visible
+        scrollPosition.scrollTo(x: max(0, x0 - 60))
     }
 
     // MARK: - Geometry
@@ -484,14 +545,27 @@ struct SoundtrackView: View {
         switch d.mode {
         case .body:
             let len = base.end - base.start
-            var ns = max(lo, min(max(0, base.start + dsec), hi - len))
+            let raw = max(0, base.start + dsec)
+            // Reorder freely: the song can leap over its neighbours into any free
+            // gap big enough to hold it (its own current gap always qualifies), so
+            // dragging one song past another moves it there instead of stopping at
+            // the neighbour. The gap chosen is the one whose nearest fitting start
+            // is closest to where the drag has reached, so it flips to the far side
+            // once the drag passes the midway point.
+            let gaps = freeGaps(excluding: base, blocks: blocks, total: l.total)
+                .filter { $0.end - $0.start >= len - 1e-6 }
+            guard let gap = gaps.min(by: {
+                abs(min(max(raw, $0.start), $0.end - len) - raw) <
+                abs(min(max(raw, $1.start), $1.end - len) - raw)
+            }) else { return (base.start, base.end) }
+            var ns = min(max(raw, gap.start), gap.end - len)
             // Snap whichever edge (start or end) is nearest a day/clip line.
             let s = snap(ns, to: lines, within: snapSec)
             let e = snap(ns + len, to: lines, within: snapSec)
             if let s, let e { ns = abs(s - ns) <= abs(e - (ns + len)) ? s : e - len }
             else if let s { ns = s }
             else if let e { ns = e - len }
-            ns = max(lo, min(ns, hi - len))
+            ns = min(max(ns, gap.start), gap.end - len)
             return (ns, ns + len)
         case .leftEdge:
             var ns = max(max(0, lo), min(base.start + dsec, base.end - 0.2))
@@ -523,7 +597,8 @@ struct SoundtrackView: View {
     }
 
     /// The seconds available on each side of `base` before it would hit a
-    /// neighbouring block (or the timeline ends) — used to forbid overlap.
+    /// neighbouring block (or the timeline ends) — used to forbid overlap on the
+    /// edge-resize drags (which don't reorder).
     private func neighborBounds(_ base: Block, blocks: [Block], total: Double) -> (lo: Double, hi: Double) {
         var lo = 0.0
         var hi = total
@@ -532,6 +607,24 @@ struct SoundtrackView: View {
             if o.start >= base.end { hi = min(hi, o.start) }
         }
         return (lo, hi)
+    }
+
+    /// The empty stretches on the timeline (in seconds) once every block *except*
+    /// `base` is placed — i.e. every spot `base` could be dropped without
+    /// overlapping. Used by the body drag so a song can move into a gap on the
+    /// far side of another song. `base`'s own current gap is always one of them.
+    private func freeGaps(excluding base: Block, blocks: [Block], total: Double) -> [(start: Double, end: Double)] {
+        let occupied = blocks.filter { $0.track.id != base.track.id }
+            .map { (start: $0.start, end: $0.end) }
+            .sorted { $0.start < $1.start }
+        var gaps: [(start: Double, end: Double)] = []
+        var cursor = 0.0
+        for o in occupied {
+            if o.start > cursor + 1e-6 { gaps.append((cursor, o.start)) }
+            cursor = max(cursor, o.end)
+        }
+        if total > cursor + 1e-6 { gaps.append((cursor, total)) }
+        return gaps
     }
 
     private func fileLength(_ b: Block) -> Double {
@@ -619,7 +712,7 @@ struct SoundtrackView: View {
         // so the underlying clip should be free.
         guard store.clips.first(where: { $0.id == clipID })?.audio == nil else { return }
         guard let name = store.copyAudioFile(from: url) else { return }
-        let track = AudioTrack(fileName: name, displayName: url.lastPathComponent,
+        let track = AudioTrack(fileName: name, displayName: url.deletingPathExtension().lastPathComponent,
                                offsetSeconds: max(0, off), endClipID: clipID)
         store.setAudioTrack(track, onClip: clipID)
         selected = track.id
@@ -648,6 +741,123 @@ struct SoundtrackView: View {
         }
     }
 
+}
+
+// MARK: - Track inspector
+
+/// Editor for the selected track: rename, see how much of it plays vs. its full
+/// length, restore it to full length, set volume, remove. The name is a local
+/// draft that commits on Return or when the field loses focus (not on every
+/// keystroke), and edits `AudioTrack.displayName` so the user can give a track a
+/// friendlier name than its imported file name.
+private struct TrackInspector: View {
+    @EnvironmentObject var store: LibraryStore
+    let track: AudioTrack
+    let startClipID: UUID
+    let day: Date?
+    /// How much of the track plays here (its span on the timeline).
+    let used: Double
+    /// Full length of the audio file, nil until it's been measured.
+    let total: Double?
+    /// Restores the track to full length; returns a warning if it couldn't.
+    let onRestore: () -> String?
+    let onRemove: () -> Void
+
+    @State private var nameDraft: String = ""
+    @State private var restoreWarning: String?
+    @FocusState private var nameFocused: Bool
+
+    /// Whether the track already plays its whole file (within a small tolerance),
+    /// so restoring would do nothing.
+    private var atFullLength: Bool {
+        guard let total else { return false }
+        return used >= total - 0.05
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Track").font(.headline)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Name").font(.caption).foregroundStyle(.secondary)
+                TextField("Track name", text: $nameDraft)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($nameFocused)
+                    .onSubmit(commitName)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                if let day {
+                    HStack(spacing: 6) {
+                        Image(systemName: "calendar").foregroundStyle(.secondary)
+                        Text(day.formatted(date: .abbreviated, time: .omitted))
+                    }
+                    .font(.callout)
+                }
+                HStack(spacing: 6) {
+                    Image(systemName: "waveform").foregroundStyle(.secondary)
+                    if let total {
+                        Text("Plays \(formatDurationShort(used)) of \(formatDurationShort(total))")
+                    } else {
+                        Text("Plays \(formatDurationShort(used))")
+                    }
+                }
+                .font(.callout).foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Volume").font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Image(systemName: "speaker.wave.2.fill").foregroundStyle(.secondary)
+                    Slider(value: volumeBinding, in: 0...4)
+                    Text("\(Int((track.volume * 100).rounded()))%")
+                        .font(.callout.monospacedDigit()).foregroundStyle(.secondary)
+                        .frame(width: 46, alignment: .trailing)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Button { restoreWarning = onRestore() } label: {
+                    Label("Restore Full Length", systemImage: "arrow.uturn.backward")
+                }
+                .disabled(total == nil || atFullLength)
+                if let restoreWarning {
+                    Label(restoreWarning, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            Spacer()
+
+            Button(role: .destructive, action: onRemove) {
+                Label("Remove Track", systemImage: "trash")
+            }
+        }
+        .padding(14)
+        .onAppear { nameDraft = track.label }
+        .onChange(of: nameFocused) { _, focused in if !focused { commitName() } }
+    }
+
+    private var volumeBinding: Binding<Double> {
+        Binding(get: { track.volume }, set: { v in
+            var t = track; t.volume = v
+            store.setAudioTrack(t, onClip: startClipID)
+        })
+    }
+
+    /// Commits the renamed title to the track's `displayName`. An empty name is
+    /// ignored (reverts to the current label), and the write is skipped when the
+    /// track no longer exists on its clip (it was just removed) so a focus-loss
+    /// commit can't re-add a deleted track.
+    private func commitName() {
+        let trimmed = nameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { nameDraft = track.label; return }
+        guard trimmed != track.label,
+              store.clips.first(where: { $0.id == startClipID })?.audio?.id == track.id else { return }
+        var t = track; t.displayName = trimmed
+        store.setAudioTrack(t, onClip: startClipID)
+    }
 }
 
 // MARK: - Clip strip cell

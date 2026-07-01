@@ -215,10 +215,22 @@ Deliberate improvements over 1SE:
   click an empty lane spot to add a file (`store.copyAudioFile` +
   `setAudioTrack`), drag the body to reposition (`moveAudioTrack` reassigns the
   start clip + offset), drag the right edge to set the stop (`setAudioEnd`), the
-  left edge to set the start; every drag clamps to neighbours so songs never
-  overlap. A bottom inspector edits the selected block's offset/volume or removes
-  it, and a Preview button opens the month's `PreviewWindow`. Waveforms reuse
-  `loadAudioWaveform`; thumbnails reuse `store.thumbnail(for:)`.
+  left edge to set the start. Edge-resize drags clamp to the immediate neighbour
+  (`neighborBounds`) so a track can't overlap the next, but a **body drag can leap
+  over neighbours** into any free gap big enough to hold it (`freeGaps` picks the
+  gap whose nearest fitting start is closest to the drag, flipping to the far
+  side past the midpoint) — so dragging one track past another **reorders** it.
+  Below the timeline a **track list** (`Table`, `TrackInspector`) lists every
+  track in play order with its start day, **Used** length (its span here) and
+  **Total** length (the audio file's full duration); selecting a row is the same
+  `selected` the lane highlights (and `revealTrack` scrolls it into view if
+  off-screen), so the table is a jump-between-tracks navigator. The selected
+  track's side inspector renames it (a committed `displayName` draft), shows
+  "Plays used of total", sets its volume, removes it, and offers **Restore Full
+  Length** (`restoreFullLength`: extends the track's end back to its whole file,
+  clamped to the next track / timeline end, returning a warning when a following
+  track cut it short). A Preview button opens the month's `PreviewWindow`.
+  Waveforms reuse `loadAudioWaveform`; thumbnails reuse `store.thumbnail(for:)`.
 - `MashImport.swift` — "Import 1SE Video": splits a mashed 1 Second Everyday
   export into per-day clips by OCR'ing (Vision) the date stamp burned into
   the bottom-left corner ("MAR 03 2026"). Coarse 0.3s sampling pass, then

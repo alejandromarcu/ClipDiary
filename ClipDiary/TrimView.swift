@@ -272,7 +272,7 @@ struct ClipMusicLane: View {
     /// `pick` when the clip is added.
     private func add(_ url: URL) {
         guard let name = store.copyAudioFile(from: url) else { return }
-        let track = AudioTrack(fileName: name, displayName: url.lastPathComponent,
+        let track = AudioTrack(fileName: name, displayName: url.deletingPathExtension().lastPathComponent,
                                endClipID: clip.id)
         if isReview {
             draftAudio = track

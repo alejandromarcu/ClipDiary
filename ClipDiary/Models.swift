@@ -335,9 +335,10 @@ struct AudioTrack: Codable, Equatable, Hashable {
     var id: UUID = UUID()
     /// File name inside the project's `Audio/` subfolder (we copy imports there).
     var fileName: String
-    /// The original file name the user picked (e.g. "Summer Song.mp3"), shown in
-    /// the editor in place of the generated `fileName`. Empty → fall back to
-    /// `fileName` (tracks made before this field carry no display name).
+    /// The song's display name, defaulting to the picked file's name without its
+    /// extension (e.g. "Summer Song"), shown in place of the generated `fileName`
+    /// and editable in the Soundtrack window. Empty → fall back to `fileName`
+    /// (tracks made before this field carry no display name).
     var displayName: String = ""
     /// Where the audio starts relative to the start clip's beginning, in
     /// seconds. **Positive** delays it (silence over the clip's first `offset`

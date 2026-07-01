@@ -7,6 +7,33 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.20.0] - 2026-07-01
+
+- **The Soundtrack window now has a track list.** Below the timeline, a table
+  lists every track in the order it plays, showing which day it starts on, how
+  much of it is **Used** (how long it plays here) and its **Total** length (the
+  full audio file). Click a row to select that track — it highlights in the
+  timeline above and scrolls into view if it's off-screen — so you can jump
+  between tracks without hunting along the timeline.
+- **Rename a track.** The selected-track panel (to the right of the list) now
+  lets you give a track a friendlier name instead of the imported file name; it
+  also shows how much of the track plays vs. its full length, and holds the
+  volume slider, a Remove button, and…
+- **Restore Full Length.** One click extends a track back to playing its whole
+  audio file. If another track is in the way it's extended only as far as it
+  fits, with a warning explaining why.
+- Removed the track's numeric "starts at … seconds" field from the editor — it
+  wasn't useful; the timeline and the list's day/length columns already show
+  where a track sits.
+- **You can now drag a track past another to reorder it.** Previously a track
+  stopped when it bumped into its neighbour; now dragging its body far enough
+  leaps it over the other track into the free space on the far side (as long as
+  there's room), so moving an early track to play after a later one just works.
+- A new track's name now defaults to the file name **without its extension**
+  (e.g. "Summer Song" rather than "Summer Song.mp3").
+- Removing a track now selects the next one (or the previous one if it was the
+  last), so you can delete several in a row without re-selecting each time.
+
 ## [1.19.0] - 2026-06-30
 
 - **Add music right in the day editor, as a bar under the clip.** The side-pane
