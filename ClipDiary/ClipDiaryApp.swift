@@ -59,10 +59,10 @@ struct ClipDiaryApp: App {
 
         // The background-audio timeline ("Soundtrack"): the project's clips on a
         // time axis with a draggable audio lane beneath. Opened from the calendar
-        // toolbar, seeded with the month to scroll to.
+        // toolbar, seeded with the day to scroll to.
         WindowGroup("Soundtrack", for: SoundtrackRequest.self) { $request in
             if let request {
-                SoundtrackView(anchorMonth: request.anchorMonth)
+                SoundtrackView(anchorDate: request.anchorDate)
                     .environmentObject(store)
             }
         }

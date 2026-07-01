@@ -7,6 +7,33 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.17.3] - 2026-06-30
+
+- **Soundtrack opens where you're already looking.** The Soundtrack window now
+  lands on the same stretch of time the main window is showing: open it from the
+  calendar on May 2026 and it scrolls to May 2026; open it from the timeline
+  scrolled to a particular day and it scrolls to around that day, instead of
+  always jumping to the last-viewed calendar month.
+
+## [1.17.2] - 2026-06-30
+
+- **Soundtrack timeline: much faster on big projects.** Opening the Soundtrack
+  on a project with thousands of clips no longer hangs on a spinner, and
+  scrolling/zooming is smooth again. The timeline now only builds (and decodes
+  thumbnails for) the clips actually scrolled into view instead of the whole
+  project at once, skips thumbnails for slivers too thin to show one, and
+  caches the timeline layout and day/month grid so they aren't recomputed on
+  every scroll frame.
+
+## [1.17.1] - 2026-06-30
+
+- **Soundtrack timeline: clearer month boundaries.** Added a month-name row
+  above the day numbers (the day row now just shows the day number). The month
+  name stays in view as you scroll — as long as any of a month's days are on
+  screen, its name is too. A full-height line divides one month from the next,
+  while the lighter day separators stop just below the month name, and thin
+  rules underline both header rows.
+
 ## [1.17.0] - 2026-06-29
 
 - **New: lay audio tracks over your clips.** In the clip editor (video or

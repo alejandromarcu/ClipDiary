@@ -2,10 +2,18 @@ import SwiftUI
 import AVFoundation
 import UniformTypeIdentifiers
 
-/// Opens the Soundtrack window scrolled to a month.
+/// Opens the Soundtrack window scrolled near a day — the day the main window is
+/// currently showing (the calendar's month → its first day; the timeline's
+/// topmost visible day) so the soundtrack lands on the same stretch of time.
 struct SoundtrackRequest: Codable, Hashable {
-    var anchorMonth: Date
+    var anchorDate: Date
 }
+
+/// The scrolled-into-view window of the timeline, in timeline points: the
+/// content x at the viewport's leading edge and the viewport's width. Fed by
+/// `onScrollGeometryChange` so the month-name row can keep each month's label
+/// pinned to what's actually on screen (a sticky-header effect).
+private struct ScrollMetrics: Equatable { var left: CGFloat; var width: CGFloat }
 
 /// The background-audio timeline: the project's clips laid end-to-end on a time
 /// axis with a draggable audio lane beneath. Each song is a block — click an
@@ -17,7 +25,14 @@ struct SoundtrackView: View {
     @EnvironmentObject var store: LibraryStore
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
-    let anchorMonth: Date
+    /// The day to land near (see `SoundtrackRequest`).
+    let anchorDate: Date
+
+    /// The month `anchorDate` falls in — what the Preview button renders and
+    /// labels itself with (the soundtrack previews a whole month).
+    private var anchorMonth: Date {
+        Calendar.current.dateInterval(of: .month, for: anchorDate)?.start ?? anchorDate
+    }
 
     /// Horizontal scale: points per second of timeline.
     @State private var pps: Double = 30
@@ -27,8 +42,17 @@ struct SoundtrackView: View {
     @State private var showImporter = false
     @State private var addAtSeconds: Double?
     @State private var drag: DragState?
+    @State private var scrollLeft: CGFloat = 0
+    @State private var viewportWidth: CGFloat = 2000
+    @State private var scrollPosition = ScrollPosition()
+    /// Guards the one-time scroll-to-anchor so re-layouts don't yank the user
+    /// back to the anchor day after they've scrolled away.
+    @State private var didInitialScroll = false
 
-    private let labelRowH: CGFloat = 18   // day labels above the clips
+    private let monthRowH: CGFloat = 24   // month name above the day numbers
+    private let labelRowH: CGFloat = 22   // day numbers above the clips
+    /// y of the top hairline rule (kept just inside the canvas so it isn't clipped).
+    private let topRuleY: CGFloat = 0.5
     private let stripHeight: CGFloat = 60
     private let laneHeight: CGFloat = 74
     private let rowGap: CGFloat = 12
@@ -37,8 +61,14 @@ struct SoundtrackView: View {
     private let snapPoints: CGFloat = 8
     private static let audioTypes: [UTType] = [.mp3, .wav, .mpeg4Audio, .aiff, .audio]
 
-    /// Full height of the scrolling timeline content (label row + strip + lane).
-    private var contentHeight: CGFloat { labelRowH + stripHeight + rowGap + laneHeight }
+    /// Full height of the scrolling timeline content (month row + label row +
+    /// strip + lane).
+    private var contentHeight: CGFloat { monthRowH + labelRowH + stripHeight + rowGap + laneHeight }
+
+    /// The currently-scrolled-into-view x-range (timeline points), used to
+    /// keep a month's label on screen as long as any of its days are visible.
+    private var visibleLeft: CGFloat { scrollLeft }
+    private var visibleRight: CGFloat { scrollLeft + viewportWidth }
 
     private enum DragMode { case body, leftEdge, rightEdge }
     private struct DragState { let id: UUID; let mode: DragMode; var dx: CGFloat }
@@ -53,15 +83,9 @@ struct SoundtrackView: View {
         var id: UUID { track.id }
     }
 
-    /// One calendar day's run of clips on the timeline (seconds), with the label
-    /// to write above it.
-    private struct DaySpan: Identifiable {
-        let key: String; let label: String; let start: Double; let end: Double
-        var id: String { key }
-    }
-
     var body: some View {
         let layout = store.timelineLayout()
+        let grid = store.timelineGrid()
         let blocks = audioBlocks(layout)
         let totalWidth = max(0, CGFloat(layout.total) * pps)
 
@@ -71,7 +95,7 @@ struct SoundtrackView: View {
             if layout.order.isEmpty {
                 emptyState
             } else {
-                timeline(layout: layout, blocks: blocks, totalWidth: totalWidth)
+                timeline(layout: layout, grid: grid, blocks: blocks, totalWidth: totalWidth)
                     .frame(height: contentHeight + topPad + 24)
                 Divider()
                 inspector(blocks: blocks)
@@ -84,7 +108,7 @@ struct SoundtrackView: View {
             Button("Close") { /* window close via Esc */ }
                 .keyboardShortcut(.cancelAction).hidden()
         }
-        .navigationTitle("Soundtrack")
+        .navigationTitle("Soundtrack v4")   // TEMP: bump on each change to confirm fresh build; remove before PR
         .fileImporter(isPresented: $showImporter,
                       allowedContentTypes: Self.audioTypes,
                       allowsMultipleSelection: false) { result in
@@ -130,7 +154,7 @@ struct SoundtrackView: View {
 
     // MARK: - Timeline
 
-    private func timeline(layout: LibraryStore.TimelineLayout,
+    private func timeline(layout: LibraryStore.TimelineLayout, grid: LibraryStore.TimelineGrid,
                           blocks: [Block], totalWidth: CGFloat) -> some View {
         HStack(alignment: .top, spacing: 10) {
             // Fixed, non-scrolling row labels so the two lanes are unambiguous.
@@ -139,31 +163,44 @@ struct SoundtrackView: View {
                 Text("Audio").frame(height: laneHeight)
             }
             .font(.caption).foregroundStyle(.secondary)
-            .padding(.top, topPad + labelRowH)
+            .padding(.top, topPad + monthRowH + labelRowH)
             .frame(width: 42)
 
-            ScrollViewReader { proxy in
-                ScrollView([.horizontal]) {
-                    VStack(alignment: .leading, spacing: 0) {
-                        Color.clear.frame(width: totalWidth, height: labelRowH)
-                        clipStrip(layout, width: totalWidth)
-                        Color.clear.frame(height: rowGap)
-                        audioLane(layout: layout, blocks: blocks, width: totalWidth)
-                    }
-                    // Day separators + labels and dotted clip separators, drawn
-                    // across the whole content (above the clips, down to the
-                    // bottom of the audio). Non-interactive so gestures pass through.
-                    .overlay(alignment: .topLeading) {
-                        dayClipLines(layout, width: totalWidth).allowsHitTesting(false)
-                    }
-                    .padding(.top, topPad)
-                    .padding(.trailing, 16)
+            ScrollView([.horizontal]) {
+                VStack(alignment: .leading, spacing: 0) {
+                    Color.clear.frame(width: totalWidth, height: monthRowH + labelRowH)
+                    clipStrip(layout, width: totalWidth)
+                    Color.clear.frame(height: rowGap)
+                    audioLane(layout: layout, blocks: blocks, width: totalWidth)
                 }
-                .onAppear {
-                    let key = monthKey(anchorMonth)
-                    DispatchQueue.main.async {
-                        withAnimation { proxy.scrollTo("month-\(key)", anchor: .leading) }
-                    }
+                // Day separators + labels and dotted clip separators, drawn
+                // across the whole content (above the clips, down to the
+                // bottom of the audio). Non-interactive so gestures pass through.
+                .overlay(alignment: .topLeading) {
+                    dayClipLines(grid, width: totalWidth,
+                                visibleLeft: visibleLeft, visibleRight: visibleRight)
+                        .allowsHitTesting(false)
+                }
+                .padding(.top, topPad)
+                .padding(.trailing, 16)
+            }
+            .scrollPosition($scrollPosition)
+            .onScrollGeometryChange(for: ScrollMetrics.self) { geo in
+                ScrollMetrics(left: geo.contentOffset.x, width: geo.containerSize.width)
+            } action: { _, m in
+                scrollLeft = m.left
+                viewportWidth = m.width
+            }
+            .onAppear {
+                // Scroll to the anchor day. It's positioned by a raw content
+                // offset (not a scrollTo-an-id, which would resolve the anchor's
+                // *layout* frame — always the strip's origin, since the clips are
+                // placed by `.offset`, so it would always jump to the start).
+                guard let s = anchorStartSeconds(grid), !didInitialScroll else { return }
+                didInitialScroll = true
+                let targetX = xPos(s)
+                DispatchQueue.main.async {
+                    scrollPosition.scrollTo(x: targetX)
                 }
             }
         }
@@ -177,49 +214,107 @@ struct SoundtrackView: View {
             // computation — pixel-locked at every zoom. (An HStack lets SwiftUI
             // place cells by its own cumulative rounding, which can land a line a
             // pixel into a clip — very visible on narrow, low-zoom clips.)
-            ForEach(layout.order) { clip in
+            // Only the clips scrolled into view are built (+ a screen of margin),
+            // so a project with thousands of clips doesn't materialize — and
+            // decode thumbnails for — them all at once.
+            ForEach(visibleClips(layout)) { clip in
                 ClipStripCell(clip: clip, cellWidth: cellWidth(clip, layout), height: stripHeight)
                     .offset(x: xPos(layout.startByID[clip.id] ?? 0))
-            }
-            // Invisible anchors at month starts, so "scroll to month" still works.
-            ForEach(monthMarkers(layout)) { m in
-                Color.clear.frame(width: 1, height: 1)
-                    .id("month-\(m.key)")
-                    .offset(x: xPos(m.startSec))
             }
         }
         .frame(width: width, height: stripHeight, alignment: .topLeading)
         .clipShape(RoundedRectangle(cornerRadius: 4))
     }
 
-    /// Vertical day/clip separators with day labels, drawn over the whole
-    /// timeline. Day lines are solid and start just above the clips with the day
-    /// written between them; clip lines are dotted and start at the clip tops.
-    private func dayClipLines(_ l: LibraryStore.TimelineLayout, width: CGFloat) -> some View {
-        let info = dayInfo(l)
-        let stripTop = labelRowH
+    /// The clips whose pixel span intersects the scrolled-into-view window (plus
+    /// a screen of margin each side). Bounds the per-frame view + thumbnail work
+    /// to what's near the viewport instead of the whole project.
+    private func visibleClips(_ l: LibraryStore.TimelineLayout) -> [Clip] {
+        let lo = scrollLeft - viewportWidth
+        let hi = scrollLeft + 2 * viewportWidth
+        return l.order.filter { clip in
+            guard let s = l.startByID[clip.id], let e = l.endByID[clip.id] else { return false }
+            return xPos(e) >= lo && xPos(s) <= hi
+        }
+    }
+
+    /// Vertical day/clip separators with day numbers and a month-name row above
+    /// them, plus horizontal rules under each label row, drawn over the whole
+    /// timeline. Day lines are solid and start just above the day numbers
+    /// (heavier where a day also starts a new month); clip lines are dotted
+    /// and start at the clip tops. A month's label is clamped to
+    /// `visibleLeft...visibleRight` (the scrolled-into-view window) — like a
+    /// sticky header — so it stays on screen as long as any of its days are
+    /// visible, instead of disappearing once the month's true midpoint
+    /// scrolls off either edge.
+    private func dayClipLines(_ grid: LibraryStore.TimelineGrid, width: CGFloat,
+                              visibleLeft: CGFloat, visibleRight: CGFloat) -> some View {
+        let months = grid.months
+        let monthStarts = Set(months.map(\.start))
+        let stripTop = monthRowH + labelRowH
+        // Only draw separators/labels within the scrolled-into-view window (plus
+        // a small pad): on a long timeline drawing every line + day number each
+        // scroll frame is what makes the Canvas — and scrolling — lag.
+        let lo = visibleLeft - 50
+        let hi = visibleRight + 50
         return Canvas { ctx, size in
-            for x in info.clipLines {
+            // Hairline rules framing the two header rows: above the month name,
+            // between the month name and the day numbers, and below the day
+            // numbers (above the clips).
+            for y in [topRuleY, monthRowH, stripTop] {
+                var rule = Path()
+                rule.move(to: CGPoint(x: 0, y: y))
+                rule.addLine(to: CGPoint(x: size.width, y: y))
+                ctx.stroke(rule, with: .color(.secondary.opacity(0.3)), style: StrokeStyle(lineWidth: 1))
+            }
+
+            for x in grid.clipLines {
                 let px = xPos(x)
+                guard px >= lo, px <= hi else { continue }
                 var p = Path()
                 p.move(to: CGPoint(x: px, y: stripTop))
                 p.addLine(to: CGPoint(x: px, y: size.height))
                 ctx.stroke(p, with: .color(.secondary.opacity(0.35)),
                            style: StrokeStyle(lineWidth: 1, dash: [2, 3]))
             }
-            for d in info.days {
+            for d in grid.days {
                 let px = xPos(d.start)
-                var p = Path()
-                p.move(to: CGPoint(x: px, y: 2))
-                p.addLine(to: CGPoint(x: px, y: size.height))
-                ctx.stroke(p, with: .color(.secondary.opacity(0.55)),
-                           style: StrokeStyle(lineWidth: 1))
-                let spanW = xPos(d.end) - xPos(d.start)
-                if spanW >= 16 {
-                    let cx = (xPos(d.start) + xPos(d.end)) / 2
-                    ctx.draw(Text(d.label).font(.caption2).foregroundStyle(.secondary),
-                             at: CGPoint(x: cx, y: labelRowH / 2))
+                let ex = xPos(d.end)
+                guard ex >= lo, px <= hi else { continue }   // span off-screen
+                let isMonthStart = monthStarts.contains(d.start)
+                // A regular day line tops out at the rule above the day numbers;
+                // only a month boundary runs full height (up through the month
+                // row) so the month divisions read clearly.
+                let top: CGFloat = isMonthStart ? topRuleY : monthRowH
+                if px >= lo, px <= hi {
+                    var p = Path()
+                    p.move(to: CGPoint(x: px, y: top))
+                    p.addLine(to: CGPoint(x: px, y: size.height))
+                    ctx.stroke(p, with: .color(.secondary.opacity(isMonthStart ? 0.8 : 0.55)),
+                               style: StrokeStyle(lineWidth: isMonthStart ? 1.5 : 1))
                 }
+                if ex - px >= 18 {
+                    let cx = (px + ex) / 2
+                    if cx >= lo, cx <= hi {
+                        ctx.draw(Text(d.label).font(.callout).foregroundStyle(.secondary),
+                                 at: CGPoint(x: cx, y: monthRowH + labelRowH / 2))
+                    }
+                }
+            }
+            for m in months {
+                let mLeft = xPos(m.start), mRight = xPos(m.end)
+                let segLeft = max(mLeft, visibleLeft)
+                let segRight = min(mRight, visibleRight)
+                guard segRight > segLeft else { continue }
+                // Rough width estimate (avoids a Canvas text-measure round trip) —
+                // generous on purpose so the clamp keeps clear of the boundary.
+                let textWidth = CGFloat(m.label.count) * 9 + 8
+                let minCx = mLeft + textWidth / 2 + 4
+                let maxCx = mRight - textWidth / 2 - 4
+                let centered = (segLeft + segRight) / 2
+                let cx = minCx <= maxCx ? min(max(centered, minCx), maxCx) : (mLeft + mRight) / 2
+                ctx.draw(Text(m.label).font(.title3.weight(.semibold)).foregroundStyle(.primary),
+                         at: CGPoint(x: cx, y: monthRowH / 2))
             }
         }
         .frame(width: width, height: contentHeight, alignment: .topLeading)
@@ -340,6 +435,19 @@ struct SoundtrackView: View {
         max(0, xPos(l.endByID[clip.id] ?? 0) - xPos(l.startByID[clip.id] ?? 0))
     }
 
+    /// The timeline seconds to scroll to for `anchorDate`: the start of that
+    /// day's clips if that day has any, otherwise the nearest day on/after it
+    /// (falling back to the last day) so the window still lands in the right
+    /// stretch of time when the exact day is empty. `nil` only when there are no
+    /// days at all (the empty state, where no timeline is drawn).
+    private func anchorStartSeconds(_ grid: LibraryStore.TimelineGrid) -> Double? {
+        let dayInterval = anchorDate.dayKey.timeIntervalSinceReferenceDate
+        if let exact = grid.days.first(where: { $0.key == "\(dayInterval)" }) { return exact.start }
+        let dated = grid.days.compactMap { span in Double(span.key).map { ($0, span.start) } }
+        if let after = dated.filter({ $0.0 >= dayInterval }).min(by: { $0.0 < $1.0 }) { return after.1 }
+        return dated.max(by: { $0.0 < $1.0 })?.1
+    }
+
     /// Build the placed blocks from clips that own audio.
     private func audioBlocks(_ l: LibraryStore.TimelineLayout) -> [Block] {
         l.order.compactMap { clip in
@@ -358,47 +466,12 @@ struct SoundtrackView: View {
         }
     }
 
-    /// Groups consecutive clips by calendar day (for the solid day separators +
-    /// labels), and collects the start seconds of clips that fall *within* a day
-    /// (the dotted clip separators). The first clip of each day is a day line,
-    /// not a dotted one.
-    private func dayInfo(_ l: LibraryStore.TimelineLayout) -> (days: [DaySpan], clipLines: [Double]) {
-        var days: [DaySpan] = []
-        var clipLines: [Double] = []
-        let cal = Calendar.current
-        var prevMonth: Int? = nil
-        var idx = 0
-        while idx < l.order.count {
-            let clip = l.order[idx]
-            let day = clip.date.dayKey
-            let start = l.startByID[clip.id] ?? 0
-            var end = l.endByID[clip.id] ?? start
-            var j = idx + 1
-            while j < l.order.count, l.order[j].date.dayKey == day {
-                if let s = l.startByID[l.order[j].id] { clipLines.append(s) }
-                end = l.endByID[l.order[j].id] ?? end
-                j += 1
-            }
-            let month = cal.component(.month, from: clip.date)
-            // Show the month on the first day of a new month for context, else
-            // just the day number (compact for ~1s-a-day clips).
-            let label = month != prevMonth
-                ? clip.date.formatted(.dateTime.month(.abbreviated).day())
-                : "\(cal.component(.day, from: clip.date))"
-            prevMonth = month
-            days.append(DaySpan(key: "\(day.timeIntervalSinceReferenceDate)",
-                                label: label, start: start, end: end))
-            idx = j
-        }
-        return (days, clipLines)
-    }
-
     /// Current display geometry for a block, applying any in-flight drag.
     private func geometry(_ base: Block, layout l: LibraryStore.TimelineLayout,
                           blocks: [Block]) -> (start: Double, end: Double) {
         guard let d = drag, d.id == base.track.id else { return (base.start, base.end) }
         let dsec = Double(d.dx) / pps
-        let (lo, hi) = neighborBounds(base, blocks: blocks)
+        let (lo, hi) = neighborBounds(base, blocks: blocks, total: l.total)
         let lines = boundaries(l)
         let snapSec = Double(snapPoints) / pps
         switch d.mode {
@@ -444,9 +517,9 @@ struct SoundtrackView: View {
 
     /// The seconds available on each side of `base` before it would hit a
     /// neighbouring block (or the timeline ends) — used to forbid overlap.
-    private func neighborBounds(_ base: Block, blocks: [Block]) -> (lo: Double, hi: Double) {
+    private func neighborBounds(_ base: Block, blocks: [Block], total: Double) -> (lo: Double, hi: Double) {
         var lo = 0.0
-        var hi = store.timelineLayout().total
+        var hi = total
         for o in blocks where o.track.id != base.track.id {
             if o.end <= base.start { lo = max(lo, o.end) }
             if o.start >= base.end { hi = min(hi, o.start) }
@@ -568,34 +641,6 @@ struct SoundtrackView: View {
         }
     }
 
-    // MARK: - Month markers
-
-    private struct MonthMarker: Identifiable {
-        let key: String
-        let label: String
-        let startSec: Double
-        var id: String { key }
-    }
-
-    private func monthKey(_ date: Date) -> String {
-        let c = Calendar.current.dateComponents([.year, .month], from: date)
-        return String(format: "%04d-%02d", c.year ?? 0, c.month ?? 0)
-    }
-
-    private func monthMarkers(_ l: LibraryStore.TimelineLayout) -> [MonthMarker] {
-        var result: [MonthMarker] = []
-        var seen = Set<String>()
-        for c in l.order {
-            let key = monthKey(c.date)
-            if seen.insert(key).inserted {
-                result.append(MonthMarker(
-                    key: key,
-                    label: c.date.formatted(.dateTime.month(.abbreviated).year()),
-                    startSec: l.startByID[c.id] ?? 0))
-            }
-        }
-        return result
-    }
 }
 
 // MARK: - Clip strip cell
@@ -607,6 +652,12 @@ private struct ClipStripCell: View {
     let cellWidth: CGFloat
     let height: CGFloat
     @State private var image: NSImage?
+
+    /// Reloads the thumbnail only when the clip's content changes or the cell
+    /// crosses `thumbMinWidth`, so continuous zooming doesn't re-decode.
+    private var thumbTaskID: String {
+        "\(store.thumbnailKey(for: clip))|\(cellWidth >= ClipStripCell.thumbMinWidth)"
+    }
 
     /// The thumbnail's own box: capped to a sensible width so a long-duration
     /// photo/card (held for several seconds) doesn't stretch one static frame
@@ -627,6 +678,9 @@ private struct ClipStripCell: View {
             }
             .frame(width: thumbWidth, height: height)
             .clipped()
+            // Photo/video (or card) icon + duration, matching the calendar's
+            // timeline thumbnails — only as much as fits the thumbnail width.
+            .overlay(alignment: .bottomLeading) { kindBadge }
             if thumbWidth < cellWidth {
                 // The clip keeps showing this same frame for its remaining
                 // duration — a neutral fill instead of stretching the image,
@@ -638,7 +692,35 @@ private struct ClipStripCell: View {
         .frame(width: cellWidth, height: height, alignment: .leading)
         .overlay(Rectangle().stroke(Color.black.opacity(0.15), lineWidth: 0.5))
         .help(clip.date.formatted(date: .abbreviated, time: .omitted))
-        .task(id: store.thumbnailKey(for: clip)) { image = await store.thumbnail(for: clip) }
+        .task(id: thumbTaskID) {
+            // Don't decode a thumbnail for a sliver too thin to show one (zoomed
+            // out): the neutral fill stands in until the user zooms in. The id
+            // flips only when crossing the width threshold, so zooming within a
+            // side doesn't reload.
+            guard cellWidth >= ClipStripCell.thumbMinWidth else { image = nil; return }
+            image = await store.thumbnail(for: clip)
+        }
+    }
+
+    /// Below this cell width the thumbnail isn't worth decoding (and barely
+    /// visible), so it's skipped.
+    fileprivate static let thumbMinWidth: CGFloat = 8
+
+    @ViewBuilder
+    private var kindBadge: some View {
+        if thumbWidth >= 22 {
+            HStack(spacing: 2) {
+                Image(systemName: clip.isCard ? "rectangle.on.rectangle.angled"
+                                              : (clip.kind == .photo ? "photo" : "video"))
+                if thumbWidth >= 52 {
+                    Text(formatTime(clip.trimmedDuration))
+                }
+            }
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.white)
+            .shadow(color: .black.opacity(0.8), radius: 2)
+            .padding(4)
+        }
     }
 }
 

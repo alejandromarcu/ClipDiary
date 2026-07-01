@@ -14,7 +14,7 @@ import UniformTypeIdentifiers
 @MainActor
 final class LibraryStore: ObservableObject {
     @Published private(set) var clips: [Clip] = [] {
-        didSet { clipsByDayCache = nil }
+        didSet { clipsByDayCache = nil; timelineLayoutCache = nil; timelineGridCache = nil }
     }
     @Published var lastError: String?
 
@@ -67,6 +67,13 @@ final class LibraryStore: ObservableObject {
     /// once a library held thousands of clips.
     private var clipsByDayCache: [Date: [Clip]]?
     private var sourceItemsByDayCache: [Date: [SourceItem]]?
+    /// Memoized timeline geometry (per-clip seconds) and the day/month grid over
+    /// it — pure functions of `clips`, dropped whenever `clips` changes. The
+    /// Soundtrack view recomputes these on every scroll frame; without the cache
+    /// the repeated O(n log n) sort + per-clip `Calendar` work made a large
+    /// project's timeline crawl.
+    private var timelineLayoutCache: TimelineLayout?
+    private var timelineGridCache: TimelineGrid?
 
     var currentProjectName: String? { currentProjectURL?.lastPathComponent }
     var hasProject: Bool { currentProjectURL != nil }
@@ -1097,6 +1104,7 @@ final class LibraryStore: ObservableObject {
     }
 
     func timelineLayout() -> TimelineLayout {
+        if let cached = timelineLayoutCache { return cached }
         let order = orderedClips
         var startByID: [UUID: Double] = [:]
         var endByID: [UUID: Double] = [:]
@@ -1106,7 +1114,88 @@ final class LibraryStore: ObservableObject {
             cursor += TimelineLayout.duration(of: c)
             endByID[c.id] = cursor
         }
-        return TimelineLayout(order: order, startByID: startByID, endByID: endByID, total: cursor)
+        let layout = TimelineLayout(order: order, startByID: startByID, endByID: endByID, total: cursor)
+        timelineLayoutCache = layout
+        return layout
+    }
+
+    /// A run of consecutive clips sharing a calendar day or month, with the
+    /// label to draw above it and the timeline seconds it spans. Drives the
+    /// Soundtrack view's day-number and month-name rows.
+    struct TimelineSpan: Identifiable {
+        let key: String
+        let label: String
+        let start: Double
+        let end: Double
+        var id: String { key }
+    }
+
+    /// The day/month grid over the timeline: day spans (with day-number labels),
+    /// month spans (with "Mar 2026" labels + scroll keys), and the start seconds
+    /// of clips that fall *within* a day (the dotted intra-day separators).
+    struct TimelineGrid {
+        var days: [TimelineSpan]
+        var months: [TimelineSpan]
+        var clipLines: [Double]
+    }
+
+    /// Canonical month key ("2026-03") shared by `timelineGrid` and the
+    /// Soundtrack view's "scroll to month" anchors, so they always match.
+    static func monthKey(_ date: Date) -> String {
+        let c = Calendar.current.dateComponents([.year, .month], from: date)
+        return String(format: "%04d-%02d", c.year ?? 0, c.month ?? 0)
+    }
+
+    /// Groups the timeline into day and month spans (memoized). Pure over
+    /// `clips`; the per-clip `Calendar` work made the Soundtrack view crawl when
+    /// recomputed on every scroll frame, so the result is cached.
+    func timelineGrid() -> TimelineGrid {
+        if let cached = timelineGridCache { return cached }
+        let layout = timelineLayout()
+        let order = layout.order
+        let cal = Calendar.current
+        var days: [TimelineSpan] = []
+        var months: [TimelineSpan] = []
+        var clipLines: [Double] = []
+
+        var idx = 0
+        while idx < order.count {
+            let clip = order[idx]
+            let day = clip.date.dayKey
+            let start = layout.startByID[clip.id] ?? 0
+            var end = layout.endByID[clip.id] ?? start
+            var j = idx + 1
+            while j < order.count, order[j].date.dayKey == day {
+                if let s = layout.startByID[order[j].id] { clipLines.append(s) }
+                end = layout.endByID[order[j].id] ?? end
+                j += 1
+            }
+            days.append(TimelineSpan(key: "\(day.timeIntervalSinceReferenceDate)",
+                                     label: "\(cal.component(.day, from: clip.date))",
+                                     start: start, end: end))
+            idx = j
+        }
+
+        idx = 0
+        while idx < order.count {
+            let clip = order[idx]
+            let key = Self.monthKey(clip.date)
+            let start = layout.startByID[clip.id] ?? 0
+            var end = layout.endByID[clip.id] ?? start
+            var j = idx + 1
+            while j < order.count, Self.monthKey(order[j].date) == key {
+                end = layout.endByID[order[j].id] ?? end
+                j += 1
+            }
+            months.append(TimelineSpan(key: key,
+                                       label: clip.date.formatted(.dateTime.month(.abbreviated).year()),
+                                       start: start, end: end))
+            idx = j
+        }
+
+        let grid = TimelineGrid(days: days, months: months, clipLines: clipLines)
+        timelineGridCache = grid
+        return grid
     }
 
     // MARK: - Audio tracks
