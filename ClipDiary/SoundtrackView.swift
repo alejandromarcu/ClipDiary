@@ -108,7 +108,7 @@ struct SoundtrackView: View {
             Button("Close") { /* window close via Esc */ }
                 .keyboardShortcut(.cancelAction).hidden()
         }
-        .navigationTitle("Soundtrack v4")   // TEMP: bump on each change to confirm fresh build; remove before PR
+        .navigationTitle("Soundtrack")
         .fileImporter(isPresented: $showImporter,
                       allowedContentTypes: Self.audioTypes,
                       allowsMultipleSelection: false) { result in

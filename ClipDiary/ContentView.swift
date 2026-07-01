@@ -150,7 +150,6 @@ struct ContentView: View {
                     let monthStart = calendar.dateInterval(of: .month, for: displayedMonth)?.start
                         ?? displayedMonth
                     let anchor = viewMode == .timeline ? (timelineTopDay ?? monthStart) : monthStart
-                    NSLog("SOUNDTRACK-DEBUG mode=\(viewMode) timelineTopDay=\(String(describing: timelineTopDay)) displayedMonth=\(displayedMonth) anchor=\(anchor)")
                     openWindow(value: SoundtrackRequest(anchorDate: anchor))
                 } label: {
                     Label("Soundtrack", systemImage: "waveform")
@@ -724,7 +723,6 @@ struct TimelineBody: View {
         let reached = tops.filter { $0.value <= headerLine }
         let day = (reached.max(by: { $0.value < $1.value })
                    ?? tops.min(by: { $0.value < $1.value }))?.key
-        NSLog("TIMELINE-DEBUG tops.count=\(tops.count) reached=\(reached.count) chosen=\(String(describing: day)) sampleMinYs=\(tops.values.sorted().prefix(4).map { Int($0) })")
         if let day, day != topVisibleDay { topVisibleDay = day }
     }
 
