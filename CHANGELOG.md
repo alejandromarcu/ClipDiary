@@ -7,6 +7,17 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.18.1] - 2026-06-30
+
+- **Fixed: black video when previewing/exporting a range that a song spills out
+  of.** If a soundtrack song started inside the chosen range but was set to stop
+  on a clip *outside* it (e.g. a May song that ends on a June clip), previewing
+  just May played the audio over a black picture, while previewing everything
+  looked fine. The song was being laid down a few milliseconds past the end of
+  the last video, which left the rendered video "uncovered" at the very end and
+  turned the whole picture black. Songs are now trimmed exactly to the end of
+  the video, so the range previews and exports correctly.
+
 ## [1.18.0] - 2026-06-30
 
 - **Day window: music moves to the Soundtrack timeline.** The clip editor no

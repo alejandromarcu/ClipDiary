@@ -420,13 +420,29 @@ struct Exporter {
                     let localStart = oStart + k
                     let duration = oEnd - oStart
 
+                    // These positions come from `timelineLayout()`'s Double
+                    // durations, but the real video track is stitched from CMTime
+                    // (timescale-600) segments, so the two timelines drift by up to
+                    // a frame per clip. Clamp the block to the rendered video's end
+                    // (`totalDuration`) in CMTime, so rounding can't push it past
+                    // either: a track whose end was clamped to this render's
+                    // boundary — its `endClipID` lies outside the range — would
+                    // otherwise land a few ms *after* the last video instruction,
+                    // leaving an uncovered tail. An AVVideoComposition that doesn't
+                    // span the whole composition is invalid: the picture goes black
+                    // (audio still plays) in preview, and export fails.
+                    let startCM = cm(localStart)
+                    guard startCM < totalDuration else { continue }
+                    let durationCM = min(cm(duration), totalDuration - startCM)
+                    guard durationCM > .zero else { continue }
+
                     guard let musicTrack = composition.addMutableTrack(
                         withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid
                     ) else { continue }
                     do {
                         try musicTrack.insertTimeRange(
-                            CMTimeRange(start: cm(fileStart), duration: cm(duration)),
-                            of: srcAudio, at: cm(localStart))
+                            CMTimeRange(start: cm(fileStart), duration: durationCM),
+                            of: srcAudio, at: startCM)
                     } catch { continue }
 
                     let fadeIn = p.track.transition.hasFadeIn ? p.track.transition.fadeInSeconds : 0
@@ -435,7 +451,7 @@ struct Exporter {
                         let params = AVMutableAudioMixInputParameters(track: musicTrack)
                         Self.applyVolumeEnvelope(
                             volume: Float(max(0, p.track.volume)), fadeIn: fadeIn, fadeOut: fadeOut,
-                            to: params, start: cm(localStart), duration: cm(duration)
+                            to: params, start: startCM, duration: durationCM
                         )
                         musicParams.append(params)
                     }
