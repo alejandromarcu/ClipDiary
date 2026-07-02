@@ -39,7 +39,10 @@ Deliberate improvements over 1SE:
   `AudioTrack` (`audio`): a music/audio file (copied into the project's `Audio/`
   folder, keeping its original name in `displayName` for the editor) laid over
   the video — with an `offsetSeconds` (± relative to the clip
-  start), its own `volume`/`transition`, and an `endClipID` marking how far it
+  start), a `fileStartSeconds` **trim into the file** (where in the song
+  playback starts; read via `fileInPoint`, which folds in the legacy
+  negative-offset skip), its own `volume`/`transition`, and an `endClipID`
+  marking how far it
   spans in render order (`==` the start clip = this clip only; `nil` =
   open-ended; another clip id = ends after that clip — a stale reference from a
   later delete/re-date collapses the span to the start clip via
@@ -234,10 +237,27 @@ Deliberate improvements over 1SE:
   `selected` the lane highlights (and `revealTrack` scrolls it into view if
   off-screen), so the table is a jump-between-tracks navigator. The selected
   track's side inspector renames it (a committed `displayName` draft), shows
-  "Plays used of total", sets its volume, removes it, and offers **Restore Full
-  Length** (`restoreFullLength`: extends the track's end back to its whole file,
+  "Plays used of total", sets its volume, removes it, **trims it** — a
+  full-file waveform with a draggable yellow window (`AudioTrimBar`, the video
+  trim slider's idiom): the left edge trims where the song starts (its
+  timeline start moves with it, so kept content stays put against the
+  picture), the right edge where it stops, and dragging the window's body
+  slides *which part* of the file plays without moving the block
+  (`applyTrim`, writing `fileStartSeconds` via `moveAudioTrack`; edge drags
+  clamp to the neighbour slacks). The bar **zooms** (−/+ buttons, ×2 steps to
+  64×) into a horizontal scroll that re-centers on the window each step, since
+  a short window on a long song is otherwise only a few pixels wide; narrow
+  windows also move the yellow handles *outside* the square so its whole body
+  stays a slide target. A **Listen** button plays just the windowed
+  part (`AVAudioPlayer` + a stop-at-end timer, with a playhead in the bar).
+  The inspector also offers **Restore Full
+  Length** (`restoreFullLength`: extends the track's end back to its whole file
+  *and resets the trim-in point*,
   clamped to the next track / timeline end, returning a warning when a following
-  track cut it short). A Preview button opens the month's `PreviewWindow`.
+  track cut it short). A Preview button renders **the days scrolled into view**
+  (`visibleDayRange`: viewport metrics → grid days → a `.custom` day span, edge
+  days included whole) in `PreviewWindow`, its label naming the span live — so
+  scrolling picks where and zoom picks how much gets previewed.
   Waveforms reuse `loadAudioWaveform`; thumbnails reuse `store.thumbnail(for:)`.
 - `MashImport.swift` — "Import 1SE Video": splits a mashed 1 Second Everyday
   export into per-day clips by OCR'ing (Vision) the date stamp burned into

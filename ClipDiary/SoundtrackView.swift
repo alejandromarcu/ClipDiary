@@ -24,7 +24,9 @@ private struct ScrollMetrics: Equatable { var left: CGFloat; var width: CGFloat 
 /// empty part of the lane to add one, drag the body to reposition it (offset),
 /// drag the right edge to set where it stops, the left edge to set where it
 /// starts. Blocks never overlap. Geometry comes from `store.timelineLayout()`,
-/// the same positions the exporter renders, so the lane is WYSIWYG.
+/// the same positions the exporter renders, so the lane is WYSIWYG. The
+/// selected track's inspector adds the file-space counterpart: a trim bar
+/// (`AudioTrimBar`) choosing *which part of the song* plays over that span.
 struct SoundtrackView: View {
     @EnvironmentObject var store: LibraryStore
     @Environment(\.openWindow) private var openWindow
@@ -33,12 +35,6 @@ struct SoundtrackView: View {
     let anchorDate: Date
     /// A track to pre-select and scroll to on open (see `SoundtrackRequest`).
     var selectTrackID: UUID? = nil
-
-    /// The month `anchorDate` falls in — what the Preview button renders and
-    /// labels itself with (the soundtrack previews a whole month).
-    private var anchorMonth: Date {
-        Calendar.current.dateInterval(of: .month, for: anchorDate)?.start ?? anchorDate
-    }
 
     /// Horizontal scale: points per second of timeline.
     @State private var pps: Double = 30
@@ -96,7 +92,7 @@ struct SoundtrackView: View {
         let totalWidth = max(0, CGFloat(layout.total) * pps)
 
         VStack(spacing: 0) {
-            header
+            header(grid: grid)
             Divider()
             if layout.order.isEmpty {
                 emptyState
@@ -109,7 +105,7 @@ struct SoundtrackView: View {
         }
         .onChange(of: selected) { _, id in revealTrack(id) }
         .frame(minWidth: 720, idealWidth: 1040, maxWidth: .infinity,
-               minHeight: 460, idealHeight: 620, maxHeight: .infinity, alignment: .top)
+               minHeight: 460, idealHeight: 680, maxHeight: .infinity, alignment: .top)
         .background {
             Button("Close") { /* window close via Esc */ }
                 .keyboardShortcut(.cancelAction).hidden()
@@ -129,17 +125,16 @@ struct SoundtrackView: View {
 
     // MARK: - Header
 
-    private var header: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "waveform").foregroundStyle(.secondary)
-            Text("Drag a song to move it, its edges to set start and end. Click the lane to add one.")
-                .font(.callout).foregroundStyle(.secondary)
-                .lineLimit(1).truncationMode(.tail)
+    private func header(grid: LibraryStore.TimelineGrid) -> some View {
+        let visibleDays = visibleDayRange(grid)
+        return HStack(spacing: 12) {
             Spacer()
-            Button { previewMonth() } label: {
-                Label("Preview \(anchorMonth.formatted(.dateTime.month(.abbreviated)))", systemImage: "play.fill")
+            Button { previewVisibleDays() } label: {
+                Label(visibleDays.map { "Preview \(visibleDaysLabel($0))" } ?? "Preview",
+                      systemImage: "play.fill")
             }
-            .help("Preview this month with its soundtrack")
+            .disabled(visibleDays == nil)
+            .help("Preview the days on screen with their soundtrack — scroll to pick where, zoom to pick how much")
             Divider().frame(height: 16)
             Button { pps = max(6, pps / 1.5) } label: { Image(systemName: "minus.magnifyingglass") }
                 .help("Zoom out")
@@ -405,9 +400,21 @@ struct SoundtrackView: View {
     @ViewBuilder
     private func selectedInspector(_ blocks: [Block]) -> some View {
         if let b = blocks.first(where: { $0.track.id == selected }) {
+            // How far the audible edges can move before hitting a neighbouring
+            // track or the timeline ends — the trim bar clamps its edge drags
+            // with these, mirroring the lane's edge-resize bounds. The start
+            // additionally clamps to positions whose clip can anchor the track.
+            let layout = store.timelineLayout()
+            let bounds = neighborBounds(b, blocks: blocks, total: layout.total)
+            let anchor = startAnchorBounds(b, layout: layout, bounds: bounds)
             TrackInspector(track: b.track, startClipID: b.startClipID,
                            day: startDay(b), used: b.end - b.start,
                            total: durations[b.track.fileName],
+                           waveform: waveforms[b.track.fileName] ?? [],
+                           leftSlack: max(0, b.start - anchor.lo),
+                           startRightSlack: max(0, anchor.hi - b.start),
+                           rightSlack: max(0, bounds.hi - b.end),
+                           onTrim: { applyTrim(b, $0) },
                            onRestore: { restoreFullLength(b) },
                            onRemove: {
                                let next = neighborToSelect(after: b, in: blocks)
@@ -420,7 +427,7 @@ struct SoundtrackView: View {
         } else {
             VStack(spacing: 8) {
                 Image(systemName: "hand.tap").font(.title2).foregroundStyle(.secondary)
-                Text("Select a track to rename it, change its volume, or remove it.")
+                Text("Select a track to rename it, trim it, change its volume, or remove it.")
                     .font(.callout).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
@@ -444,28 +451,67 @@ struct SoundtrackView: View {
         return nil
     }
 
-    /// Extends a track back to its full original file length, clamped so it can't
-    /// overlap the next track or run past the timeline. Returns a warning message
-    /// when a following track cut the restore short, else nil. A no-op (nil) when
-    /// the file duration isn't loaded yet or the track is already at full length.
+    /// Extends a track back to its full original file length — clearing its
+    /// trim-in point, so the whole song plays from its audible start — clamped
+    /// so it can't overlap the next track or run past the timeline. Returns a
+    /// warning message when a following track cut the restore short, else nil.
+    /// A no-op (nil) when the file duration isn't loaded yet or the track
+    /// already plays its whole file.
     private func restoreFullLength(_ b: Block) -> String? {
         let l = store.timelineLayout()
-        let full = b.start + fileLength(b)                              // audible end if the whole file played
+        // Audible end if the whole file played from the audible start (the
+        // trim-in point is being reset, so the full duration counts).
+        let full = b.start + (durations[b.track.fileName] ?? (b.end - b.start))
         let hi = neighborBounds(b, blocks: audioBlocks(l), total: l.total).hi
         let target = min(full, hi)
-        guard target > (b.end + 0.05) else {                           // already as long as it can be
+        // `target` never falls below the current end (the file cap and the
+        // neighbour bound both sit at or past it), so this only ever extends.
+        guard target > (b.end + 0.05) || b.track.fileInPoint > 0.05 else {
             return hi < full - 0.05 && hi < l.total - 0.05
                 ? "This track already reaches the next track — can't make it any longer."
                 : nil
         }
         let (eClip, eWithin) = endAnchor(atSeconds: target, layout: l)
         store.moveAudioTrack(b.track.id, toStartClip: b.startClipID,
-                             offset: b.track.offsetSeconds, endClipID: eClip, endWithin: eWithin)
+                             offset: max(0, b.track.offsetSeconds),
+                             endClipID: eClip, endWithin: eWithin, fileStart: 0)
         // Warn when a following track (not just the timeline end) held it back.
         if hi < full - 0.05 && hi < l.total - 0.05 {
             return "The next track was in the way, so this was restored only as far as it fits."
         }
         return nil
+    }
+
+    /// Applies a trim-bar edit from the inspector. `.start`/`.end` move that
+    /// edge of the audible span on the timeline (re-anchored through the same
+    /// clip/offset math as the lane drags); `.slide` keeps the span exactly
+    /// where it is and changes only which part of the file plays over it.
+    private func applyTrim(_ b: Block, _ edit: AudioTrimBar.Edit) {
+        let l = store.timelineLayout()
+        switch edit {
+        case .slide(let inPoint):
+            // Pin the end exactly where it audibly is today (an open-ended or
+            // file-capped span would otherwise grow when the slide frees up
+            // more of the file) and swap the in-point under the fixed window.
+            let (eClip, eWithin) = endAnchor(atSeconds: b.end, layout: l)
+            store.moveAudioTrack(b.track.id, toStartClip: b.startClipID,
+                                 offset: max(0, b.track.offsetSeconds),
+                                 endClipID: eClip, endWithin: eWithin, fileStart: inPoint)
+        case .start(let inPoint):
+            // The audible start moves by the same amount as the in-point, so
+            // every kept moment of the song stays where it was on the timeline
+            // — trimming the head doesn't shift the rest against the picture.
+            let newStart = b.start + (inPoint - b.track.fileInPoint)
+            let (sClip, off) = clipAndOffset(atSeconds: newStart, layout: l)
+            store.moveAudioTrack(b.track.id, toStartClip: sClip, offset: off,
+                                 endClipID: b.track.endClipID,
+                                 endWithin: b.track.endWithinSeconds, fileStart: inPoint)
+        case .end(let used):
+            let (eClip, eWithin) = endAnchor(atSeconds: b.start + used, layout: l)
+            store.moveAudioTrack(b.track.id, toStartClip: b.startClipID,
+                                 offset: b.track.offsetSeconds,
+                                 endClipID: eClip, endWithin: eWithin)
+        }
     }
 
     /// Scrolls the timeline so the selected song's block is visible — but only
@@ -525,7 +571,7 @@ struct SoundtrackView: View {
             guard let track = clip.audio,
                   let span = l.audibleSpan(of: track, startingOn: clip.id) else { return nil }
             let fileCap = durations[track.fileName]
-                .map { span.start + ($0 - max(0, -track.offsetSeconds)) } ?? span.end
+                .map { span.start + ($0 - track.fileInPoint) } ?? span.end
             let end = min(span.end, fileCap)
             guard end > span.start else { return nil }
             return Block(track: track, startClipID: clip.id, start: span.start, end: end)
@@ -594,6 +640,37 @@ struct SoundtrackView: View {
         return nearest
     }
 
+    /// The timeline range the audible *start* may move within for the trim
+    /// bar's left-edge drag. Beyond the previous block (`bounds.lo`), the
+    /// start is bound by the one-track-per-clip rule: it can only sit on a
+    /// clip that doesn't anchor another song — `moveAudioTrack` refuses such
+    /// a commit and the whole drag would silently snap back. So walk outward
+    /// from the current start clip: earlier free clips extend the floor, and
+    /// the first anchor-owning clip in either direction is a wall (its very
+    /// start, going right, since any position inside it would re-anchor
+    /// there). Clamping the drag to this range makes the bar WYSIWYG — what
+    /// it shows during the drag is what the release commits.
+    private func startAnchorBounds(_ b: Block, layout l: LibraryStore.TimelineLayout,
+                                   bounds: (lo: Double, hi: Double)) -> (lo: Double, hi: Double) {
+        guard let idx = l.order.firstIndex(where: { $0.id == b.startClipID }) else {
+            return (b.start, b.start)
+        }
+        var floor = l.startByID[b.startClipID] ?? 0
+        var i = idx - 1
+        while i >= 0, l.order[i].audio == nil {
+            floor = l.startByID[l.order[i].id] ?? floor
+            i -= 1
+        }
+        var ceiling = b.end
+        var j = idx + 1
+        while j < l.order.count {
+            guard let s = l.startByID[l.order[j].id], s < ceiling else { break }
+            if l.order[j].audio != nil { ceiling = max(b.start, s - 0.001); break }
+            j += 1
+        }
+        return (max(bounds.lo, floor), ceiling)
+    }
+
     /// The seconds available on each side of `base` before it would hit a
     /// neighbouring block (or the timeline ends) — used to forbid overlap on the
     /// edge-resize drags (which don't reorder).
@@ -627,7 +704,7 @@ struct SoundtrackView: View {
 
     private func fileLength(_ b: Block) -> Double {
         let full = durations[b.track.fileName] ?? (b.end - b.start)
-        return max(0.2, full - max(0, -b.track.offsetSeconds))
+        return max(0.2, full - b.track.fileInPoint)
     }
 
     // MARK: - Drag handling
@@ -685,11 +762,34 @@ struct SoundtrackView: View {
 
     // MARK: - Preview
 
-    /// Opens the month preview, first dismissing any existing one so it always
-    /// rebuilds from the current arrangement (and restarts from the start)
-    /// instead of refocusing a stale window.
-    private func previewMonth() {
-        let req = PreviewRequest(range: .month(anchorMonth))
+    /// The first…last calendar days whose timeline span is scrolled into view
+    /// (at least a pixel on screen) — what the Preview button renders and names,
+    /// so the preview is WYSIWYG with the lane: scroll to choose where, zoom to
+    /// choose how long a stretch. Nil only when there are no days (empty
+    /// project).
+    private func visibleDayRange(_ grid: LibraryStore.TimelineGrid) -> (start: Date, end: Date)? {
+        let visible = grid.days.filter { xPos($0.end) > visibleLeft + 1 && xPos($0.start) < visibleRight - 1 }
+        guard let first = visible.first, let last = visible.last,
+              let s = Double(first.key), let e = Double(last.key) else { return nil }
+        return (Date(timeIntervalSinceReferenceDate: s), Date(timeIntervalSinceReferenceDate: e))
+    }
+
+    /// Compact live label for the days on screen: "Jun 12" for a single day,
+    /// else an interval like "Jun 12 – 28" / "Jun 28 – Jul 3".
+    private func visibleDaysLabel(_ days: (start: Date, end: Date)) -> String {
+        guard days.start != days.end else {
+            return days.start.formatted(.dateTime.month(.abbreviated).day())
+        }
+        return (days.start..<days.end).formatted(.interval.month(.abbreviated).day())
+    }
+
+    /// Previews the days currently on screen (whole calendar days — the
+    /// partially visible edge days count), first dismissing any existing preview
+    /// of the same span so it always rebuilds from the current arrangement (and
+    /// restarts from the start) instead of refocusing a stale window.
+    private func previewVisibleDays() {
+        guard let days = visibleDayRange(store.timelineGrid()) else { return }
+        let req = PreviewRequest(range: .custom(start: days.start, end: days.end))
         dismissWindow(value: req)
         DispatchQueue.main.async { openWindow(value: req) }
     }
@@ -726,7 +826,7 @@ struct SoundtrackView: View {
     private func waveformSlice(_ b: Block, geometry g: (start: Double, end: Double)) -> [Float] {
         guard let full = waveforms[b.track.fileName], !full.isEmpty,
               let dur = durations[b.track.fileName], dur > 0 else { return [] }
-        let inPoint = max(0, -b.track.offsetSeconds)
+        let inPoint = b.track.fileInPoint
         let to = inPoint + (g.end - g.start)
         let n = full.count
         let i0 = max(0, min(n - 1, Int(inPoint / dur * Double(n))))
@@ -749,10 +849,11 @@ struct SoundtrackView: View {
 // MARK: - Track inspector
 
 /// Editor for the selected track: rename, see how much of it plays vs. its full
-/// length, restore it to full length, set volume, remove. The name is a local
-/// draft that commits on Return or when the field loses focus (not on every
-/// keystroke), and edits `AudioTrack.displayName` so the user can give a track a
-/// friendlier name than its imported file name.
+/// length, trim which part of the file plays (the trim bar), listen to just
+/// that part, restore it to full length, set volume, remove. The name is a
+/// local draft that commits on Return or when the field loses focus (not on
+/// every keystroke), and edits `AudioTrack.displayName` so the user can give a
+/// track a friendlier name than its imported file name.
 private struct TrackInspector: View {
     @EnvironmentObject var store: LibraryStore
     let track: AudioTrack
@@ -762,6 +863,18 @@ private struct TrackInspector: View {
     let used: Double
     /// Full length of the audio file, nil until it's been measured.
     let total: Double?
+    /// The whole file's waveform for the trim bar (empty while loading).
+    let waveform: [Float]
+    /// Timeline seconds the audible start/end can still move outward before
+    /// hitting a neighbouring track, the timeline ends, or (for the start) a
+    /// clip that anchors another song (trim-bar clamps).
+    let leftSlack: Double
+    /// Timeline seconds the audible start may move *right* before landing on
+    /// a clip that anchors another song.
+    let startRightSlack: Double
+    let rightSlack: Double
+    /// Commits a trim-bar drag (see `AudioTrimBar.Edit`).
+    let onTrim: (AudioTrimBar.Edit) -> Void
     /// Restores the track to full length; returns a warning if it couldn't.
     let onRestore: () -> String?
     let onRemove: () -> Void
@@ -772,6 +885,15 @@ private struct TrackInspector: View {
     @State private var volumeDraft: Double = 1.0
     @State private var restoreWarning: String?
     @FocusState private var nameFocused: Bool
+    /// The "Listen" preview of just the trimmed part: a standalone player
+    /// (nil when idle) plus a 30 Hz timer that moves the bar's playhead and
+    /// stops the player at the window's end (AVAudioPlayer has no stop-at).
+    @State private var previewPlayer: AVAudioPlayer?
+    @State private var previewTimer: Timer?
+    @State private var previewPlayhead: Double?
+    /// Trim-bar magnification, 1 = the whole file fits the bar. Resets when
+    /// another track is selected (the inspector is identity-keyed per track).
+    @State private var trimZoom: CGFloat = 1
 
     /// Whether the track already plays its whole file (within a small tolerance),
     /// so restoring would do nothing.
@@ -781,70 +903,156 @@ private struct TrackInspector: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Track").font(.headline)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Name").font(.caption).foregroundStyle(.secondary)
-                TextField("Track name", text: $nameDraft)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($nameFocused)
-                    .onSubmit(commitName)
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                if let day {
-                    HStack(spacing: 6) {
-                        Image(systemName: "calendar").foregroundStyle(.secondary)
-                        Text(day.formatted(date: .abbreviated, time: .omitted))
+        // The form scrolls when the window is short (the trim bar made it
+        // taller than the smallest window); Remove stays pinned below it.
+        VStack(alignment: .leading, spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack {
+                        Text("Track").font(.headline)
+                        Spacer()
+                        if let day {
+                            HStack(spacing: 5) {
+                                Image(systemName: "calendar")
+                                Text(day.formatted(date: .abbreviated, time: .omitted))
+                            }
+                            .font(.callout).foregroundStyle(.secondary)
+                        }
                     }
-                    .font(.callout)
-                }
-                HStack(spacing: 6) {
-                    Image(systemName: "waveform").foregroundStyle(.secondary)
-                    if let total {
-                        Text("Plays \(formatDurationShort(used)) of \(formatDurationShort(total))")
-                    } else {
-                        Text("Plays \(formatDurationShort(used))")
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Name").font(.caption).foregroundStyle(.secondary)
+                        TextField("Track name", text: $nameDraft)
+                            .textFieldStyle(.roundedBorder)
+                            .focused($nameFocused)
+                            .onSubmit(commitName)
+                    }
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Volume").font(.caption).foregroundStyle(.secondary)
+                        HStack(spacing: 8) {
+                            Image(systemName: "speaker.wave.2.fill").foregroundStyle(.secondary)
+                            Slider(value: $volumeDraft, in: 0...4) { editing in
+                                if !editing { commitVolume() }
+                            }
+                            Text("\(Int((volumeDraft * 100).rounded()))%")
+                                .font(.callout.monospacedDigit()).foregroundStyle(.secondary)
+                                .frame(width: 46, alignment: .trailing)
+                        }
+                    }
+
+                    trimSection
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Button { restoreWarning = onRestore() } label: {
+                            Label("Restore Full Length", systemImage: "arrow.uturn.backward")
+                        }
+                        .disabled(total == nil || atFullLength)
+                        if let restoreWarning {
+                            Label(restoreWarning, systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption).foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 }
-                .font(.callout).foregroundStyle(.secondary)
+                .padding(14)
             }
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Volume").font(.caption).foregroundStyle(.secondary)
-                HStack(spacing: 8) {
-                    Image(systemName: "speaker.wave.2.fill").foregroundStyle(.secondary)
-                    Slider(value: $volumeDraft, in: 0...4) { editing in
-                        if !editing { commitVolume() }
-                    }
-                    Text("\(Int((volumeDraft * 100).rounded()))%")
-                        .font(.callout.monospacedDigit()).foregroundStyle(.secondary)
-                        .frame(width: 46, alignment: .trailing)
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                Button { restoreWarning = onRestore() } label: {
-                    Label("Restore Full Length", systemImage: "arrow.uturn.backward")
-                }
-                .disabled(total == nil || atFullLength)
-                if let restoreWarning {
-                    Label(restoreWarning, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption).foregroundStyle(.orange)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-
-            Spacer()
+            Divider()
 
             Button(role: .destructive, action: onRemove) {
                 Label("Remove Track", systemImage: "trash")
             }
+            .padding(14)
         }
-        .padding(14)
         .onAppear { nameDraft = track.label; volumeDraft = track.volume }
         .onChange(of: nameFocused) { _, focused in if !focused { commitName() } }
+        // A lane drag (or any other edit) can change the trimmed window while
+        // it's playing — stop rather than keep playing a stale selection. Also
+        // covers deselection/removal via onDisappear.
+        .onChange(of: track) { _, _ in stopPreview() }
+        .onDisappear { stopPreview() }
+    }
+
+    /// The trim bar and its "Listen" button: the whole file's waveform with a
+    /// yellow window over the part that plays, mirroring the video trim slider.
+    /// The −/+ buttons zoom the bar (the timeline header's idiom) so a
+    /// few-second window on a long song gets enough pixels to trim precisely;
+    /// the bar re-centers on the window at each step.
+    private var trimSection: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Trim").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button { trimZoom = max(1, trimZoom / 2) } label: {
+                    Image(systemName: "minus.magnifyingglass")
+                }
+                .controlSize(.small)
+                .disabled(total == nil || trimZoom <= 1)
+                .help("Zoom out the trim bar")
+                Button { trimZoom = min(64, trimZoom * 2) } label: {
+                    Image(systemName: "plus.magnifyingglass")
+                }
+                .controlSize(.small)
+                .disabled(total == nil || trimZoom >= 64)
+                .help("Zoom in on the trimmed part for finer adjustments")
+                Button { togglePreview() } label: {
+                    Label(previewPlayer == nil ? "Listen" : "Stop",
+                          systemImage: previewPlayer == nil ? "play.fill" : "stop.fill")
+                }
+                .controlSize(.small)
+                .disabled(total == nil)
+                .help("Play just the trimmed part of the song")
+            }
+            if let total, total > 0.05 {
+                AudioTrimBar(waveform: waveform, fileDuration: total,
+                             inPoint: track.fileInPoint, used: used,
+                             leftSlack: leftSlack, startRightSlack: startRightSlack,
+                             rightSlack: rightSlack,
+                             playhead: previewPlayhead, zoom: trimZoom,
+                             onDragStarted: { stopPreview() },
+                             onEdit: { stopPreview(); onTrim($0) })
+            } else {
+                // Same footprint as the loaded bar, so nothing jumps.
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.secondary.opacity(0.08))
+                    .frame(height: 64)
+                    .overlay(Text("Loading waveform…").font(.caption).foregroundStyle(.secondary))
+            }
+        }
+    }
+
+    /// Plays exactly the trimmed window (in-point → in-point + used length) at
+    /// the track's volume, or stops an ongoing preview — the audible check that
+    /// the yellow window sits where the user thinks it does.
+    private func togglePreview() {
+        guard previewPlayer == nil else { stopPreview(); return }
+        guard let p = try? AVAudioPlayer(contentsOf: store.audioURL(for: track)) else { return }
+        // Like the editors' previews, tops out at 100%; a boost still renders.
+        p.volume = Float(min(1, max(0, track.volume)))
+        let start = track.fileInPoint
+        let end = min(p.duration, start + used)
+        guard end > start else { return }
+        p.currentTime = start
+        p.play()
+        previewPlayer = p
+        previewPlayhead = start
+        previewTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { _ in
+            guard let playing = previewPlayer else { return }
+            if !playing.isPlaying || playing.currentTime >= end - 0.02 {
+                stopPreview()
+            } else {
+                previewPlayhead = playing.currentTime
+            }
+        }
+    }
+
+    private func stopPreview() {
+        previewTimer?.invalidate()
+        previewTimer = nil
+        previewPlayer?.stop()
+        previewPlayer = nil
+        previewPlayhead = nil
     }
 
     /// Commits the released slider value, skipped when the track no longer
@@ -867,6 +1075,365 @@ private struct TrackInspector: View {
               store.clips.first(where: { $0.id == startClipID })?.audio?.id == track.id else { return }
         var t = track; t.displayName = trimmed
         store.setAudioTrack(t, onClip: startClipID)
+    }
+}
+
+// MARK: - Trim bar
+
+/// The inspector's trim control: the whole audio file's waveform with a
+/// draggable yellow window over the part that plays — the video trim slider's
+/// look, applied to a song. Dragging the **left edge** trims where the song
+/// starts: the audible start moves by the same amount on the timeline, so
+/// every kept moment stays in sync with the picture. The **right edge** sets
+/// where it stops (the lane's edge drag, with the file visible). Dragging the
+/// **window body** slides which part of the song plays — same length, the
+/// block on the timeline doesn't move at all. Drags clamp to the file, a
+/// minimum length, and the passed timeline slacks (the room before a
+/// neighbouring track). All values are file seconds; commits fire on release.
+///
+/// Hit-testing is one gesture over the whole bar: where the press *starts*
+/// picks the drag — a handle (small margin) wins, else anywhere on the yellow
+/// square slides it. A short span over a whole song draws only a sliver of a
+/// square — the common case here — so below a width threshold the handles
+/// move *outside* the square, keeping every pixel of the square itself a
+/// slide target instead of letting the handles swallow it. Hover cursors
+/// telegraph the zones. `zoom` (the inspector's −/+ buttons) stretches the
+/// file across that many viewports inside a horizontal scroll — panned by
+/// dragging the strip's empty parts (`.pan`) or a trackpad scroll, and
+/// re-centered on the window at every zoom step — so even a seconds-long
+/// window on a long song gets enough pixels to trim precisely. When the
+/// system uses legacy (space-taking) scroll bars, the bar reserves the
+/// scroller's height beneath itself (`scrollerPad`) so the scroll bar gets
+/// its own strip instead of squeezing the waveform into the views above.
+private struct AudioTrimBar: View {
+    /// A committed drag, in file terms.
+    enum Edit {
+        /// Body dragged: new in-point, same length — the timeline span stays.
+        case slide(inPoint: Double)
+        /// Left edge dragged: new in-point; the audible start follows it.
+        case start(inPoint: Double)
+        /// Right edge dragged: new played length; the audible end follows it.
+        case end(used: Double)
+    }
+
+    let waveform: [Float]
+    let fileDuration: Double
+    /// The committed window: where in the file play starts, and for how long.
+    let inPoint: Double
+    let used: Double
+    /// Timeline room the audible start/end may still move into before hitting
+    /// a neighbouring track, the timeline ends, or a clip that can't anchor
+    /// the track (the commit would be refused and the drag would snap back).
+    let leftSlack: Double
+    /// Room for the audible start to move *right* (a left-edge trim) before
+    /// landing on a clip that anchors another song.
+    let startRightSlack: Double
+    let rightSlack: Double
+    /// File position of the Listen playhead; nil hides it.
+    var playhead: Double?
+    /// Magnification: 1 = the whole file fits the bar; higher stretches the
+    /// file across `zoom` viewports (panned by dragging its empty parts, or
+    /// a trackpad scroll), so a short window on a long song gets enough
+    /// pixels to trim precisely.
+    var zoom: CGFloat = 1
+    /// Fired when a drag begins, so the inspector can stop its preview.
+    let onDragStarted: () -> Void
+    let onEdit: (Edit) -> Void
+
+    private enum Mode { case body, left, right, pan }
+    /// In-flight drag: its mode, the press x that started it (a gesture's
+    /// `startLocation` never changes, so a *different* one means a stale
+    /// entry from a cancelled gesture — start fresh), and the live dx.
+    @State private var drag: (mode: Mode, startX: CGFloat, dx: CGFloat)?
+    @State private var scroll = ScrollPosition()
+    /// Live scroll offset (tracked so drag locations — measured in the
+    /// scroll viewport's stable space — convert to file coordinates).
+    @State private var scrollX: CGFloat = 0
+    /// Scroll offset when an in-flight `.pan` drag began.
+    @State private var panOrigin: CGFloat = 0
+    /// Bumped when the system scroller style changes, purely to re-render
+    /// (the body re-reads `NSScroller.preferredScrollerStyle`).
+    @State private var scrollerStyleTick = 0
+
+    /// The scroll viewport's coordinate space: drags are measured here (it
+    /// never moves) rather than in the content's space, which slides under
+    /// the pointer during a `.pan` and would feed back into the translation.
+    private static let viewportSpace = "AudioTrimBar.viewport"
+
+    private let barHeight: CGFloat = 44
+    private let handleWidth: CGFloat = 10
+    /// The hit gutter past each end of the file, riding *inside* the scroll
+    /// content so a narrow window's outside handles stay visible and
+    /// grabbable even when the window sits at the file's very ends.
+    private let hitPad: CGFloat = 16
+    /// Minimum window length, matching the lane's edge-drag clamp.
+    private let minGap = 0.2
+    /// Below this drawn width the handles move outside the square (see the
+    /// type comment): wide enough that inside handles always leave a
+    /// comfortably grabbable middle.
+    private let narrowBelow: CGFloat = 56
+
+    /// Extra height reserved under the bar for the horizontal scroll bar: a
+    /// *legacy*-style scroller (mouse connected, or scroll bars set to
+    /// Always) takes real layout space inside the ScrollView, so without a
+    /// reservation it squeezes the bar out of its 44 pt and over the
+    /// neighbouring views. Overlay scrollers (and 1×, where nothing scrolls)
+    /// take none, so the section stays tight there. The bar content itself is
+    /// *not* force-framed to the reserved height — it stays 44 pt, top-aligned
+    /// into whatever the scroller leaves — which is what went wrong the first
+    /// time this was tried: a forced taller content got centered against the
+    /// scroller-reduced viewport and spilled out the top, over the buttons.
+    private var scrollerPad: CGFloat {
+        guard zoom > 1, NSScroller.preferredScrollerStyle == .legacy else { return 0 }
+        return NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)
+    }
+
+    var body: some View {
+        let pad = scrollerPad
+        GeometryReader { geo in
+            let viewportW = geo.size.width
+            // Pixels for the whole file: gutters are part of the content, so
+            // at 1× (content exactly fits the viewport) nothing scrolls.
+            let fileW = max(50, (viewportW - hitPad * 2)) * zoom
+            let win = window(width: fileW)
+            VStack(alignment: .leading, spacing: 3) {
+                ScrollView(.horizontal) {
+                    bar(win, width: fileW)
+                        .padding(.horizontal, hitPad)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                }
+                .scrollPosition($scroll)
+                .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.x } action: { _, x in
+                    scrollX = x
+                }
+                .frame(width: viewportW, height: barHeight + pad)
+                .coordinateSpace(name: Self.viewportSpace)
+                .onChange(of: zoom) { _, _ in recenter(viewportW: viewportW) }
+                // Live while dragging: where in the file the window sits, and
+                // how much of the song plays.
+                HStack {
+                    Text("\(formatDurationShort(win.start)) – \(formatDurationShort(win.end))")
+                    Spacer()
+                    Text("\(formatDurationShort(win.end - win.start)) of \(formatDurationShort(fileDuration))")
+                }
+                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            }
+        }
+        .frame(height: barHeight + 20 + pad)
+        // Re-render when the system flips between overlay and legacy
+        // scrollers (mouse plugged/unplugged), so the reservation follows.
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSScroller.preferredScrollerStyleDidChangeNotification)) { _ in
+            scrollerStyleTick &+= 1
+        }
+    }
+
+    /// Scrolls so the (committed) window is centered — called on each zoom
+    /// step, so zooming in homes in on the part being trimmed instead of
+    /// drifting toward the file's head. Deferred a tick so the new content
+    /// width is laid out before the scroll target resolves.
+    private func recenter(viewportW: CGFloat) {
+        let fileW = max(50, (viewportW - hitPad * 2)) * zoom
+        let c = committedWindow
+        let centerX = x((c.start + c.end) / 2, width: fileW) + hitPad
+        let target = min(max(0, centerX - viewportW / 2),
+                         max(0, fileW + hitPad * 2 - viewportW))
+        DispatchQueue.main.async { scroll.scrollTo(x: target) }
+    }
+
+    private func bar(_ win: (start: Double, end: Double), width: CGFloat) -> some View {
+        let g = geometry(for: win, width: width)
+        return ZStack(alignment: .topLeading) {
+            WaveformView(samples: waveform)
+                .padding(.vertical, 3).padding(.horizontal, 2)
+                .frame(width: width, height: barHeight)
+                .background(Color.black.opacity(0.55))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+
+            // Dimmed (cut) head and tail, like the video trim slider — up to
+            // the drawn square (never inside it, even when it's wider than the
+            // true window; the labels below carry the exact numbers).
+            Rectangle().fill(.black.opacity(0.55))
+                .frame(width: max(0, g.borderX), height: barHeight)
+            Rectangle().fill(.black.opacity(0.55))
+                .frame(width: max(0, width - g.borderX - g.borderW), height: barHeight)
+                .offset(x: g.borderX + g.borderW)
+
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(Color.yellow, lineWidth: 2)
+                .frame(width: g.borderW, height: barHeight)
+                .offset(x: g.borderX)
+
+            if let playhead {
+                Rectangle().fill(.white)
+                    .frame(width: 2, height: barHeight)
+                    .shadow(color: .black.opacity(0.6), radius: 1)
+                    .offset(x: x(playhead, width: width) - 1)
+            }
+
+            handle.offset(x: g.leftHandleX)
+            handle.offset(x: g.rightHandleX)
+        }
+        .frame(width: width, height: barHeight)
+        // One gesture for the whole bar; the hit area reaches a little past
+        // the ends so a narrow window's outside handles — which sit in the
+        // inspector's padding gutter at the bar's edges — stay grabbable.
+        .contentShape(Path(CGRect(x: -(handleWidth + 6), y: 0,
+                                  width: width + (handleWidth + 6) * 2, height: barHeight)))
+        .gesture(barDrag(width: width))
+        .onContinuousHover { phase in
+            switch phase {
+            case .active(let p): hoverCursor(atX: p.x, width: width).set()
+            case .ended: NSCursor.arrow.set()
+            }
+        }
+    }
+
+    private var handle: some View {
+        RoundedRectangle(cornerRadius: 3)
+            .fill(Color.yellow)
+            .frame(width: handleWidth, height: barHeight)
+            .overlay(RoundedRectangle(cornerRadius: 1)
+                .fill(.black.opacity(0.5))
+                .frame(width: 2, height: 14))
+    }
+
+    /// The drawn square and handle positions for `win`. The square tracks the
+    /// *true* window (only a hair of a floor so a sliver stays visible) —
+    /// never a padded stand-in, so dragging one edge can't appear to move the
+    /// other. Whether the handles sit inside its ends (wide) or just outside
+    /// them (narrow) follows the *committed* width — not the mid-drag one —
+    /// so they don't flip sides during a drag.
+    private struct BarGeometry {
+        var borderX: CGFloat
+        var borderW: CGFloat
+        var leftHandleX: CGFloat
+        var rightHandleX: CGFloat
+        var narrow: Bool
+    }
+
+    private func geometry(for win: (start: Double, end: Double), width: CGFloat) -> BarGeometry {
+        let inX = x(win.start, width: width)
+        let outX = x(win.end, width: width)
+        let borderW = max(6, outX - inX)
+        let borderX = max(0, min(inX, width - borderW))
+        let c = committedWindow
+        let narrow = x(c.end, width: width) - x(c.start, width: width) < narrowBelow
+        return BarGeometry(
+            borderX: borderX, borderW: borderW,
+            leftHandleX: narrow ? borderX - handleWidth - 1 : borderX,
+            rightHandleX: narrow ? borderX + borderW + 1 : borderX + borderW - handleWidth,
+            narrow: narrow
+        )
+    }
+
+    /// Which drag a press at `px` (file space) begins, from the committed
+    /// geometry: a handle (with a small margin) wins, else anywhere on the
+    /// yellow square slides it; the rest of the strip pans the zoomed view.
+    /// On a narrow square the handle zones reach only *outward*, so they
+    /// can't swallow the sliver of square between them.
+    private func mode(atX px: CGFloat, width: CGFloat) -> Mode? {
+        let g = geometry(for: committedWindow, width: width)
+        let inward: CGFloat = g.narrow ? 0 : 4
+        if px >= g.leftHandleX - 4, px <= g.leftHandleX + handleWidth + inward { return .left }
+        if px >= g.rightHandleX - inward, px <= g.rightHandleX + handleWidth + 4 { return .right }
+        if px >= g.borderX - 2, px <= g.borderX + g.borderW + 2 { return .body }
+        return zoom > 1 ? .pan : nil
+    }
+
+    /// The pointer shape telegraphing what a press would do: resize arrows
+    /// over the handles, an open hand over a slideable square or the pannable
+    /// zoomed strip — plain when there's nothing to move.
+    private func hoverCursor(atX px: CGFloat, width: CGFloat) -> NSCursor {
+        switch mode(atX: px, width: width) {
+        case .left, .right:
+            return .resizeLeftRight
+        case .body:
+            let c = committedWindow
+            return c.start > 0.01 || c.end < fileDuration - 0.01 ? .openHand : .arrow
+        case .pan:
+            return .openHand
+        case nil:
+            return .arrow
+        }
+    }
+
+    /// One drag for the whole bar: the mode is picked from where the press
+    /// landed on the first tick and held for the rest of the drag. Locations
+    /// are measured in the scroll viewport's space (which never moves — the
+    /// content itself slides during a `.pan`) and converted to file space
+    /// with the scroll offset.
+    private func barDrag(width: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 1, coordinateSpace: .named(Self.viewportSpace))
+            .onChanged { v in
+                if let d = drag, d.startX == v.startLocation.x {
+                    drag = (d.mode, d.startX, v.translation.width)
+                } else if let m = mode(atX: v.startLocation.x + scrollX - hitPad, width: width) {
+                    if m == .pan { panOrigin = scrollX }
+                    onDragStarted()
+                    drag = (m, v.startLocation.x, v.translation.width)
+                } else {
+                    drag = nil
+                }
+                if let d = drag, d.mode == .pan {
+                    scroll.scrollTo(x: max(0, panOrigin - d.dx))
+                }
+            }
+            .onEnded { v in
+                guard let d = drag else { return }
+                drag = (d.mode, d.startX, v.translation.width)
+                commit(width: width)
+            }
+    }
+
+    /// Turns the ended drag into an `Edit` — skipped when it didn't actually
+    /// move anything (a stray click), so no pointless library write happens.
+    private func commit(width: CGFloat) {
+        guard let mode = drag?.mode else { return }
+        let win = window(width: width)
+        drag = nil
+        let committed = window(width: width)   // drag cleared → the stored window
+        guard abs(win.start - committed.start) > 0.005 || abs(win.end - committed.end) > 0.005
+        else { return }
+        switch mode {
+        case .body: onEdit(.slide(inPoint: win.start))
+        case .left: onEdit(.start(inPoint: win.start))
+        case .right: onEdit(.end(used: win.end - win.start))
+        case .pan: break   // moved the view, not the window — nothing to save
+        }
+    }
+
+    /// The stored (not mid-drag) window, clamped inside the file.
+    private var committedWindow: (start: Double, end: Double) {
+        (min(inPoint, fileDuration), min(inPoint + used, fileDuration))
+    }
+
+    /// The displayed window: the committed values with any in-flight drag
+    /// applied, clamped to the file, the minimum length, and the timeline
+    /// slacks (so an edge can't push the block into a neighbouring track).
+    private func window(width: CGFloat) -> (start: Double, end: Double) {
+        let (s0, e0) = committedWindow
+        guard let d = drag, width > 0, fileDuration > 0 else { return (s0, e0) }
+        let dsec = Double(d.dx / width) * fileDuration
+        switch d.mode {
+        case .left:
+            let lo = max(0, s0 - leftSlack)
+            let hi = max(lo, min(e0 - minGap, s0 + startRightSlack))
+            return (min(max(s0 + dsec, lo), hi), e0)
+        case .right:
+            let hi = min(fileDuration, e0 + rightSlack)
+            return (s0, max(min(e0 + dsec, hi), min(hi, s0 + minGap)))
+        case .body:
+            let shift = max(-s0, min(dsec, fileDuration - e0))
+            return (s0 + shift, e0 + shift)
+        case .pan:
+            return (s0, e0)   // scrolls the view; the window itself is untouched
+        }
+    }
+
+    private func x(_ seconds: Double, width: CGFloat) -> CGFloat {
+        guard fileDuration > 0 else { return 0 }
+        return (CGFloat(min(max(0, seconds / fileDuration), 1)) * width).rounded()
     }
 }
 

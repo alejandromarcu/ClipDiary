@@ -1304,12 +1304,15 @@ final class LibraryStore: ObservableObject {
     /// Relocates an existing audio block (matched by track id) to a new start
     /// clip, carrying its file/name/volume/fades, with a recomputed
     /// `offset`/`endClipID`. Used when the Soundtrack timeline drags a block
-    /// onto a different clip. No-op if the track or new clip isn't found — or
+    /// onto a different clip. `fileStart` (non-nil) also rewrites the trim-in
+    /// point — the trim bar moves it together with the span; nil keeps the
+    /// current one. No-op if the track or new clip isn't found — or
     /// if the new clip already starts a *different* song: a clip owns at most
     /// one track, so landing there would silently destroy the other track (and
     /// orphan its file). Refusing the move makes the drag snap back instead.
     func moveAudioTrack(_ trackID: UUID, toStartClip newStart: UUID,
-                        offset: Double, endClipID: UUID?, endWithin: Double?) {
+                        offset: Double, endClipID: UUID?, endWithin: Double?,
+                        fileStart: Double? = nil) {
         guard let oldIndex = clips.firstIndex(where: { $0.audio?.id == trackID }),
               var track = clips[oldIndex].audio,
               let newIndex = clips.firstIndex(where: { $0.id == newStart }) else { return }
@@ -1317,6 +1320,7 @@ final class LibraryStore: ObservableObject {
         track.offsetSeconds = offset
         track.endClipID = endClipID
         track.endWithinSeconds = endWithin
+        if let fileStart { track.fileStartSeconds = max(0, fileStart) }
         if clips[oldIndex].id != newStart { clips[oldIndex].audio = nil }
         clips[newIndex].audio = track
         save()

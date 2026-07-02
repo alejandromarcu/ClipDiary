@@ -7,6 +7,41 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.22.0] - 2026-07-02
+
+- **Songs can now be trimmed in the Soundtrack window.** Selecting a track
+  shows the whole song's waveform under the volume slider, with a yellow
+  window over the part that plays — the same idiom as trimming a video. Drag
+  the left edge to cut into the song (skip a long intro: the block on the
+  timeline starts later, and everything you keep stays in sync with the
+  picture), drag the right edge to set where it stops, or drag the window
+  itself to slide *which part* of the song plays without moving the block on
+  the timeline at all. Edge drags respect neighbouring tracks, just like
+  dragging blocks in the lane.
+- A **Listen** button next to the trim bar plays exactly the selected part of
+  the song (with a moving playhead), so you can check a cut by ear before
+  previewing the whole video.
+- The trim bar **zooms** (−/+ buttons, up to 64×), keeping the selection
+  centered as you zoom — so a few-seconds window on a four-minute song is
+  comfortable to grab and adjust instead of a few pixels wide. When zoomed,
+  drag the waveform outside the selection (or scroll sideways) to pan along
+  the song.
+- **Restore Full Length** now also clears the trim, going back to the whole
+  song from its top.
+
+## [1.21.0] - 2026-07-02
+
+- **The Soundtrack window's Preview button now plays what's on screen.** It
+  used to preview the month the window was opened from, which went stale the
+  moment you scrolled somewhere else. Now it previews exactly the days scrolled
+  into view (edge days that are partly visible count in full), and its label
+  names them — "Preview Jun 12 – 28" — updating live as you scroll. So you
+  scroll to choose *where* and zoom to choose *how much*: zoom in to audition
+  one transition, zoom out to run several months.
+- Removed the "Drag a song to move it…" hint caption from the Soundtrack
+  window's header — the controls explain themselves by now, and the header
+  reads cleaner with just the Preview and zoom buttons.
+
 ## [1.20.0] - 2026-07-01
 
 - **The Soundtrack window now has a track list.** Below the timeline, a table

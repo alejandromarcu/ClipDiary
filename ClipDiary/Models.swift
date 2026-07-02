@@ -364,6 +364,15 @@ struct AudioTrack: Codable, Equatable, Hashable {
     /// the end clip's current length at render (a re-trim can shorten the clip
     /// after this was measured).
     var endWithinSeconds: Double? = nil
+    /// Trim into the audio file, in seconds: how much of the file's head is
+    /// cut, i.e. the file time heard at the track's audible start (0 = the
+    /// song plays from its top). Set by the Soundtrack inspector's trim bar.
+    /// This picks *which part of the file* plays; `offsetSeconds` picks
+    /// *where on the timeline* it starts — the two together let a song start
+    /// mid-clip AND mid-file. Tracks from before this field express the same
+    /// idea as a negative `offsetSeconds`; read `fileInPoint`, which folds
+    /// both together.
+    var fileStartSeconds: Double = 0
     /// The track's own playback level, 1.0 = 100% (0 mutes, up to 4.0 = 400%),
     /// mirroring `Clip.volume`.
     var volume: Double = 1.0
@@ -373,20 +382,28 @@ struct AudioTrack: Codable, Equatable, Hashable {
     /// What to show in the UI: the original name when known, else the stored file.
     var label: String { displayName.isEmpty ? fileName : displayName }
 
+    /// The effective trim-in point: `fileStartSeconds` plus the legacy
+    /// negative-offset skip. Every consumer that maps span time → file time
+    /// (exporter, previews, the Soundtrack lane and trim bar) starts the file
+    /// here at the audible start.
+    var fileInPoint: Double { fileStartSeconds + max(0, -offsetSeconds) }
+
     init(fileName: String, displayName: String = "", offsetSeconds: Double = 0,
-         endClipID: UUID? = nil, endWithinSeconds: Double? = nil, volume: Double = 1.0,
-         transition: SegmentTransition = SegmentTransition()) {
+         endClipID: UUID? = nil, endWithinSeconds: Double? = nil, fileStartSeconds: Double = 0,
+         volume: Double = 1.0, transition: SegmentTransition = SegmentTransition()) {
         self.fileName = fileName
         self.displayName = displayName
         self.offsetSeconds = offsetSeconds
         self.endClipID = endClipID
         self.endWithinSeconds = endWithinSeconds
+        self.fileStartSeconds = fileStartSeconds
         self.volume = volume
         self.transition = transition
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, fileName, displayName, offsetSeconds, endClipID, endWithinSeconds, volume, transition
+        case id, fileName, displayName, offsetSeconds, endClipID, endWithinSeconds,
+             fileStartSeconds, volume, transition
     }
 
     // Every field decoded with `decodeIfPresent` so a track stored before a
@@ -399,6 +416,7 @@ struct AudioTrack: Codable, Equatable, Hashable {
         offsetSeconds = try c.decodeIfPresent(Double.self, forKey: .offsetSeconds) ?? 0
         endClipID = try c.decodeIfPresent(UUID.self, forKey: .endClipID)
         endWithinSeconds = try c.decodeIfPresent(Double.self, forKey: .endWithinSeconds)
+        fileStartSeconds = try c.decodeIfPresent(Double.self, forKey: .fileStartSeconds) ?? 0
         volume = try c.decodeIfPresent(Double.self, forKey: .volume) ?? 1.0
         transition = try c.decodeIfPresent(SegmentTransition.self, forKey: .transition) ?? SegmentTransition()
     }

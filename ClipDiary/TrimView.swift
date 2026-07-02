@@ -1016,13 +1016,15 @@ struct TrimEditor: View {
     /// how the export lays a this-clip track down). Called on play and each tick.
     private func syncMusic(at v: Double) {
         guard let musicPlayer, let track = currentAudioTrack else { return }
-        // The file's t=0 sits at (clip start + offset) on the rendered timeline,
-        // and the clip's rendered start is its in-point — so a positive offset
-        // delays the song (fileTime < 0 keeps it paused below), a negative one
-        // starts it mid-file, matching the exporter's placement.
-        let fileTime = (v - clip.inSeconds) - track.offsetSeconds
+        // The song's audible start sits at (clip start + a non-negative
+        // offset) on the rendered timeline, where the file is already
+        // `fileInPoint` seconds in (the Soundtrack trim; a legacy negative
+        // offset folds into it) — and the clip's rendered start is its
+        // in-point. A positive offset delays the song (fileTime below the
+        // in-point keeps it paused), matching the exporter's placement.
+        let fileTime = track.fileInPoint + (v - clip.inSeconds) - max(0, track.offsetSeconds)
         guard isPlaying, v >= clip.inSeconds, v < clip.outSeconds,
-              fileTime >= 0, fileTime < musicPlayer.duration else {
+              fileTime >= track.fileInPoint, fileTime < musicPlayer.duration else {
             musicPlayer.pause()
             return
         }

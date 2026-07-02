@@ -515,9 +515,10 @@ struct Exporter {
             let overlapping = runs.filter { p.audibleStartGlobal < $0.g1 && p.spanEndGlobal > $0.g0 }
             guard !overlapping.isEmpty else { continue }
 
-            // Only a negative offset means the file is picked up mid-way at
-            // its audible start (a positive delay is already in the placement).
-            let sourceStartBase = max(0, -p.track.offsetSeconds)
+            // The trim-in point: the file is picked up mid-way at its audible
+            // start (the Soundtrack trim bar, or a legacy negative offset — a
+            // positive delay is already in the placement).
+            let sourceStartBase = p.track.fileInPoint
             let asset = AVURLAsset(url: p.url)
             guard let srcAudio = try? await asset.loadTracks(withMediaType: .audio).first,
                   let fileDuration = try? await asset.load(.duration) else { continue }
