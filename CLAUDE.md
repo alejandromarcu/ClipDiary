@@ -41,9 +41,11 @@ Deliberate improvements over 1SE:
   the video — with an `offsetSeconds` (± relative to the clip
   start), its own `volume`/`transition`, and an `endClipID` marking how far it
   spans in render order (`==` the start clip = this clip only; `nil` =
-  open-ended; another clip id = ends after that clip). It mixes with the clip's
+  open-ended; another clip id = ends after that clip — a stale reference from a
+  later delete/re-date collapses the span to the start clip via
+  `TimelineLayout.audibleSpan`). It mixes with the clip's
   own audio and plays alone over silent photos. `ActiveAudioRef` pairs a
-  spanning track with its start clip for the editor's "End audio here" UI.
+  spanning track with its start clip for the editors' music bar.
   `sourceHash` (lowercase-hex
   SHA-256 of the copied media bytes) + `sourceBytes` (file size) are recorded at
   pick/import time so the project can be rebuilt by content if `Clips/` is lost
@@ -84,13 +86,18 @@ Deliberate improvements over 1SE:
   ImageIO (photos). A parallel `Audio/` subfolder holds copied audio-track files
   (`audioURL(for:)`); `copyAudioFile(from:)` copies a user-picked file in (the
   editor then sets the `AudioTrack` on its clip draft), `pruneUnusedAudioFile`
-  deletes it when no clip references it (also from `delete`), `setAudioEnd`
-  caps a spanning track from a later clip, `setAudioTrack`/`moveAudioTrack`
-  set/clear/relocate a block (the Soundtrack timeline), and `activeAudio(over:)`
-  lists the tracks playing over a clip (by global render order) for the editor
-  banner. `timelineLayout()` (+ `orderedClips`) is the **shared source of truth**
+  deletes it when no clip references it (also from `delete`, which additionally
+  re-anchors any track *ending* on the deleted clip to the clip before it),
+  `setAudioTrack`/`moveAudioTrack`
+  set/clear/relocate a block (the Soundtrack timeline; a move refuses to land
+  on a clip that already starts another song), and `activeAudio(over:)`
+  lists the tracks playing over a clip (by global render order) for the
+  editors' music bar. `timelineLayout()` (+ `orderedClips`) is the **shared
+  source of truth**
   for where each clip sits on the rendered timeline (seconds), used by both the
-  exporter's audio positioning and the Soundtrack view so the lane is WYSIWYG.
+  exporter's audio positioning and the Soundtrack view so the lane is WYSIWYG;
+  its `audibleSpan(of:startingOn:)` resolves a track's placed span (offset +
+  end reference, stale references repaired) for both.
   `importMedia` routes by UTType. Imported clips default to the recording
   date (video creationDate / photo EXIF DateTimeOriginal, fallback file
   creation date). Also home of `loadOrientedCGImage` (EXIF orientation baked
@@ -177,15 +184,16 @@ Deliberate improvements over 1SE:
 - `TrimView.swift` — `TrimEditor` (the video editor), plus the shared pieces:
   `LiveEditBuffer` (lets the day window flush an editor's in-flight edit before
   Preview Day, since editors only persist on disappear), `TagRow` (tag chips +
-  new-tag field + reuse menu), `SoundtrackSection` (the side-pane **read-only**
-  audio status used by both editors: it reports the clip's own track and any
-  spanning in from an earlier clip via `store.activeAudio(over:)`, with **Add
-  Music…** — shown only when nothing plays over the clip — copying a file,
-  starting a track on the clip (`copyAudioFile`+`setAudioTrack`) and opening the
-  Soundtrack window on that day with it selected, and **Open in Soundtrack** to
-  jump there and adjust; all audio editing lives in the Soundtrack window now, so
-  a review draft — not yet on the timeline — just shows a disabled "Add this clip
-  to place music" hint), `DayPickerField`, `ReviewItemInfo`/
+  new-tag field + reuse menu), `ClipMusicLane` (the **music bar** both editors
+  draw under the clip's own waveform / the photo: empty it's a dashed "＋ Add
+  music" button — pick a file and a this-clip-only track is laid over the clip,
+  via the store for a picked clip or onto the draft's `audio` in review; filled
+  it shows the track's waveform **read-only** — clicking opens the Soundtrack
+  window, where all fine-tuning lives — and a track spanning in from an earlier
+  clip (`store.activeAudio(over:)`) shows read-only too. A review draft gets a
+  ✕ to drop its track instead, and its orphaned `Audio/` copy is pruned on
+  revert/skip; `TrimEditor` also previews the song over Play/Preview Trim with
+  a synced `AVAudioPlayer`), `DayPickerField`, `ReviewItemInfo`/
   `ReviewItemHeader`, `ResizablePaneDivider` (drag-resizes the side pane), and
   `TrimSlider` (filmstrip of 10 thumbnails with draggable yellow in/out handles,
   min gap 0.1s). Set In/Set Out buttons (⌘I/⌘O) mark trim points at the current
@@ -214,7 +222,7 @@ Deliberate improvements over 1SE:
   come from `store.timelineLayout()`, identical to what the exporter renders):
   click an empty lane spot to add a file (`store.copyAudioFile` +
   `setAudioTrack`), drag the body to reposition (`moveAudioTrack` reassigns the
-  start clip + offset), drag the right edge to set the stop (`setAudioEnd`), the
+  start clip + offset), drag the right edge to set the stop, the
   left edge to set the start. Edge-resize drags clamp to the immediate neighbour
   (`neighborBounds`) so a track can't overlap the next, but a **body drag can leap
   over neighbours** into any free gap big enough to hold it (`freeGaps` picks the
@@ -294,17 +302,23 @@ Deliberate improvements over 1SE:
   playing over silent photo segments. Positions come from
   `store.timelineLayout()` — the **project-wide global render order** (all clips,
   durations from metadata, photos floored to 0.5s), shared with the Soundtrack
-  view — not just the clips in this render:
-  each track gets a global `[startGlobal, spanEndGlobal]`. The rendered clips are
-  a contiguous window into that timeline, so `k = firstLocalStart − sliceG0` maps
-  a global time to this render's local time and the render's global span
-  `[sliceG0, sliceG1]` clips each track to what's on screen — so **a track that
-  started on an earlier day/month is picked up mid-file** (a single-day "Preview
-  Day" included). A negative offset skips into the file; it plays once (silent
-  tail if the file is shorter than the span). Each track's `volume`/`transition`
-  becomes an `AVMutableAudioMixInputParameters` entry (only when non-default),
-  folded into the same `audioMix`. Preview and export need no further work —
-  `MonthComposition.audioMix` already flows to both.
+  view — not just the clips in this render: each track's span resolves through
+  `TimelineLayout.audibleSpan` (offset + end reference, stale references
+  repaired). The rendered clips are grouped into globally-contiguous **runs** —
+  a plain range render is one run; a tag filter (or a failed insert) splits
+  them — and each run maps global→local time with its own constant, every
+  fragment clamped inside its run's actual CMTime range (Double↔CMTime drift
+  otherwise leaves the composition's tail uncovered → black picture). So **a
+  track that started on an earlier day/month is picked up mid-file** (a
+  single-day "Preview Day" included), a track spanning a filtered-out gap cuts
+  and resumes mid-file like the picture does, and only songs whose span
+  overlaps a run get their asset opened at all. A negative offset skips into
+  the file; it plays once (silent tail if the file is shorter than the span).
+  Every placed song gets an `AVMutableAudioMixInputParameters` envelope
+  (volume, its own fades at its true start/end — and the render's bookend
+  fade-in/out ramps the music with the picture; a clip fading mid-video
+  doesn't), folded into the same `audioMix`. Preview and export need no
+  further work — `MonthComposition.audioMix` already flows to both.
 
 ## Conventions & constraints
 

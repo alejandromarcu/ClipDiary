@@ -516,21 +516,19 @@ struct SoundtrackView: View {
         return store.timelineLayout().startByID[owner.id]
     }
 
-    /// Build the placed blocks from clips that own audio.
+    /// Build the placed blocks from clips that own audio. Offset and end
+    /// references (including stale ones, which get repaired) resolve through
+    /// `audibleSpan`, the same resolver the exporter uses — the lane then only
+    /// caps each block to its file's length once that's loaded.
     private func audioBlocks(_ l: LibraryStore.TimelineLayout) -> [Block] {
         l.order.compactMap { clip in
-            guard let track = clip.audio, let s = l.startByID[clip.id] else { return nil }
-            let start = s + max(0, track.offsetSeconds)
-            let spanEnd: Double
-            if let e = track.endClipID, let es = l.startByID[e], let ee = l.endByID[e] {
-                spanEnd = track.endWithinSeconds.map { es + $0 } ?? ee
-            } else {
-                spanEnd = l.total
-            }
-            let fileCap = durations[track.fileName].map { start + ($0 - max(0, -track.offsetSeconds)) } ?? spanEnd
-            let end = min(spanEnd, fileCap, l.total)
-            guard end > start else { return nil }
-            return Block(track: track, startClipID: clip.id, start: start, end: end)
+            guard let track = clip.audio,
+                  let span = l.audibleSpan(of: track, startingOn: clip.id) else { return nil }
+            let fileCap = durations[track.fileName]
+                .map { span.start + ($0 - max(0, -track.offsetSeconds)) } ?? span.end
+            let end = min(span.end, fileCap)
+            guard end > span.start else { return nil }
+            return Block(track: track, startClipID: clip.id, start: span.start, end: end)
         }
     }
 
@@ -708,9 +706,14 @@ struct SoundtrackView: View {
         addAtSeconds = nil
         let l = store.timelineLayout()
         let (clipID, off) = clipAndOffset(atSeconds: sec, layout: l)
-        // Don't clobber a clip that already starts a song; the tap fell in a gap,
-        // so the underlying clip should be free.
-        guard store.clips.first(where: { $0.id == clipID })?.audio == nil else { return }
+        // Don't clobber a clip that already starts a song (a clip starts at most
+        // one; a long clip can have free lane space beside a song it already
+        // owns). Tell the user why nothing appeared instead of failing silently.
+        guard store.clips.first(where: { $0.id == clipID })?.audio == nil else {
+            store.lastError = "A song already starts on that clip, and a clip can "
+                + "only start one. Click over a different clip, or remove the other song first."
+            return
+        }
         guard let name = store.copyAudioFile(from: url) else { return }
         let track = AudioTrack(fileName: name, displayName: url.deletingPathExtension().lastPathComponent,
                                offsetSeconds: max(0, off), endClipID: clipID)
@@ -764,6 +767,9 @@ private struct TrackInspector: View {
     let onRemove: () -> Void
 
     @State private var nameDraft: String = ""
+    /// Live slider value; committed to the store only when the drag ends —
+    /// every commit rewrites the whole library file, so not per tick.
+    @State private var volumeDraft: Double = 1.0
     @State private var restoreWarning: String?
     @FocusState private var nameFocused: Bool
 
@@ -809,8 +815,10 @@ private struct TrackInspector: View {
                 Text("Volume").font(.caption).foregroundStyle(.secondary)
                 HStack(spacing: 8) {
                     Image(systemName: "speaker.wave.2.fill").foregroundStyle(.secondary)
-                    Slider(value: volumeBinding, in: 0...4)
-                    Text("\(Int((track.volume * 100).rounded()))%")
+                    Slider(value: $volumeDraft, in: 0...4) { editing in
+                        if !editing { commitVolume() }
+                    }
+                    Text("\(Int((volumeDraft * 100).rounded()))%")
                         .font(.callout.monospacedDigit()).foregroundStyle(.secondary)
                         .frame(width: 46, alignment: .trailing)
                 }
@@ -835,15 +843,17 @@ private struct TrackInspector: View {
             }
         }
         .padding(14)
-        .onAppear { nameDraft = track.label }
+        .onAppear { nameDraft = track.label; volumeDraft = track.volume }
         .onChange(of: nameFocused) { _, focused in if !focused { commitName() } }
     }
 
-    private var volumeBinding: Binding<Double> {
-        Binding(get: { track.volume }, set: { v in
-            var t = track; t.volume = v
-            store.setAudioTrack(t, onClip: startClipID)
-        })
+    /// Commits the released slider value, skipped when the track no longer
+    /// exists on its clip (just removed) so the write can't re-add it.
+    private func commitVolume() {
+        guard volumeDraft != track.volume,
+              store.clips.first(where: { $0.id == startClipID })?.audio?.id == track.id else { return }
+        var t = track; t.volume = volumeDraft
+        store.setAudioTrack(t, onClip: startClipID)
     }
 
     /// Commits the renamed title to the track's `displayName`. An empty name is

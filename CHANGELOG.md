@@ -33,6 +33,24 @@ and versions follow [Semantic Versioning](https://semver.org/)
   (e.g. "Summer Song" rather than "Summer Song.mp3").
 - Removing a track now selects the next one (or the previous one if it was the
   last), so you can delete several in a row without re-selecting each time.
+- **The video's edge fades now take the music with them.** When Create Video's
+  Cover/Ending is None and a fade-in/fade-out is set, the background music
+  ramps in and out together with the picture instead of playing at full volume
+  through the fade and cutting off. A clip fading mid-video still leaves the
+  music untouched — only the video's own edges duck it.
+- **Fixed: music placement in tag-filtered videos.** Rendering with a tag
+  filter used to lay songs at the wrong times once the filter skipped clips;
+  the music now stays aligned with the clips it was placed over and skips
+  across the filtered-out stretches (resuming mid-song), the same way the
+  picture skips those days.
+- **Soundtrack robustness.** Deleting or re-dating clips no longer breaks the
+  songs placed around them: a song whose end clip goes away now ends on the
+  clip before it (instead of silently stretching to the end of the project),
+  a song whose span collapses stays visible and editable over its start clip
+  (instead of vanishing from the timeline while still being in the project),
+  and dragging one song onto a clip that already starts another snaps back
+  (instead of silently destroying it). Adding a song over such a clip now
+  explains why it can't, instead of doing nothing.
 
 ## [1.19.0] - 2026-06-30
 

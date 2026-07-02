@@ -1033,7 +1033,7 @@ final class LibraryStore: ObservableObject {
         // snapshot on save.
         clip.createdAt = clips[idx].createdAt
         // Audio is owned by the Soundtrack window and the dedicated audio
-        // methods (setAudioTrack/moveAudioTrack/setAudioEnd). Editors snapshot a
+        // methods (setAudioTrack/moveAudioTrack). Editors snapshot a
         // clip on open and write it back wholesale here, so keep the stored
         // audio — otherwise an audio edit made in the Soundtrack window while an
         // editor is open would be clobbered by its stale snapshot on save.
@@ -1071,6 +1071,20 @@ final class LibraryStore: ObservableObject {
     }
 
     func delete(_ clip: Clip) {
+        // Re-anchor any audio track that *ends* on this clip to the clip just
+        // before it in render order (never earlier than the track's own start
+        // clip). A dangling end id reads as open-ended at render, which would
+        // silently extend the song to the end of the whole timeline — past
+        // other tracks.
+        let order = orderedClips
+        if let deletedPos = order.firstIndex(where: { $0.id == clip.id }) {
+            for i in clips.indices {
+                guard clips[i].id != clip.id, clips[i].audio?.endClipID == clip.id else { continue }
+                let startPos = order.firstIndex(where: { $0.id == clips[i].id }) ?? 0
+                clips[i].audio?.endClipID = order[max(startPos, deletedPos - 1)].id
+                clips[i].audio?.endWithinSeconds = nil   // was measured inside the deleted clip
+            }
+        }
         clips.removeAll { $0.id == clip.id }
         // Card clips have no media file in `Clips/` (they render from their card
         // document). For real media, clips picked twice from one source share a
@@ -1106,6 +1120,46 @@ final class LibraryStore: ObservableObject {
         /// (videos = trimmed length; photos/cards floored to 0.5s).
         static func duration(of clip: Clip) -> Double {
             clip.kind == .photo ? max(0.5, clip.trimmedDuration) : clip.trimmedDuration
+        }
+
+        /// The timeline span `track` occupies when it starts on `startClipID`,
+        /// before any file-length cap: from the audible start (the clip's start
+        /// plus a non-negative offset) to where `endClipID`/`endWithinSeconds`
+        /// stop it. The one resolver shared by the exporter and the Soundtrack
+        /// lane, so stale references left by later edits are repaired the same
+        /// way everywhere instead of silently diverging:
+        /// - a mid-clip stop is clamped to the end clip's current length (a
+        ///   re-trim can leave `endWithinSeconds` pointing past it);
+        /// - a span that no longer holds together — the end clip re-dated
+        ///   before the start clip, or deleted before ends were re-anchored —
+        ///   collapses to the start clip's own segment, so the track stays a
+        ///   visible, editable block (and audible over its start clip) instead
+        ///   of vanishing from the lane, or swallowing the rest of the
+        ///   timeline, while still sitting in the data.
+        /// Only `endClipID == nil` plays open-ended to the timeline's end.
+        /// Nil when the start clip isn't on the timeline.
+        func audibleSpan(of track: AudioTrack, startingOn startClipID: UUID) -> (start: Double, end: Double)? {
+            guard let s = startByID[startClipID], let ownEnd = endByID[startClipID] else { return nil }
+            var start = s + max(0, track.offsetSeconds)
+            var end: Double
+            if let e = track.endClipID {
+                if let es = startByID[e], let ee = endByID[e] {
+                    end = min(track.endWithinSeconds.map { es + $0 } ?? ee, ee)
+                } else {
+                    end = ownEnd   // end clip deleted (data from before re-anchoring)
+                }
+            } else {
+                end = total        // open-ended
+            }
+            if end <= start {
+                // Collapsed span: play over (at least the tail of) the start
+                // clip. The start only ever moves *back* here, so the stored
+                // offset — possibly past a re-trimmed clip's new end — can't
+                // push the block out of existence.
+                end = ownEnd
+                start = min(start, max(s, ownEnd - 0.2))
+            }
+            return end > start ? (start, end) : nil
         }
     }
 
@@ -1235,17 +1289,6 @@ final class LibraryStore: ObservableObject {
         try? FileManager.default.removeItem(at: audioURL(for: track))
     }
 
-    /// Sets where the audio that *starts* on `startClipID` stops — called by the
-    /// later-clip "End audio here" control. `endClipID == nil` lets it keep
-    /// playing (open-ended); a clip id caps it after that clip's segment.
-    func setAudioEnd(startClipID: UUID, endClipID: UUID?) {
-        guard let index = clips.firstIndex(where: { $0.id == startClipID }),
-              clips[index].audio != nil else { return }
-        clips[index].audio?.endClipID = endClipID
-        clips[index].audio?.endWithinSeconds = nil   // play through the end clip's full segment
-        save()
-    }
-
     /// Sets, replaces, or clears (`nil`) a clip's audio track, pruning a
     /// now-unreferenced previous file. Used by the Soundtrack timeline.
     func setAudioTrack(_ track: AudioTrack?, onClip clipID: UUID) {
@@ -1261,12 +1304,16 @@ final class LibraryStore: ObservableObject {
     /// Relocates an existing audio block (matched by track id) to a new start
     /// clip, carrying its file/name/volume/fades, with a recomputed
     /// `offset`/`endClipID`. Used when the Soundtrack timeline drags a block
-    /// onto a different clip. No-op if the track or new clip isn't found.
+    /// onto a different clip. No-op if the track or new clip isn't found — or
+    /// if the new clip already starts a *different* song: a clip owns at most
+    /// one track, so landing there would silently destroy the other track (and
+    /// orphan its file). Refusing the move makes the drag snap back instead.
     func moveAudioTrack(_ trackID: UUID, toStartClip newStart: UUID,
                         offset: Double, endClipID: UUID?, endWithin: Double?) {
         guard let oldIndex = clips.firstIndex(where: { $0.audio?.id == trackID }),
               var track = clips[oldIndex].audio,
               let newIndex = clips.firstIndex(where: { $0.id == newStart }) else { return }
+        guard newIndex == oldIndex || clips[newIndex].audio == nil else { return }
         track.offsetSeconds = offset
         track.endClipID = endClipID
         track.endWithinSeconds = endWithin
@@ -1276,21 +1323,26 @@ final class LibraryStore: ObservableObject {
     }
 
     /// The audio tracks (with their start clips) that are *playing over* `clip`
-    /// in the global render order but didn't start on it — drives the later-clip
-    /// "End audio here" banner. A track covers `clip` when its start clip comes
-    /// strictly before `clip` and its span (per `endClipID`) reaches `clip`.
+    /// in the global render order but didn't start on it — the editors' music
+    /// bar (`ClipMusicLane`) shows these as read-only "plays from an earlier
+    /// day" entries. A track covers `clip` when its start clip comes strictly
+    /// before `clip` and its span (per `endClipID`) reaches `clip`. Uses the
+    /// memoized `timelineLayout()` order — this runs on every editor body pass,
+    /// so no fresh sort or per-id linear scans.
     func activeAudio(over clip: Clip) -> [ActiveAudioRef] {
-        let ordered = orderedClips
-        guard let pos = ordered.firstIndex(where: { $0.id == clip.id }) else { return [] }
-        func position(of id: UUID) -> Int? { ordered.firstIndex(where: { $0.id == id }) }
+        let ordered = timelineLayout().order
+        let position = Dictionary(uniqueKeysWithValues: ordered.enumerated().map { ($1.id, $0) })
+        guard let pos = position[clip.id] else { return [] }
         var result: [ActiveAudioRef] = []
         for (i, start) in ordered.enumerated() {
             guard i < pos, let track = start.audio else { continue }
             let endPos: Int
             if let endID = track.endClipID {
-                // "This clip only" (endID == start) never reaches a later clip;
-                // an unknown/out-of-order id clamps to the end of the timeline.
-                endPos = position(of: endID) ?? ordered.count - 1
+                // "This clip only" (endID == start) never reaches a later clip.
+                // An unknown id collapses to the start clip, matching
+                // `TimelineLayout.audibleSpan`'s repair — the render won't play
+                // it past there, so the banner mustn't claim it either.
+                endPos = position[endID] ?? i
             } else {
                 endPos = ordered.count - 1   // open-ended
             }

@@ -208,22 +208,17 @@ struct Exporter {
         // local timeline. Durations come from clip metadata (no asset loads),
         // mirroring how each segment is laid out (photos floored to 0.5s).
         let (audioPlacements, globalStartByID): (
-            [(url: URL, startGlobal: Double, spanEndGlobal: Double, track: AudioTrack)],
+            [(url: URL, audibleStartGlobal: Double, spanEndGlobal: Double, track: AudioTrack)],
             [UUID: Double]
         ) = await MainActor.run {
             let layout = store.timelineLayout()
-            var placements: [(url: URL, startGlobal: Double, spanEndGlobal: Double, track: AudioTrack)] = []
+            var placements: [(url: URL, audibleStartGlobal: Double, spanEndGlobal: Double, track: AudioTrack)] = []
             for c in layout.order {
-                guard let track = c.audio, let s = layout.startByID[c.id] else { continue }
-                let spanEnd: Double
-                if let e = track.endClipID, let es = layout.startByID[e], let ee = layout.endByID[e] {
-                    // Ends mid-clip (endWithinSeconds) or at the end clip's full
-                    // end. A stale id falls through to the timeline end.
-                    spanEnd = track.endWithinSeconds.map { es + $0 } ?? ee
-                } else {
-                    spanEnd = layout.total                                           // open-ended / stale
-                }
-                placements.append((store.audioURL(for: track), s, spanEnd, track))
+                // `audibleSpan` resolves the offset and the end reference (and
+                // repairs stale ones) identically to the Soundtrack lane.
+                guard let track = c.audio,
+                      let span = layout.audibleSpan(of: track, startingOn: c.id) else { continue }
+                placements.append((store.audioURL(for: track), span.start, span.end, track))
             }
             return (placements, layout.startByID)
         }
@@ -377,87 +372,12 @@ struct Exporter {
         guard cursor > .zero else { throw ExportError.noClips }
         let totalDuration = cursor
 
-        // Overlaid audio tracks. Each lays its file onto *its own* composition
-        // audio track, so it mixes with the clips' own audio and keeps playing
-        // over silent photo segments. Positions come from the project-wide
-        // global timeline (above): the rendered clips are a window into it, so
-        // `k` maps a global time onto this render's local timeline and the
-        // render's global span [sliceG0, sliceG1] clips each track to what's
-        // actually on screen. A track started before this window is therefore
-        // picked up mid-file. Played once — a file shorter than its span leaves
-        // a silent tail. Per-track volume/fade params are attached only when
-        // non-default (an unlisted track already plays at 100%).
-        var musicParams: [AVMutableAudioMixInputParameters] = []
-        if !audioPlacements.isEmpty {
-            var sliceG0 = Double.greatestFiniteMagnitude
-            var sliceG1 = -Double.greatestFiniteMagnitude
-            var sliceLocalStart = Double.greatestFiniteMagnitude
-            for (id, seg) in segmentByClipID {
-                guard let gs = globalStartByID[id] else { continue }
-                sliceG0 = min(sliceG0, gs)
-                sliceG1 = max(sliceG1, gs + seg.duration.seconds)
-                sliceLocalStart = min(sliceLocalStart, seg.start.seconds)
-            }
-            if sliceG1 > sliceG0 {
-                let k = sliceLocalStart - sliceG0   // localTime = globalTime + k
-                func cm(_ s: Double) -> CMTime { CMTime(seconds: s, preferredTimescale: 600) }
-                for p in audioPlacements {
-                    let offset = p.track.offsetSeconds
-                    let audibleGlobalStart = p.startGlobal + max(0, offset)
-                    let sourceStartBase = max(0, -offset)
-                    let asset = AVURLAsset(url: p.url)
-                    guard let srcAudio = try? await asset.loadTracks(withMediaType: .audio).first,
-                          let fileDuration = try? await asset.load(.duration) else { continue }
-                    // Play once: cap the audible span to where the file runs out.
-                    let audibleGlobalEnd = min(p.spanEndGlobal,
-                                               audibleGlobalStart + (fileDuration.seconds - sourceStartBase))
-                    // Overlap with what this render actually shows.
-                    let oStart = max(audibleGlobalStart, sliceG0)
-                    let oEnd = min(audibleGlobalEnd, sliceG1)
-                    guard oEnd > oStart else { continue }
-                    // File position at the overlap start (mid-file if it began earlier).
-                    let fileStart = sourceStartBase + (oStart - audibleGlobalStart)
-                    let localStart = oStart + k
-                    let duration = oEnd - oStart
-
-                    // These positions come from `timelineLayout()`'s Double
-                    // durations, but the real video track is stitched from CMTime
-                    // (timescale-600) segments, so the two timelines drift by up to
-                    // a frame per clip. Clamp the block to the rendered video's end
-                    // (`totalDuration`) in CMTime, so rounding can't push it past
-                    // either: a track whose end was clamped to this render's
-                    // boundary — its `endClipID` lies outside the range — would
-                    // otherwise land a few ms *after* the last video instruction,
-                    // leaving an uncovered tail. An AVVideoComposition that doesn't
-                    // span the whole composition is invalid: the picture goes black
-                    // (audio still plays) in preview, and export fails.
-                    let startCM = cm(localStart)
-                    guard startCM < totalDuration else { continue }
-                    let durationCM = min(cm(duration), totalDuration - startCM)
-                    guard durationCM > .zero else { continue }
-
-                    guard let musicTrack = composition.addMutableTrack(
-                        withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid
-                    ) else { continue }
-                    do {
-                        try musicTrack.insertTimeRange(
-                            CMTimeRange(start: cm(fileStart), duration: durationCM),
-                            of: srcAudio, at: startCM)
-                    } catch { continue }
-
-                    let fadeIn = p.track.transition.hasFadeIn ? p.track.transition.fadeInSeconds : 0
-                    let fadeOut = p.track.transition.hasFadeOut ? p.track.transition.fadeOutSeconds : 0
-                    if p.track.volume != 1 || fadeIn > 0 || fadeOut > 0 {
-                        let params = AVMutableAudioMixInputParameters(track: musicTrack)
-                        Self.applyVolumeEnvelope(
-                            volume: Float(max(0, p.track.volume)), fadeIn: fadeIn, fadeOut: fadeOut,
-                            to: params, start: startCM, duration: durationCM
-                        )
-                        musicParams.append(params)
-                    }
-                }
-            }
-        }
+        // The render's edge fades, recorded (in local seconds) when the fade
+        // blocks below actually apply them, so the overlaid-music pass — which
+        // runs after — can ramp the music together with the picture. Only the
+        // render's own edges duck the music; a clip fading mid-video doesn't.
+        var musicRampIn: (start: Double, end: Double)?
+        var musicRampOut: (start: Double, end: Double)?
 
         // Soften every *internal* clip boundary with a short audio dip, the way
         // 1SE does: the picture still cuts hard, but each clip's audio ramps down
@@ -495,6 +415,8 @@ struct Exporter {
                 let fadeDuration = CMTime(seconds: fadeSeconds, preferredTimescale: 600)
                 let range = CMTimeRange(start: firstClipSegment.start, duration: fadeDuration)
                 firstClipLayer.setOpacityRamp(fromStartOpacity: 0, toEndOpacity: 1, timeRange: range)
+                musicRampIn = (firstClipSegment.start.seconds,
+                               firstClipSegment.start.seconds + fadeSeconds)
                 // Fold the audio fade into the opening audio clip's envelope, but
                 // only when that clip actually starts the video (a leading silent
                 // photo means there's no audio in the fade region to ramp).
@@ -525,6 +447,7 @@ struct Exporter {
                 let fadeDuration = CMTime(seconds: fadeSeconds, preferredTimescale: 600)
                 let range = CMTimeRange(start: totalDuration - fadeDuration, duration: fadeDuration)
                 lastLayer.setOpacityRamp(fromStartOpacity: 1, toEndOpacity: 0, timeRange: range)
+                musicRampOut = (totalDuration.seconds - fadeSeconds, totalDuration.seconds)
                 // Fold the audio fade into the last audio clip's envelope (so it
                 // ramps from that clip's own level to 0), but only when that clip
                 // actually runs to the end — a trailing silent photo/card means
@@ -543,6 +466,125 @@ struct Exporter {
             }
         }
 
+        // Overlaid audio tracks. Each song lays its file onto *its own*
+        // composition audio track, so it mixes with the clips' own audio and
+        // keeps playing over silent photo segments. Positions come from the
+        // project-wide global timeline (the placements above): the rendered
+        // clips are grouped into globally-contiguous **runs** — a plain range
+        // render is one run; a tag filter (or a clip that failed to insert)
+        // leaves gaps that split it — and each run maps global→local time with
+        // its own constant `k`. A song is inserted once per overlapping run, so
+        // a track that started before the window is picked up mid-file, and one
+        // spanning a filtered-out gap cuts out and resumes mid-file, exactly
+        // like the picture skips those clips. Played once — a file shorter than
+        // its span leaves a silent tail.
+        struct MusicRun {
+            var g0: Double      // global seconds spanned by the run's clips
+            var g1: Double
+            var local0: CMTime  // the run's actual placed range, exact
+            var local1: CMTime
+            var k: Double { local0.seconds - g0 }   // localTime ≈ globalTime + k
+        }
+        let renderedSegs = segmentByClipID
+            .compactMap { id, seg in globalStartByID[id].map { (gs: $0, seg: seg) } }
+            .sorted { $0.seg.start < $1.seg.start }
+        var runs: [MusicRun] = []
+        for e in renderedSegs {
+            // Same order globally and locally (both date-then-createdAt), so a
+            // run continues while each clip starts where the previous one ended
+            // on the global timeline. The tolerance absorbs frame-level
+            // rounding; photos floor at 0.5s so any dropped photo reads as a
+            // gap, and only a filtered-out video trimmed under 0.2s would merge
+            // two runs (shifting the music by that hair — harmless).
+            if !runs.isEmpty, abs(e.gs - runs[runs.count - 1].g1) < 0.2 {
+                runs[runs.count - 1].g1 = e.gs + e.seg.duration.seconds
+                runs[runs.count - 1].local1 = e.seg.end
+            } else {
+                runs.append(MusicRun(g0: e.gs, g1: e.gs + e.seg.duration.seconds,
+                                     local0: e.seg.start, local1: e.seg.end))
+            }
+        }
+
+        var musicParams: [AVMutableAudioMixInputParameters] = []
+        func cm(_ s: Double) -> CMTime { CMTime(seconds: s, preferredTimescale: 600) }
+        for p in audioPlacements {
+            // Cheap span test before touching the file, so a render doesn't
+            // open every song in the project just to find most play nowhere
+            // near it. (The file-length cap below only ever *shortens* a span,
+            // so this can't drop a track that would have played.)
+            let overlapping = runs.filter { p.audibleStartGlobal < $0.g1 && p.spanEndGlobal > $0.g0 }
+            guard !overlapping.isEmpty else { continue }
+
+            // Only a negative offset means the file is picked up mid-way at
+            // its audible start (a positive delay is already in the placement).
+            let sourceStartBase = max(0, -p.track.offsetSeconds)
+            let asset = AVURLAsset(url: p.url)
+            guard let srcAudio = try? await asset.loadTracks(withMediaType: .audio).first,
+                  let fileDuration = try? await asset.load(.duration) else { continue }
+            // Play once: cap the audible span to where the file runs out.
+            let audibleGlobalEnd = min(p.spanEndGlobal,
+                                       p.audibleStartGlobal + (fileDuration.seconds - sourceStartBase))
+
+            // One composition track per song, created on its first fragment.
+            // Fragments can't collide: each is clamped inside its own run's
+            // local range, and those ranges never overlap.
+            var musicTrack: AVMutableCompositionTrack?
+            var params: AVMutableAudioMixInputParameters?
+            for run in overlapping {
+                let oStart = max(p.audibleStartGlobal, run.g0)
+                let oEnd = min(audibleGlobalEnd, run.g1)
+                guard oEnd > oStart else { continue }
+                // File position at the fragment start (mid-file if the song
+                // began before this run).
+                let fileStart = sourceStartBase + (oStart - p.audibleStartGlobal)
+
+                // Map to local time, then clamp to the run's *actual* placed
+                // range: the global layout uses Double durations while the
+                // video track is stitched from CMTime segments, so the two
+                // drift by up to a frame per clip. Unclamped, a fragment could
+                // land a few ms past the last video instruction, leaving the
+                // composition's tail uncovered — an AVVideoComposition that
+                // doesn't span the whole composition is invalid: the picture
+                // goes black (audio still plays) in preview, and export fails.
+                let startCM = max(run.local0, cm(oStart + run.k))
+                guard startCM < run.local1 else { continue }
+                let durationCM = min(cm(oEnd - oStart), run.local1 - startCM)
+                guard durationCM > .zero else { continue }
+
+                if musicTrack == nil {
+                    guard let t = composition.addMutableTrack(
+                        withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid
+                    ) else { break }
+                    musicTrack = t
+                    params = AVMutableAudioMixInputParameters(track: t)
+                }
+                guard let musicTrack, let params else { continue }
+                do {
+                    try musicTrack.insertTimeRange(
+                        CMTimeRange(start: cm(fileStart), duration: durationCM),
+                        of: srcAudio, at: startCM)
+                } catch { continue }
+
+                // Volume envelope per fragment. The track's own fades apply
+                // only at its true start/end (never at a mid-song cut), and the
+                // render's edge fades — recorded above — ramp any fragment they
+                // overlap so the music follows the picture in and out.
+                var fadeIn = p.track.transition.hasFadeIn && abs(oStart - p.audibleStartGlobal) < 0.001
+                    ? p.track.transition.fadeInSeconds : 0
+                var fadeOut = p.track.transition.hasFadeOut && abs(oEnd - audibleGlobalEnd) < 0.001
+                    ? p.track.transition.fadeOutSeconds : 0
+                let fragStart = startCM.seconds
+                let fragEnd = (startCM + durationCM).seconds
+                if let r = musicRampIn, fragStart < r.end { fadeIn = max(fadeIn, r.end - fragStart) }
+                if let r = musicRampOut, fragEnd > r.start { fadeOut = max(fadeOut, fragEnd - r.start) }
+                Self.applyVolumeEnvelope(
+                    volume: Float(max(0, p.track.volume)), fadeIn: fadeIn, fadeOut: fadeOut,
+                    to: params, start: startCM, duration: durationCM
+                )
+            }
+            if let params { musicParams.append(params) }
+        }
+
         // Apply every audio clip's volume envelope as contiguous ramps. Done
         // here (not in the loop) so the ending fade above is already folded in.
         // Default-level clips get a flat 1→1 ramp too: that anchor is what stops
@@ -556,9 +598,9 @@ struct Exporter {
             }
         }
 
-        // The clips' own audio track (when its level/dips need a mix) plus every
-        // overlaid audio track that changes its level/fades. Unlisted tracks
-        // simply play at 100%.
+        // The clips' own audio track (when its level/dips need a mix) plus an
+        // envelope for every placed song (each fragment fully covered by ramps,
+        // like the clip segments, so levels never interpolate across gaps).
         var mixParams: [AVMutableAudioMixInputParameters] = []
         if audioMixUsed, let audioParams { mixParams.append(audioParams) }
         mixParams.append(contentsOf: musicParams)

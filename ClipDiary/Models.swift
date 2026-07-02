@@ -351,13 +351,18 @@ struct AudioTrack: Codable, Equatable, Hashable {
     /// - `== ` the start clip's id → plays only over the start clip;
     /// - `nil` → open-ended: plays forward until the file ends or the render ends;
     /// - any other clip's id → plays through that clip's segment, then stops.
-    /// A stale/out-of-order id is clamped to the end of the timeline at render.
+    /// A stale reference — the end clip deleted, or re-dated before the start
+    /// clip — collapses the span to the start clip at render
+    /// (`TimelineLayout.audibleSpan`), so the track neither silently swallows
+    /// the rest of the timeline nor vanishes from the Soundtrack lane.
     var endClipID: UUID? = nil
     /// Where inside the **end clip** the audio stops, in seconds from that clip's
-    /// start. `nil` → it plays through the end clip's full segment (the per-clip
-    /// "End audio here" behaviour). Set by the Soundtrack timeline so an end can
+    /// start. `nil` → it plays through the end clip's full segment. Set by the
+    /// Soundtrack timeline so an end can
     /// fall mid-clip — letting a drag keep the song's exact length instead of
-    /// snapping to a clip boundary. Ignored when `endClipID` is nil.
+    /// snapping to a clip boundary. Ignored when `endClipID` is nil; clamped to
+    /// the end clip's current length at render (a re-trim can shorten the clip
+    /// after this was measured).
     var endWithinSeconds: Double? = nil
     /// The track's own playback level, 1.0 = 100% (0 mutes, up to 4.0 = 400%),
     /// mirroring `Clip.volume`.
@@ -519,8 +524,8 @@ extension Clip {
 }
 
 /// An audio track playing over a clip that it didn't start on — the owning
-/// (start) clip paired with its track. Identified by the track so the editor's
-/// "End audio here" banner can list several. Returned by
+/// (start) clip paired with its track. Identified by the track so the editors'
+/// music bar (`ClipMusicLane`) can list several. Returned by
 /// `LibraryStore.activeAudio(over:)`.
 struct ActiveAudioRef: Identifiable {
     let track: AudioTrack
