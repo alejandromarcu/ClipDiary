@@ -31,6 +31,7 @@ struct SoundtrackView: View {
     @EnvironmentObject var store: LibraryStore
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
+    @Environment(\.dismiss) private var dismiss
     /// The day to land near (see `SoundtrackRequest`).
     let anchorDate: Date
     /// A track to pre-select and scroll to on open (see `SoundtrackRequest`).
@@ -107,7 +108,7 @@ struct SoundtrackView: View {
         .frame(minWidth: 720, idealWidth: 1040, maxWidth: .infinity,
                minHeight: 460, idealHeight: 680, maxHeight: .infinity, alignment: .top)
         .background {
-            Button("Close") { /* window close via Esc */ }
+            Button("Close") { dismiss() }
                 .keyboardShortcut(.cancelAction).hidden()
         }
         .navigationTitle("Soundtrack")
@@ -173,7 +174,6 @@ struct SoundtrackView: View {
                     .allowsHitTesting(false)
             }
             .padding(.top, topPad)
-            .padding(.trailing, 16)
         }
         .scrollPosition($scrollPosition)
         .onScrollGeometryChange(for: ScrollMetrics.self) { geo in
@@ -197,7 +197,9 @@ struct SoundtrackView: View {
                 scrollPosition.scrollTo(x: targetX)
             }
         }
-        .padding(.leading, 12)
+        // Viewport (not content) padding, so the clips/audio keep a small
+        // margin from the window edge on both sides at any scroll position.
+        .padding(.horizontal, 12)
     }
 
     private func clipStrip(_ layout: LibraryStore.TimelineLayout, width: CGFloat) -> some View {
@@ -805,7 +807,7 @@ struct SoundtrackView: View {
         guard let sec = addAtSeconds else { return }
         addAtSeconds = nil
         let l = store.timelineLayout()
-        let (clipID, off) = clipAndOffset(atSeconds: sec, layout: l)
+        let (clipID, _) = clipAndOffset(atSeconds: sec, layout: l)
         // Don't clobber a clip that already starts a song (a clip starts at most
         // one; a long clip can have free lane space beside a song it already
         // owns). Tell the user why nothing appeared instead of failing silently.
@@ -815,8 +817,14 @@ struct SoundtrackView: View {
             return
         }
         guard let name = store.copyAudioFile(from: url) else { return }
+        // The new song fits the clicked clip: it starts at the clip's start —
+        // not at the exact click position — and ends with the clip. If an
+        // earlier song's tail spills into this clip, start where that tail
+        // ends instead, so blocks never overlap.
+        let clipStart = l.startByID[clipID] ?? 0
+        let tailEnd = audioBlocks(l).map(\.end).filter { $0 <= sec }.max() ?? 0
         let track = AudioTrack(fileName: name, displayName: url.deletingPathExtension().lastPathComponent,
-                               offsetSeconds: max(0, off), endClipID: clipID)
+                               offsetSeconds: max(0, tailEnd - clipStart), endClipID: clipID)
         store.setAudioTrack(track, onClip: clipID)
         selected = track.id
     }
@@ -1441,6 +1449,7 @@ private struct AudioTrimBar: View {
 
 private struct ClipStripCell: View {
     @EnvironmentObject var store: LibraryStore
+    @Environment(\.openWindow) private var openWindow
     let clip: Clip
     /// This cell's full width (its rendered duration in pixels) and height.
     let cellWidth: CGFloat
@@ -1453,40 +1462,49 @@ private struct ClipStripCell: View {
         "\(store.thumbnailKey(for: clip))|\(cellWidth >= ClipStripCell.thumbMinWidth)"
     }
 
-    /// The thumbnail's own box: capped to a sensible width so a long-duration
-    /// photo/card (held for several seconds) doesn't stretch one static frame
-    /// across the whole cell — at high zoom that smears unrelated parts of the
-    /// photo (background, edges) into what reads as separate content, and the
-    /// visible slice changes with zoom. A short clip's cell still just shrinks
-    /// the box to fit.
-    private var thumbWidth: CGFloat { min(cellWidth, height * 1.4) }
+    /// One filmstrip tile: the width of a single copy of the thumbnail, capped
+    /// to a sensible box. A long clip *repeats* the frame across its cell (the
+    /// stills idiom in NLE timelines) rather than stretching one frame — at
+    /// high zoom that smears unrelated parts of the photo (background, edges)
+    /// into what reads as separate content — or leaving a lone left-aligned
+    /// thumbnail followed by dead space, which read as a gap in the timeline.
+    /// A short clip's cell still just shrinks its single tile to fit.
+    private var tileWidth: CGFloat { min(cellWidth, height * 1.4) }
+
+    /// Tiles filling the cell (the last one clips at the cell's edge). Capped
+    /// so an extremely long clip at maximum zoom doesn't materialize thousands
+    /// of image views — past the cap the neutral background shows instead.
+    private var tileCount: Int {
+        guard tileWidth >= 1 else { return 1 }
+        return min(64, max(1, Int((cellWidth / tileWidth).rounded(.up))))
+    }
 
     var body: some View {
-        HStack(spacing: 0) {
-            ZStack {
-                if let image {
-                    Image(nsImage: image).resizable().scaledToFill()
-                } else {
-                    Color.black.opacity(0.12)
+        ZStack(alignment: .topLeading) {
+            Color(nsColor: .windowBackgroundColor)
+            if let image {
+                HStack(spacing: 0) {
+                    ForEach(0..<tileCount, id: \.self) { _ in
+                        Image(nsImage: image).resizable().scaledToFill()
+                            .frame(width: tileWidth, height: height)
+                            .clipped()
+                    }
                 }
-            }
-            .frame(width: thumbWidth, height: height)
-            .clipped()
-            // Photo/video (or card) icon + duration, matching the calendar's
-            // timeline thumbnails — only as much as fits the thumbnail width.
-            .overlay(alignment: .bottomLeading) { kindBadge }
-            if thumbWidth < cellWidth {
-                // The clip keeps showing this same frame for its remaining
-                // duration — a neutral fill instead of stretching the image,
-                // so the boundary with the next clip stays unambiguous.
-                Color(nsColor: .windowBackgroundColor)
-                    .frame(width: cellWidth - thumbWidth, height: height)
+            } else {
+                Color.black.opacity(0.12)
             }
         }
-        .frame(width: cellWidth, height: height, alignment: .leading)
+        .frame(width: cellWidth, height: height, alignment: .topLeading)
+        // Photo/video (or card) icon + duration, matching the calendar's
+        // timeline thumbnails — only as much as fits one tile.
+        .overlay(alignment: .bottomLeading) { kindBadge }
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.black.opacity(0.15), lineWidth: 0.5))
-        .help(clip.date.formatted(date: .abbreviated, time: .omitted))
+        .contentShape(Rectangle())
+        // Same as clicking the clip in the main window's timeline view: open
+        // the day editor on this clip.
+        .onTapGesture { openWindow(value: ReviewRequest(day: clip.date, startClipID: clip.id)) }
+        .help("Edit \(clip.date.formatted(date: .abbreviated, time: .omitted))")
         .task(id: thumbTaskID) {
             // Don't decode a thumbnail for a sliver too thin to show one (zoomed
             // out): the neutral fill stands in until the user zooms in. The id
@@ -1503,11 +1521,11 @@ private struct ClipStripCell: View {
 
     @ViewBuilder
     private var kindBadge: some View {
-        if thumbWidth >= 22 {
+        if tileWidth >= 22 {
             HStack(spacing: 2) {
                 Image(systemName: clip.isCard ? "rectangle.on.rectangle.angled"
                                               : (clip.kind == .photo ? "photo" : "video"))
-                if thumbWidth >= 52 {
+                if tileWidth >= 52 {
                     Text(formatTime(clip.trimmedDuration))
                 }
             }

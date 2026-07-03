@@ -7,6 +7,22 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.23.0] - 2026-07-02
+
+Soundtrack window polish:
+
+- **Clicking a clip's thumbnail opens the day editor** on that clip — the same
+  shortcut the main window's timeline view has.
+- **A new song now fits the clip you click**: it starts at the clip's start
+  (not at the exact spot you clicked, which used to leave a sliver of silence)
+  and ends with the clip. If an earlier song spills into that clip, the new
+  one starts right where it ends instead.
+- **Long clips draw as a filmstrip**: the thumbnail repeats to fill the clip's
+  width, instead of one left-aligned frame followed by an empty gap.
+- The timeline now keeps a small margin on **both** sides of the window — the
+  right edge used to sit flush.
+- **Esc closes the Soundtrack window.**
+
 ## [1.22.0] - 2026-07-02
 
 - **Songs can now be trimmed in the Soundtrack window.** Selecting a track
