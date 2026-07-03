@@ -681,14 +681,19 @@ struct TimelineBody: View {
                                 ForEach(section.days, id: \.self) { day in
                                     TimelineDayRow(day: day, tagFilter: tagFilter,
                                                    onOpenClip: onOpenClip)
-                                        // Each rendered row reports its top edge
-                                        // relative to the scroll view; the reducer
-                                        // below picks the one sitting at the top.
+                                        // Each row near the pinned header reports
+                                        // its top edge relative to the scroll
+                                        // view; the reducer below picks the one
+                                        // sitting at the top. Rows far from the
+                                        // header report nothing, so the per-frame
+                                        // preference merge handles a couple of
+                                        // entries, not every rendered row.
                                         .background(
                                             GeometryReader { geo in
+                                                let y = geo.frame(in: .named(Self.scrollSpace)).minY
                                                 Color.clear.preference(
                                                     key: TimelineDayTopKey.self,
-                                                    value: [day: geo.frame(in: .named(Self.scrollSpace)).minY])
+                                                    value: abs(y - Self.headerLine) < 600 ? [day: y] : [:])
                                             }
                                         )
                                 }
@@ -713,14 +718,18 @@ struct TimelineBody: View {
         }
     }
 
-    /// Picks the topmost visible day from the rendered rows' scroll-relative top
-    /// edges and reports it up (only on change). The day sitting under the pinned
-    /// month header is the one whose top is the largest value still at/above the
-    /// header line; if none has reached it yet, the nearest upcoming row.
+    /// ~ pinned month-header height: the y the "top" day row sits under.
+    private static let headerLine: CGFloat = 44
+
+    /// Picks the topmost visible day from the near-header rows' scroll-relative
+    /// top edges and reports it up (only on change). The day sitting under the
+    /// pinned month header is the one whose top is the largest value still
+    /// at/above the header line; if none has reached it yet, the nearest
+    /// upcoming row. An empty report (nothing near the header mid-fling) keeps
+    /// the last known day.
     private func updateTopVisibleDay(from tops: [Date: CGFloat]) {
         guard !tops.isEmpty else { return }
-        let headerLine: CGFloat = 44   // ~ pinned month-header height
-        let reached = tops.filter { $0.value <= headerLine }
+        let reached = tops.filter { $0.value <= Self.headerLine }
         let day = (reached.max(by: { $0.value < $1.value })
                    ?? tops.min(by: { $0.value < $1.value }))?.key
         if let day, day != topVisibleDay { topVisibleDay = day }

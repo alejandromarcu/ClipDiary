@@ -7,6 +7,33 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.23.1] - 2026-07-02
+
+Robustness and speed fixes from the soundtrack feature's code review:
+
+- **A song whose file goes missing or can't be read no longer vanishes from
+  the Soundtrack window.** It stays visible in the lane and the track list, so
+  it can still be selected and removed — before, such a track was stuck in the
+  project with no way to reach it.
+- **The day editor's music bar no longer claims a song is playing where it has
+  actually run out.** A short song placed open-ended used to show as "playing"
+  over every later clip forever — hiding their "＋ Add music" bar. Each track
+  now records its file's length when added, and the bar respects it.
+- **A safety net against overlapping songs.** Degenerate data left by later
+  clip edits (e.g. re-trimming a clip two songs met on) could make two songs
+  play at once; spans are now clamped at render so what plays always matches
+  what the lane shows.
+- **Errors now appear over the Soundtrack window itself.** "A song already
+  starts on that clip" (and file-copy failures) used to alert on the main
+  calendar window, which could be behind or on another screen.
+- The **Listen** playhead keeps moving (and the preview still stops at the
+  trim window's end) while a menu is open or the window is being resized.
+- **Faster on big projects:** song waveforms are decoded once and cached
+  (reopening the Soundtrack window is instant), several songs load in
+  parallel instead of one after another, dragging a block no longer rescans
+  every clip on each mouse move, and browsing the main timeline does less
+  per-frame bookkeeping.
+
 ## [1.23.0] - 2026-07-02
 
 Soundtrack window polish:

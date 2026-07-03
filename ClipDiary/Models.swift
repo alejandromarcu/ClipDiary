@@ -378,6 +378,14 @@ struct AudioTrack: Codable, Equatable, Hashable {
     var volume: Double = 1.0
     /// Optional fade in / out of the audio itself.
     var transition = SegmentTransition()
+    /// The audio file's full length in seconds, measured once when the file is
+    /// copied into `Audio/` (the copy is never modified afterwards). Lets the
+    /// main-actor store cap a track's span by where the song actually runs out
+    /// without opening the asset (`activeAudio(over:)`, the lane before its
+    /// async duration load lands). `nil` = unknown (tracks from before this
+    /// field, or the measurement failed) — consumers then skip the cap, as
+    /// before.
+    var fileDurationSeconds: Double? = nil
 
     /// What to show in the UI: the original name when known, else the stored file.
     var label: String { displayName.isEmpty ? fileName : displayName }
@@ -388,26 +396,17 @@ struct AudioTrack: Codable, Equatable, Hashable {
     /// here at the audible start.
     var fileInPoint: Double { fileStartSeconds + max(0, -offsetSeconds) }
 
-    init(fileName: String, displayName: String = "", offsetSeconds: Double = 0,
-         endClipID: UUID? = nil, endWithinSeconds: Double? = nil, fileStartSeconds: Double = 0,
-         volume: Double = 1.0, transition: SegmentTransition = SegmentTransition()) {
-        self.fileName = fileName
-        self.displayName = displayName
-        self.offsetSeconds = offsetSeconds
-        self.endClipID = endClipID
-        self.endWithinSeconds = endWithinSeconds
-        self.fileStartSeconds = fileStartSeconds
-        self.volume = volume
-        self.transition = transition
-    }
-
     enum CodingKeys: String, CodingKey {
         case id, fileName, displayName, offsetSeconds, endClipID, endWithinSeconds,
-             fileStartSeconds, volume, transition
+             fileStartSeconds, volume, transition, fileDurationSeconds
     }
+}
 
-    // Every field decoded with `decodeIfPresent` so a track stored before a
-    // field existed (e.g. `displayName`) loads without migration.
+extension AudioTrack {
+    // Declared in an extension so the compiler still synthesizes the memberwise
+    // init (the pattern `Clip` uses below). Every field decoded with
+    // `decodeIfPresent` so a track stored before a field existed (e.g.
+    // `displayName`) loads without migration.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
@@ -419,6 +418,7 @@ struct AudioTrack: Codable, Equatable, Hashable {
         fileStartSeconds = try c.decodeIfPresent(Double.self, forKey: .fileStartSeconds) ?? 0
         volume = try c.decodeIfPresent(Double.self, forKey: .volume) ?? 1.0
         transition = try c.decodeIfPresent(SegmentTransition.self, forKey: .transition) ?? SegmentTransition()
+        fileDurationSeconds = try c.decodeIfPresent(Double.self, forKey: .fileDurationSeconds)
     }
 }
 

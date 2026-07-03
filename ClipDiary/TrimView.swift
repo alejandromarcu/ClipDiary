@@ -119,7 +119,7 @@ struct ClipMusicLane: View {
     /// The track that starts on this clip: the draft's in review, the store's
     /// live value for a picked clip.
     private var own: AudioTrack? {
-        isReview ? draftAudio : store.clips.first(where: { $0.id == clip.id })?.audio
+        isReview ? draftAudio : store.clip(withID: clip.id)?.audio
     }
 
     /// Music started on an earlier clip that plays over this one — picked clips
@@ -273,7 +273,8 @@ struct ClipMusicLane: View {
     private func add(_ url: URL) {
         guard let name = store.copyAudioFile(from: url) else { return }
         let track = AudioTrack(fileName: name, displayName: url.deletingPathExtension().lastPathComponent,
-                               endClipID: clip.id)
+                               endClipID: clip.id,
+                               fileDurationSeconds: store.measuredAudioDuration(ofFileNamed: name))
         if isReview {
             draftAudio = track
         } else {
@@ -294,7 +295,7 @@ struct ClipMusicLane: View {
 
     private func loadWaveform() async {
         guard let track = own else { waveform = []; return }
-        waveform = await loadAudioWaveform(url: store.audioURL(for: track), buckets: 400)
+        waveform = await store.audioWaveform(for: track, buckets: 400).samples
     }
 }
 
@@ -517,8 +518,9 @@ struct TrimEditor: View {
 
     /// The music track playing over this clip right now — the draft's in review,
     /// the store's live value once picked. Drives the Preview/Play music player.
+    /// O(1) via the store's id index — this is read on every playback tick.
     private var currentAudioTrack: AudioTrack? {
-        isReview ? clip.audio : store.clips.first(where: { $0.id == clip.id })?.audio
+        isReview ? clip.audio : store.clip(withID: clip.id)?.audio
     }
 
     /// The working copy with the picked date applied — what would be saved.
@@ -538,19 +540,18 @@ struct TrimEditor: View {
         .task { await loadThumbnails(url: sourceURL ?? store.fileURL(for: clip)) }
         .task {
             waveform = await loadAudioWaveform(
-                url: sourceURL ?? store.fileURL(for: clip), buckets: 600)
+                url: sourceURL ?? store.fileURL(for: clip), buckets: 600).samples
         }
         .task { await loadVideoDisplaySize() }
         .onDisappear {
             // Auto-save so switching clips or closing the sheet keeps edits.
             // No-op if the clip was just deleted. Review drafts aren't in the
             // library, so there's nothing to save — but a draft that picked up
-            // music and was never added leaves an orphan copy in Audio/, so drop
-            // it (a no-op once a real clip references the file, i.e. it was added).
+            // music and was never added leaves an orphan copy in Audio/.
             if !isReview {
                 saveEdits()
-            } else if let track = clip.audio {
-                store.pruneUnusedAudioFile(track)
+            } else {
+                store.discardDraftAudio(of: clip)
             }
             tearDown()
         }
@@ -810,9 +811,9 @@ struct TrimEditor: View {
     private var revertButton: some View {
         Button {
             pausePlayback()
-            // Reverting a review draft drops any music it picked up, so delete
-            // that now-orphan copy before the wholesale reset loses the ref.
-            if isReview, let track = clip.audio { store.pruneUnusedAudioFile(track) }
+            // Reverting a review draft drops any music it picked up, so clean
+            // up its orphan copy before the wholesale reset loses the ref.
+            if isReview { store.discardDraftAudio(of: clip) }
             clip = original
             editedDate = original.date
         } label: {
@@ -1171,14 +1172,7 @@ struct TrimSlider: View {
     }
 
     private func handle(height: CGFloat) -> some View {
-        RoundedRectangle(cornerRadius: 3)
-            .fill(Color.yellow)
-            .frame(width: handleWidth, height: height)
-            .overlay(
-                RoundedRectangle(cornerRadius: 1)
-                    .fill(.black.opacity(0.5))
-                    .frame(width: 2, height: 18)
-            )
+        TrimHandle(width: handleWidth, height: height, slitHeight: 18)
             .contentShape(Rectangle().inset(by: -8))
     }
 
@@ -1190,6 +1184,27 @@ struct TrimSlider: View {
     private func time(at x: CGFloat, width: CGFloat) -> Double {
         guard width > 0 else { return 0 }
         return Double(min(max(0, x), width) / width) * duration
+    }
+}
+
+/// The yellow drag grip both trim controls draw — the video trim slider's
+/// in/out handles and the audio trim bar's window edges — so the idiom stays
+/// visually identical in both places by construction.
+struct TrimHandle: View {
+    let width: CGFloat
+    let height: CGFloat
+    /// Height of the darker center slit hinting "grab here".
+    var slitHeight: CGFloat = 18
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 3)
+            .fill(Color.yellow)
+            .frame(width: width, height: height)
+            .overlay(
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(.black.opacity(0.5))
+                    .frame(width: 2, height: slitHeight)
+            )
     }
 }
 
@@ -1219,17 +1234,19 @@ struct WaveformView: View {
 }
 
 /// Reads `url`'s audio track and returns `buckets` normalized peak amplitudes
-/// (0...1) spanning the whole clip, for the trim slider's waveform lane.
-/// Returns an empty array when the asset has no audio. Decodes to 16 kHz mono
+/// (0...1) spanning the whole clip, for the trim slider's waveform lane, plus
+/// the asset's duration in seconds (it's loaded here anyway — returning it
+/// saves callers a second asset open). Empty samples (and 0 duration when it
+/// couldn't be read) when the asset has no audio. Decodes to 16 kHz mono
 /// PCM (ample for a visual) and runs off the main actor.
-func loadAudioWaveform(url: URL, buckets: Int) async -> [Float] {
+func loadAudioWaveform(url: URL, buckets: Int) async -> (samples: [Float], duration: Double) {
     let asset = AVURLAsset(url: url)
     guard buckets > 0,
           let track = try? await asset.loadTracks(withMediaType: .audio).first,
-          let durationTime = try? await asset.load(.duration) else { return [] }
+          let durationTime = try? await asset.load(.duration) else { return ([], 0) }
     let duration = durationTime.seconds
-    guard duration.isFinite, duration > 0 else { return [] }
-    guard let reader = try? AVAssetReader(asset: asset) else { return [] }
+    guard duration.isFinite, duration > 0 else { return ([], 0) }
+    guard let reader = try? AVAssetReader(asset: asset) else { return ([], duration) }
 
     let sampleRate = 16_000.0
     let settings: [String: Any] = [
@@ -1243,9 +1260,9 @@ func loadAudioWaveform(url: URL, buckets: Int) async -> [Float] {
     ]
     let output = AVAssetReaderTrackOutput(track: track, outputSettings: settings)
     output.alwaysCopiesSampleData = false
-    guard reader.canAdd(output) else { return [] }
+    guard reader.canAdd(output) else { return ([], duration) }
     reader.add(output)
-    guard reader.startReading() else { return [] }
+    guard reader.startReading() else { return ([], duration) }
 
     let totalFrames = max(1, Int(duration * sampleRate))
     var peaks = [Float](repeating: 0, count: buckets)
@@ -1272,11 +1289,11 @@ func loadAudioWaveform(url: URL, buckets: Int) async -> [Float] {
             }
         }
         CMSampleBufferInvalidate(sampleBuffer)
-        if Task.isCancelled { reader.cancelReading(); return [] }
+        if Task.isCancelled { reader.cancelReading(); return ([], duration) }
     }
 
-    guard reader.status != .failed else { return [] }
-    return normalizedWaveform(peaks)
+    guard reader.status != .failed else { return ([], duration) }
+    return (normalizedWaveform(peaks), duration)
 }
 
 /// Scales peaks so the 95th-percentile level maps to 1.0 — that way a lone loud

@@ -117,12 +117,12 @@ struct PhotoEditor: View {
         // Auto-save so switching clips or closing the sheet keeps edits.
         // No-op if the clip was just deleted. Review drafts aren't saved — but a
         // draft that picked up music and was never added leaves an orphan copy in
-        // Audio/, so drop it (a no-op once a real clip references the file).
+        // Audio/.
         .onDisappear {
             if !isReview {
                 saveEdits()
-            } else if let track = clip.audio {
-                store.pruneUnusedAudioFile(track)
+            } else {
+                store.discardDraftAudio(of: clip)
             }
         }
         .onChange(of: clip) { _, _ in onLiveEdit?(editedClip) }
@@ -293,9 +293,9 @@ struct PhotoEditor: View {
 
     private var revertButton: some View {
         Button {
-            // Reverting a review draft drops any music it picked up, so delete
-            // that now-orphan copy before the wholesale reset loses the ref.
-            if isReview, let track = clip.audio { store.pruneUnusedAudioFile(track) }
+            // Reverting a review draft drops any music it picked up, so clean
+            // up its orphan copy before the wholesale reset loses the ref.
+            if isReview { store.discardDraftAudio(of: clip) }
             clip = original
             editedDate = original.date
             aspectLock = .free

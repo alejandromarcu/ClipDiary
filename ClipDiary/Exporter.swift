@@ -202,24 +202,27 @@ struct Exporter {
         // Audio tracks are positioned over the **whole project's** render order
         // (date then createdAt), not just the clips in this render — so a song
         // that started on an earlier day/month keeps playing into the rendered
-        // window (a single-day "Preview Day" included). For each clip that owns
-        // an `audio`, record where the file sits on that global timeline and how
-        // far it spans; the AV pass below maps the overlap onto this render's
-        // local timeline. Durations come from clip metadata (no asset loads),
-        // mirroring how each segment is laid out (photos floored to 0.5s).
-        let (audioPlacements, globalStartByID): (
-            [(url: URL, audibleStartGlobal: Double, spanEndGlobal: Double, track: AudioTrack)],
-            [UUID: Double]
-        ) = await MainActor.run {
+        // window (a single-day "Preview Day" included). The layout's resolved
+        // placements are the same spans the Soundtrack lane draws — stale
+        // references repaired, overlapping spans clamped — so what renders is
+        // exactly what the lane showed; the AV pass below maps each span's
+        // overlap onto this render's local timeline. Durations come from clip
+        // metadata (no asset loads), mirroring how each segment is laid out
+        // (photos floored to 0.5s).
+        struct AudioPlacement {
+            let url: URL
+            let audibleStartGlobal: Double
+            let spanEndGlobal: Double
+            let track: AudioTrack
+        }
+        let (audioPlacements, globalStartByID): ([AudioPlacement], [UUID: Double]) = await MainActor.run {
             let layout = store.timelineLayout()
-            var placements: [(url: URL, audibleStartGlobal: Double, spanEndGlobal: Double, track: AudioTrack)] = []
-            for c in layout.order {
-                // `audibleSpan` resolves the offset and the end reference (and
-                // repairs stale ones) identically to the Soundtrack lane.
-                guard let track = c.audio,
-                      let span = layout.audibleSpan(of: track, startingOn: c.id) else { continue }
-                placements.append((store.audioURL(for: track), span.start, span.end, track))
-            }
+            let placements = layout.tracks
+                .filter { $0.end > $0.start }   // a fully-covered span plays nothing
+                .map { AudioPlacement(url: store.audioURL(for: $0.track),
+                                      audibleStartGlobal: $0.start,
+                                      spanEndGlobal: $0.end,
+                                      track: $0.track) }
             return (placements, layout.startByID)
         }
 

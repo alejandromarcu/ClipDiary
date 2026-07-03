@@ -44,6 +44,11 @@ struct SoundtrackView: View {
     @State private var durations: [String: Double] = [:]
     @State private var showImporter = false
     @State private var addAtSeconds: Double?
+    /// A message for this window's own alert — errors from interactions here
+    /// (add refused, copy failed) must surface over *this* window; the store's
+    /// `lastError` alert is attached to the main calendar window, which can be
+    /// behind or on another screen.
+    @State private var errorMessage: String?
     @State private var drag: DragState?
     @State private var scrollLeft: CGFloat = 0
     @State private var viewportWidth: CGFloat = 2000
@@ -121,6 +126,14 @@ struct SoundtrackView: View {
         }
         .task(id: blocks.map(\.track.fileName).sorted().joined(separator: "|")) {
             await loadMissingWaveforms(blocks)
+        }
+        .alert("Can't Add Music", isPresented: Binding(
+            get: { errorMessage != nil },
+            set: { if !$0 { errorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(errorMessage ?? "")
         }
     }
 
@@ -383,7 +396,7 @@ struct SoundtrackView: View {
             }
             .width(min: 56, ideal: 64)
             TableColumn("Total") { b in
-                Text(durations[b.track.fileName].map(formatDurationShort) ?? "—")
+                Text(knownDuration(of: b.track).map(formatDurationShort) ?? "—")
                     .monospacedDigit().foregroundStyle(.secondary)
             }
             .width(min: 56, ideal: 64)
@@ -411,7 +424,7 @@ struct SoundtrackView: View {
             let anchor = startAnchorBounds(b, layout: layout, bounds: bounds)
             TrackInspector(track: b.track, startClipID: b.startClipID,
                            day: startDay(b), used: b.end - b.start,
-                           total: durations[b.track.fileName],
+                           total: knownDuration(of: b.track),
                            waveform: waveforms[b.track.fileName] ?? [],
                            leftSlack: max(0, b.start - anchor.lo),
                            startRightSlack: max(0, anchor.hi - b.start),
@@ -441,7 +454,7 @@ struct SoundtrackView: View {
 
     /// The calendar day a track starts on (its start clip's date).
     private func startDay(_ b: Block) -> Date? {
-        store.clips.first(where: { $0.id == b.startClipID })?.date
+        store.clip(withID: b.startClipID)?.date
     }
 
     /// The track to select after removing `b`: the following one, or the previous
@@ -463,7 +476,7 @@ struct SoundtrackView: View {
         let l = store.timelineLayout()
         // Audible end if the whole file played from the audible start (the
         // trim-in point is being reset, so the full duration counts).
-        let full = b.start + (durations[b.track.fileName] ?? (b.end - b.start))
+        let full = b.start + (knownDuration(of: b.track) ?? (b.end - b.start))
         let hi = neighborBounds(b, blocks: audioBlocks(l), total: l.total).hi
         let target = min(full, hi)
         // `target` never falls below the current end (the file cap and the
@@ -564,19 +577,22 @@ struct SoundtrackView: View {
         return store.timelineLayout().startByID[owner.id]
     }
 
-    /// Build the placed blocks from clips that own audio. Offset and end
-    /// references (including stale ones, which get repaired) resolve through
-    /// `audibleSpan`, the same resolver the exporter uses — the lane then only
-    /// caps each block to its file's length once that's loaded.
+    /// Build the lane's blocks from the layout's resolved placements (the same
+    /// spans the exporter renders, stale references repaired and overlaps
+    /// clamped), capping each to its file's length. A track is **never
+    /// dropped** here: one whose file is missing/unreadable (duration unknown
+    /// or 0) or whose span collapsed still shows as a (possibly sliver-width)
+    /// block, so it stays selectable and removable instead of sitting in
+    /// clips.json with no UI to reach it.
     private func audioBlocks(_ l: LibraryStore.TimelineLayout) -> [Block] {
-        l.order.compactMap { clip in
-            guard let track = clip.audio,
-                  let span = l.audibleSpan(of: track, startingOn: clip.id) else { return nil }
-            let fileCap = durations[track.fileName]
-                .map { span.start + ($0 - track.fileInPoint) } ?? span.end
-            let end = min(span.end, fileCap)
-            guard end > span.start else { return nil }
-            return Block(track: track, startClipID: clip.id, start: span.start, end: end)
+        l.tracks.map { placed in
+            // An unknown/unreadable duration caps nothing — better a too-long
+            // block than an invisible track.
+            let fileCap = knownDuration(of: placed.track)
+                .map { placed.start + max(0, $0 - placed.track.fileInPoint) } ?? placed.end
+            let end = max(min(placed.end, fileCap), placed.start)
+            return Block(track: placed.track, startClipID: placed.startClipID,
+                         start: placed.start, end: end)
         }
     }
 
@@ -586,7 +602,7 @@ struct SoundtrackView: View {
         guard let d = drag, d.id == base.track.id else { return (base.start, base.end) }
         let dsec = Double(d.dx) / pps
         let (lo, hi) = neighborBounds(base, blocks: blocks, total: l.total)
-        let lines = boundaries(l)
+        let lines = l.boundaries
         let snapSec = Double(snapPoints) / pps
         switch d.mode {
         case .body:
@@ -629,17 +645,22 @@ struct SoundtrackView: View {
         }
     }
 
-    /// All snap targets: every clip's start plus the timeline end (day lines are
-    /// a subset — each day begins at a clip start).
-    private func boundaries(_ l: LibraryStore.TimelineLayout) -> [Double] {
-        l.order.compactMap { l.startByID[$0.id] } + [l.total]
-    }
-
-    /// The nearest line to `v` if within `within` seconds, else nil.
+    /// The nearest line to `v` if within `within` seconds, else nil. `lines`
+    /// is the layout's precomputed ascending boundary list (every clip start +
+    /// the timeline end), so a binary search finds the neighbour pair — this
+    /// runs on every drag tick, where a linear scan over thousands of clips
+    /// added up.
     private func snap(_ v: Double, to lines: [Double], within: Double) -> Double? {
-        guard let nearest = lines.min(by: { abs($0 - v) < abs($1 - v) }),
-              abs(nearest - v) <= within else { return nil }
-        return nearest
+        guard !lines.isEmpty else { return nil }
+        // Binary search: first index with lines[i] >= v.
+        var lo = 0, hi = lines.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if lines[mid] < v { lo = mid + 1 } else { hi = mid }
+        }
+        var nearest = lo < lines.count ? lines[lo] : lines[lines.count - 1]
+        if lo > 0, abs(lines[lo - 1] - v) < abs(nearest - v) { nearest = lines[lo - 1] }
+        return abs(nearest - v) <= within ? nearest : nil
     }
 
     /// The timeline range the audible *start* may move within for the trim
@@ -705,8 +726,16 @@ struct SoundtrackView: View {
     }
 
     private func fileLength(_ b: Block) -> Double {
-        let full = durations[b.track.fileName] ?? (b.end - b.start)
+        let full = knownDuration(of: b.track) ?? (b.end - b.start)
         return max(0.2, full - b.track.fileInPoint)
+    }
+
+    /// The track's file length: the asset-loaded value once it lands, else the
+    /// duration measured when the file was added (`nil` for legacy tracks
+    /// until the load finishes; 0/unreadable never counts).
+    private func knownDuration(of track: AudioTrack) -> Double? {
+        let d = durations[track.fileName] ?? track.fileDurationSeconds
+        return (d ?? 0) > 0.05 ? d : nil
     }
 
     // MARK: - Drag handling
@@ -810,13 +839,20 @@ struct SoundtrackView: View {
         let (clipID, _) = clipAndOffset(atSeconds: sec, layout: l)
         // Don't clobber a clip that already starts a song (a clip starts at most
         // one; a long clip can have free lane space beside a song it already
-        // owns). Tell the user why nothing appeared instead of failing silently.
-        guard store.clips.first(where: { $0.id == clipID })?.audio == nil else {
-            store.lastError = "A song already starts on that clip, and a clip can "
+        // owns). Tell the user why nothing appeared instead of failing silently
+        // — in *this* window: the store's lastError alert hangs off the main
+        // calendar window, which may be behind or on another screen.
+        guard store.clip(withID: clipID)?.audio == nil else {
+            errorMessage = "A song already starts on that clip, and a clip can "
                 + "only start one. Click over a different clip, or remove the other song first."
             return
         }
-        guard let name = store.copyAudioFile(from: url) else { return }
+        guard let name = store.copyAudioFile(from: url) else {
+            // Surface the copy failure here too, not on the main window.
+            errorMessage = store.lastError
+            store.lastError = nil
+            return
+        }
         // The new song fits the clicked clip: it starts at the clip's start —
         // not at the exact click position — and ends with the clip. If an
         // earlier song's tail spills into this clip, start where that tail
@@ -824,7 +860,8 @@ struct SoundtrackView: View {
         let clipStart = l.startByID[clipID] ?? 0
         let tailEnd = audioBlocks(l).map(\.end).filter { $0 <= sec }.max() ?? 0
         let track = AudioTrack(fileName: name, displayName: url.deletingPathExtension().lastPathComponent,
-                               offsetSeconds: max(0, tailEnd - clipStart), endClipID: clipID)
+                               offsetSeconds: max(0, tailEnd - clipStart), endClipID: clipID,
+                               fileDurationSeconds: store.measuredAudioDuration(ofFileNamed: name))
         store.setAudioTrack(track, onClip: clipID)
         selected = track.id
     }
@@ -842,13 +879,31 @@ struct SoundtrackView: View {
         return Array(full[i0..<i1])
     }
 
+    /// Fills the waveform/duration dictionaries for any block missing one, all
+    /// files concurrently, through the store's decoded-waveform cache — so a
+    /// window reopened on the same project doesn't decode anything twice, and
+    /// several songs load in roughly the time of the longest, not the sum.
     private func loadMissingWaveforms(_ blocks: [Block]) async {
-        for b in blocks where waveforms[b.track.fileName] == nil {
-            let url = store.audioURL(for: b.track)
-            let wf = await loadAudioWaveform(url: url, buckets: 1200)
-            let dur = await loadAudioDuration(url)
-            waveforms[b.track.fileName] = wf
-            durations[b.track.fileName] = dur
+        let missing = blocks.map(\.track).filter { waveforms[$0.fileName] == nil }
+        guard !missing.isEmpty else { return }
+        let store = self.store
+        let results = await withTaskGroup(
+            of: (String, [Float], Double).self,
+            returning: [(String, [Float], Double)].self
+        ) { group in
+            for track in missing {
+                group.addTask { @MainActor in
+                    let (wf, dur) = await store.audioWaveform(for: track, buckets: 1200)
+                    return (track.fileName, wf, dur)
+                }
+            }
+            var collected: [(String, [Float], Double)] = []
+            for await r in group { collected.append(r) }
+            return collected
+        }
+        for (name, wf, dur) in results {
+            waveforms[name] = wf
+            durations[name] = dur
         }
     }
 
@@ -1045,7 +1100,10 @@ private struct TrackInspector: View {
         p.play()
         previewPlayer = p
         previewPlayhead = start
-        previewTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { _ in
+        // Added in `.common` mode (not `scheduledTimer`'s default-only), so the
+        // playhead keeps moving — and the stop-at-end keeps firing — during
+        // event tracking (a window resize, an open menu, a drag elsewhere).
+        let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { _ in
             guard let playing = previewPlayer else { return }
             if !playing.isPlaying || playing.currentTime >= end - 0.02 {
                 stopPreview()
@@ -1053,6 +1111,8 @@ private struct TrackInspector: View {
                 previewPlayhead = playing.currentTime
             }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        previewTimer = timer
     }
 
     private func stopPreview() {
@@ -1067,7 +1127,7 @@ private struct TrackInspector: View {
     /// exists on its clip (just removed) so the write can't re-add it.
     private func commitVolume() {
         guard volumeDraft != track.volume,
-              store.clips.first(where: { $0.id == startClipID })?.audio?.id == track.id else { return }
+              store.clip(withID: startClipID)?.audio?.id == track.id else { return }
         var t = track; t.volume = volumeDraft
         store.setAudioTrack(t, onClip: startClipID)
     }
@@ -1080,7 +1140,7 @@ private struct TrackInspector: View {
         let trimmed = nameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { nameDraft = track.label; return }
         guard trimmed != track.label,
-              store.clips.first(where: { $0.id == startClipID })?.audio?.id == track.id else { return }
+              store.clip(withID: startClipID)?.audio?.id == track.id else { return }
         var t = track; t.displayName = trimmed
         store.setAudioTrack(t, onClip: startClipID)
     }
@@ -1298,12 +1358,8 @@ private struct AudioTrimBar: View {
     }
 
     private var handle: some View {
-        RoundedRectangle(cornerRadius: 3)
-            .fill(Color.yellow)
-            .frame(width: handleWidth, height: barHeight)
-            .overlay(RoundedRectangle(cornerRadius: 1)
-                .fill(.black.opacity(0.5))
-                .frame(width: 2, height: 14))
+        // The video trim slider's grip (shared `TrimHandle`), sized for this bar.
+        TrimHandle(width: handleWidth, height: barHeight, slitHeight: 14)
     }
 
     /// The drawn square and handle positions for `win`. The square tracks the
@@ -1599,12 +1655,4 @@ private struct AudioBlockView: View {
             .onChanged { cb($0.translation.width, false) }
             .onEnded { cb($0.translation.width, true) }
     }
-}
-
-/// Loads an audio file's duration in seconds (0 on failure).
-private func loadAudioDuration(_ url: URL) async -> Double {
-    let asset = AVURLAsset(url: url)
-    guard let d = try? await asset.load(.duration) else { return 0 }
-    let s = d.seconds
-    return s.isFinite ? s : 0
 }

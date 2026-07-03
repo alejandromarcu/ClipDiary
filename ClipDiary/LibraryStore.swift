@@ -14,7 +14,7 @@ import UniformTypeIdentifiers
 @MainActor
 final class LibraryStore: ObservableObject {
     @Published private(set) var clips: [Clip] = [] {
-        didSet { clipsByDayCache = nil; timelineLayoutCache = nil; timelineGridCache = nil }
+        didSet { clipsByDayCache = nil; timelineLayoutCache = nil; timelineGridCache = nil; clipByIDCache = nil }
     }
     @Published var lastError: String?
 
@@ -74,6 +74,15 @@ final class LibraryStore: ObservableObject {
     /// project's timeline crawl.
     private var timelineLayoutCache: TimelineLayout?
     private var timelineGridCache: TimelineGrid?
+    /// O(1) clip lookup by id, dropped whenever `clips` changes — hot paths
+    /// (the editors' 30 Hz playback tick, per-row table lookups) would
+    /// otherwise scan the whole array each time.
+    private var clipByIDCache: [UUID: Clip]?
+    /// Decoded audio waveforms + durations keyed by "fileName|buckets". The
+    /// files in `Audio/` are immutable copies, so entries never go stale —
+    /// they're dropped only when the file itself is pruned. A bucketed
+    /// waveform is a few KB, so a plain dictionary is fine.
+    private var audioWaveformCache: [String: (samples: [Float], duration: Double)] = [:]
 
     var currentProjectName: String? { currentProjectURL?.lastPathComponent }
     var hasProject: Bool { currentProjectURL != nil }
@@ -89,6 +98,14 @@ final class LibraryStore: ObservableObject {
     /// Location of an audio track's copied file in the project's `Audio/` folder.
     func audioURL(for track: AudioTrack) -> URL {
         audioDir.appendingPathComponent(track.fileName)
+    }
+
+    /// O(1) lookup of a clip by id (index rebuilt lazily after `clips` changes).
+    func clip(withID id: UUID) -> Clip? {
+        if clipByIDCache == nil {
+            clipByIDCache = Dictionary(uniqueKeysWithValues: clips.map { ($0.id, $0) })
+        }
+        return clipByIDCache?[id]
     }
 
     // MARK: - Persistence
@@ -243,6 +260,7 @@ final class LibraryStore: ObservableObject {
         try? FileManager.default.createDirectory(at: audioDir, withIntermediateDirectories: true)
         thumbnailCache.removeAllObjects()
         sourceThumbnailCache.removeAllObjects()
+        audioWaveformCache.removeAll()
         clips = loadedClips
         settings = Self.loadSettings(from: settingsURL)
         cards = Self.loadCards(from: cardsDir)
@@ -467,12 +485,8 @@ final class LibraryStore: ObservableObject {
         if let track = copy.audio {
             let srcAudio = audioURL(for: track)
             let targetAudioDir = targetURL.appendingPathComponent("Audio", isDirectory: true)
-            let ext = srcAudio.pathExtension.isEmpty ? "m4a" : srcAudio.pathExtension
-            let newAudioName = UUID().uuidString + "." + ext
-            try? FileManager.default.createDirectory(at: targetAudioDir, withIntermediateDirectories: true)
             if FileManager.default.fileExists(atPath: srcAudio.path),
-               (try? FileManager.default.copyItem(
-                   at: srcAudio, to: targetAudioDir.appendingPathComponent(newAudioName))) != nil {
+               let newAudioName = try? Self.copyAudioBytes(at: srcAudio, intoAudioDir: targetAudioDir) {
                 copy.audio?.fileName = newAudioName
                 copy.audio?.endClipID = copy.id
             } else {
@@ -1107,6 +1121,17 @@ final class LibraryStore: ObservableObject {
         clips.sorted { $0.date == $1.date ? $0.createdAt < $1.createdAt : $0.date < $1.date }
     }
 
+    /// A resolved audio placement: `track`, anchored on `startClipID`, occupying
+    /// `start..<end` timeline seconds — its `audibleSpan`, after the layout-wide
+    /// overlap clamp (but before any file-length cap, which needs the asset).
+    struct PlacedAudioTrack: Identifiable {
+        let track: AudioTrack
+        let startClipID: UUID
+        var start: Double
+        var end: Double
+        var id: UUID { track.id }
+    }
+
     /// Where each clip sits on the project-wide rendered timeline (seconds),
     /// using the same per-clip durations the exporter lays down. The single
     /// source of truth shared by the exporter's audio positioning and the
@@ -1116,6 +1141,21 @@ final class LibraryStore: ObservableObject {
         var startByID: [UUID: Double]
         var endByID: [UUID: Double]
         var total: Double
+        /// Every placed audio track in play order, spans resolved through
+        /// `audibleSpan` and then clamped so no span overlaps the next one —
+        /// the one placement list the exporter, the Soundtrack lane, and the
+        /// editors' music bar all consume. The Soundtrack drags already forbid
+        /// overlap at the gesture level, but later clip edits (a re-trim
+        /// shifting collapsed spans onto each other) can re-introduce it in
+        /// the stored data; clamping here repairs it identically everywhere
+        /// instead of letting two songs mix at render. A fully-covered track
+        /// keeps a zero-length span (start == end): silent, but still listed,
+        /// so the lane can show and remove it.
+        var tracks: [PlacedAudioTrack] = []
+        /// Every clip's start second plus the timeline end, ascending — the
+        /// Soundtrack lane's snap targets, precomputed once per layout instead
+        /// of per drag tick.
+        var boundaries: [Double] = []
         /// Per-clip rendered length, matching the exporter's segment lengths
         /// (videos = trimmed length; photos/cards floored to 0.5s).
         static func duration(of clip: Clip) -> Double {
@@ -1174,7 +1214,24 @@ final class LibraryStore: ObservableObject {
             cursor += TimelineLayout.duration(of: c)
             endByID[c.id] = cursor
         }
-        let layout = TimelineLayout(order: order, startByID: startByID, endByID: endByID, total: cursor)
+        var layout = TimelineLayout(order: order, startByID: startByID, endByID: endByID, total: cursor)
+        // Resolve every placed track once, in play order, and clamp each span
+        // to the next track's start (see `TimelineLayout.tracks`).
+        var tracks: [PlacedAudioTrack] = []
+        for c in order {
+            guard let t = c.audio, let span = layout.audibleSpan(of: t, startingOn: c.id) else { continue }
+            tracks.append(PlacedAudioTrack(track: t, startClipID: c.id, start: span.start, end: span.end))
+        }
+        tracks.sort {
+            $0.start == $1.start
+                ? (startByID[$0.startClipID] ?? 0) < (startByID[$1.startClipID] ?? 0)
+                : $0.start < $1.start
+        }
+        for i in tracks.indices.dropLast() where tracks[i].end > tracks[i + 1].start {
+            tracks[i].end = max(tracks[i].start, tracks[i + 1].start)
+        }
+        layout.tracks = tracks
+        layout.boundaries = order.compactMap { startByID[$0.id] } + [cursor]
         timelineLayoutCache = layout
         return layout
     }
@@ -1270,15 +1327,46 @@ final class LibraryStore: ObservableObject {
         let didStart = fileURL.startAccessingSecurityScopedResource()
         defer { if didStart { fileURL.stopAccessingSecurityScopedResource() } }
 
-        let ext = fileURL.pathExtension.isEmpty ? "m4a" : fileURL.pathExtension
-        let newName = UUID().uuidString + "." + ext
         do {
-            try FileManager.default.copyItem(at: fileURL, to: audioDir.appendingPathComponent(newName))
-            return newName
+            return try Self.copyAudioBytes(at: fileURL, intoAudioDir: audioDir)
         } catch {
             lastError = "Could not add audio \(fileURL.lastPathComponent): \(error.localizedDescription)"
             return nil
         }
+    }
+
+    /// Copies an audio file's bytes into `dir` under a fresh UUID name (keeping
+    /// the source extension, defaulting to m4a) and returns the new name — the
+    /// one naming scheme every `Audio/` file uses. Shared by `copyAudioFile`
+    /// and the cross-project clip copy so the two can't drift.
+    static func copyAudioBytes(at source: URL, intoAudioDir dir: URL) throws -> String {
+        let ext = source.pathExtension.isEmpty ? "m4a" : source.pathExtension
+        let newName = UUID().uuidString + "." + ext
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: source, to: dir.appendingPathComponent(newName))
+        return newName
+    }
+
+    /// A copied audio file's full duration, read synchronously from the local
+    /// file's header — measured once at add time and stored on the track
+    /// (`AudioTrack.fileDurationSeconds`) so span capping never needs an
+    /// asset load. Nil when the file can't be read.
+    func measuredAudioDuration(ofFileNamed name: String) -> Double? {
+        guard let audioDir,
+              let player = try? AVAudioPlayer(contentsOf: audioDir.appendingPathComponent(name)),
+              player.duration.isFinite, player.duration > 0 else { return nil }
+        return player.duration
+    }
+
+    /// The waveform + duration of `track`'s file, decoded once per (file,
+    /// resolution) and cached — the Soundtrack window and the editors' music
+    /// bar open the same songs over and over, and the files are immutable.
+    func audioWaveform(for track: AudioTrack, buckets: Int) async -> (samples: [Float], duration: Double) {
+        let key = "\(track.fileName)|\(buckets)"
+        if let hit = audioWaveformCache[key] { return hit }
+        let result = await loadAudioWaveform(url: audioURL(for: track), buckets: buckets)
+        audioWaveformCache[key] = result
+        return result
     }
 
     /// Deletes `track`'s file unless a clip's audio still points at it — called
@@ -1287,6 +1375,19 @@ final class LibraryStore: ObservableObject {
         guard audioDir != nil,
               !clips.contains(where: { $0.audio?.fileName == track.fileName }) else { return }
         try? FileManager.default.removeItem(at: audioURL(for: track))
+        for key in audioWaveformCache.keys where key.hasPrefix("\(track.fileName)|") {
+            audioWaveformCache.removeValue(forKey: key)
+        }
+    }
+
+    /// Drops the orphaned `Audio/` copy behind a review draft's music track —
+    /// the draft was never added, so nothing in the library references the file
+    /// (and it's a no-op when the draft *was* added, since the picked clip now
+    /// references it). The one cleanup every editor discard path (close,
+    /// revert, skip) calls, so the rule can't drift between editors.
+    func discardDraftAudio(of draft: Clip) {
+        guard let track = draft.audio else { return }
+        pruneUnusedAudioFile(track)
     }
 
     /// Sets, replaces, or clears (`nil`) a clip's audio track, pruning a
@@ -1329,28 +1430,26 @@ final class LibraryStore: ObservableObject {
     /// The audio tracks (with their start clips) that are *playing over* `clip`
     /// in the global render order but didn't start on it — the editors' music
     /// bar (`ClipMusicLane`) shows these as read-only "plays from an earlier
-    /// day" entries. A track covers `clip` when its start clip comes strictly
-    /// before `clip` and its span (per `endClipID`) reaches `clip`. Uses the
-    /// memoized `timelineLayout()` order — this runs on every editor body pass,
-    /// so no fresh sort or per-id linear scans.
+    /// day" entries. Reads the memoized layout's resolved placements (the same
+    /// spans the lane and exporter use) — this runs on every editor body pass,
+    /// so no fresh sort or per-id linear scans. A span is additionally capped
+    /// by where the song's file runs out (when its length is known), so an
+    /// open-ended track doesn't claim clips it's actually silent over — which
+    /// would also hide those clips' "＋ Add music" bar.
     func activeAudio(over clip: Clip) -> [ActiveAudioRef] {
-        let ordered = timelineLayout().order
-        let position = Dictionary(uniqueKeysWithValues: ordered.enumerated().map { ($1.id, $0) })
-        guard let pos = position[clip.id] else { return [] }
+        let layout = timelineLayout()
+        guard let clipStart = layout.startByID[clip.id],
+              let clipEnd = layout.endByID[clip.id] else { return [] }
         var result: [ActiveAudioRef] = []
-        for (i, start) in ordered.enumerated() {
-            guard i < pos, let track = start.audio else { continue }
-            let endPos: Int
-            if let endID = track.endClipID {
-                // "This clip only" (endID == start) never reaches a later clip.
-                // An unknown id collapses to the start clip, matching
-                // `TimelineLayout.audibleSpan`'s repair — the render won't play
-                // it past there, so the banner mustn't claim it either.
-                endPos = position[endID] ?? i
-            } else {
-                endPos = ordered.count - 1   // open-ended
+        for placed in layout.tracks {
+            guard placed.startClipID != clip.id else { continue }
+            var end = placed.end
+            if let fileLength = placed.track.fileDurationSeconds {
+                end = min(end, placed.start + max(0, fileLength - placed.track.fileInPoint))
             }
-            if endPos >= pos { result.append(ActiveAudioRef(track: track, startClip: start)) }
+            guard placed.start < clipEnd, end > clipStart + 0.001,
+                  let startClip = self.clip(withID: placed.startClipID) else { continue }
+            result.append(ActiveAudioRef(track: placed.track, startClip: startClip))
         }
         return result
     }
