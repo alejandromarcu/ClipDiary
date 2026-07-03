@@ -57,6 +57,17 @@ struct ClipDiaryApp: App {
             }
         }
 
+        // The background-audio timeline ("Soundtrack"): the project's clips on a
+        // time axis with a draggable audio lane beneath. Opened from the calendar
+        // toolbar, seeded with the day to scroll to.
+        WindowGroup("Soundtrack", for: SoundtrackRequest.self) { $request in
+            if let request {
+                SoundtrackView(anchorDate: request.anchorDate,
+                               selectTrackID: request.selectTrackID)
+                    .environmentObject(store)
+            }
+        }
+
         // The Cards gallery + editor in its own resizable window (opened with
         // openWindow(id: "cards") from the calendar toolbar).
         WindowGroup("Cards", id: "cards") {

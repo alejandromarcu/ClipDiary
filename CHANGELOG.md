@@ -7,6 +7,227 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.23.1] - 2026-07-02
+
+Robustness and speed fixes from the soundtrack feature's code review:
+
+- **A song whose file goes missing or can't be read no longer vanishes from
+  the Soundtrack window.** It stays visible in the lane and the track list, so
+  it can still be selected and removed — before, such a track was stuck in the
+  project with no way to reach it.
+- **The day editor's music bar no longer claims a song is playing where it has
+  actually run out.** A short song placed open-ended used to show as "playing"
+  over every later clip forever — hiding their "＋ Add music" bar. Each track
+  now records its file's length when added, and the bar respects it.
+- **A safety net against overlapping songs.** Degenerate data left by later
+  clip edits (e.g. re-trimming a clip two songs met on) could make two songs
+  play at once; spans are now clamped at render so what plays always matches
+  what the lane shows.
+- **Errors now appear over the Soundtrack window itself.** "A song already
+  starts on that clip" (and file-copy failures) used to alert on the main
+  calendar window, which could be behind or on another screen.
+- The **Listen** playhead keeps moving (and the preview still stops at the
+  trim window's end) while a menu is open or the window is being resized.
+- **Faster on big projects:** song waveforms are decoded once and cached
+  (reopening the Soundtrack window is instant), several songs load in
+  parallel instead of one after another, dragging a block no longer rescans
+  every clip on each mouse move, and browsing the main timeline does less
+  per-frame bookkeeping.
+
+## [1.23.0] - 2026-07-02
+
+Soundtrack window polish:
+
+- **Clicking a clip's thumbnail opens the day editor** on that clip — the same
+  shortcut the main window's timeline view has.
+- **A new song now fits the clip you click**: it starts at the clip's start
+  (not at the exact spot you clicked, which used to leave a sliver of silence)
+  and ends with the clip. If an earlier song spills into that clip, the new
+  one starts right where it ends instead.
+- **Long clips draw as a filmstrip**: the thumbnail repeats to fill the clip's
+  width, instead of one left-aligned frame followed by an empty gap.
+- The timeline now keeps a small margin on **both** sides of the window — the
+  right edge used to sit flush.
+- **Esc closes the Soundtrack window.**
+
+## [1.22.0] - 2026-07-02
+
+- **Songs can now be trimmed in the Soundtrack window.** Selecting a track
+  shows the whole song's waveform under the volume slider, with a yellow
+  window over the part that plays — the same idiom as trimming a video. Drag
+  the left edge to cut into the song (skip a long intro: the block on the
+  timeline starts later, and everything you keep stays in sync with the
+  picture), drag the right edge to set where it stops, or drag the window
+  itself to slide *which part* of the song plays without moving the block on
+  the timeline at all. Edge drags respect neighbouring tracks, just like
+  dragging blocks in the lane.
+- A **Listen** button next to the trim bar plays exactly the selected part of
+  the song (with a moving playhead), so you can check a cut by ear before
+  previewing the whole video.
+- The trim bar **zooms** (−/+ buttons, up to 64×), keeping the selection
+  centered as you zoom — so a few-seconds window on a four-minute song is
+  comfortable to grab and adjust instead of a few pixels wide. When zoomed,
+  drag the waveform outside the selection (or scroll sideways) to pan along
+  the song.
+- **Restore Full Length** now also clears the trim, going back to the whole
+  song from its top.
+
+## [1.21.0] - 2026-07-02
+
+- **The Soundtrack window's Preview button now plays what's on screen.** It
+  used to preview the month the window was opened from, which went stale the
+  moment you scrolled somewhere else. Now it previews exactly the days scrolled
+  into view (edge days that are partly visible count in full), and its label
+  names them — "Preview Jun 12 – 28" — updating live as you scroll. So you
+  scroll to choose *where* and zoom to choose *how much*: zoom in to audition
+  one transition, zoom out to run several months.
+- Removed the "Drag a song to move it…" hint caption from the Soundtrack
+  window's header — the controls explain themselves by now, and the header
+  reads cleaner with just the Preview and zoom buttons.
+
+## [1.20.0] - 2026-07-01
+
+- **The Soundtrack window now has a track list.** Below the timeline, a table
+  lists every track in the order it plays, showing which day it starts on, how
+  much of it is **Used** (how long it plays here) and its **Total** length (the
+  full audio file). Click a row to select that track — it highlights in the
+  timeline above and scrolls into view if it's off-screen — so you can jump
+  between tracks without hunting along the timeline.
+- **Rename a track.** The selected-track panel (to the right of the list) now
+  lets you give a track a friendlier name instead of the imported file name; it
+  also shows how much of the track plays vs. its full length, and holds the
+  volume slider, a Remove button, and…
+- **Restore Full Length.** One click extends a track back to playing its whole
+  audio file. If another track is in the way it's extended only as far as it
+  fits, with a warning explaining why.
+- Removed the track's numeric "starts at … seconds" field from the editor — it
+  wasn't useful; the timeline and the list's day/length columns already show
+  where a track sits.
+- **You can now drag a track past another to reorder it.** Previously a track
+  stopped when it bumped into its neighbour; now dragging its body far enough
+  leaps it over the other track into the free space on the far side (as long as
+  there's room), so moving an early track to play after a later one just works.
+- A new track's name now defaults to the file name **without its extension**
+  (e.g. "Summer Song" rather than "Summer Song.mp3").
+- Removing a track now selects the next one (or the previous one if it was the
+  last), so you can delete several in a row without re-selecting each time.
+- **The video's edge fades now take the music with them.** When Create Video's
+  Cover/Ending is None and a fade-in/fade-out is set, the background music
+  ramps in and out together with the picture instead of playing at full volume
+  through the fade and cutting off. A clip fading mid-video still leaves the
+  music untouched — only the video's own edges duck it.
+- **Fixed: music placement in tag-filtered videos.** Rendering with a tag
+  filter used to lay songs at the wrong times once the filter skipped clips;
+  the music now stays aligned with the clips it was placed over and skips
+  across the filtered-out stretches (resuming mid-song), the same way the
+  picture skips those days.
+- **Soundtrack robustness.** Deleting or re-dating clips no longer breaks the
+  songs placed around them: a song whose end clip goes away now ends on the
+  clip before it (instead of silently stretching to the end of the project),
+  a song whose span collapses stays visible and editable over its start clip
+  (instead of vanishing from the timeline while still being in the project),
+  and dragging one song onto a clip that already starts another snaps back
+  (instead of silently destroying it). Adding a song over such a clip now
+  explains why it can't, instead of doing nothing.
+
+## [1.19.0] - 2026-06-30
+
+- **Add music right in the day editor, as a bar under the clip.** The side-pane
+  "Soundtrack" status is gone; in its place a music bar sits directly beneath the
+  clip's own audio waveform (and under the photo for photo clips). When nothing
+  is playing over the clip it reads "＋ Add music" — click it, pick a song, and
+  it's laid over the clip (starting when the clip starts, ending when it ends)
+  with its waveform shown right there. Once music is on a picked clip the bar is
+  read-only and clicking it opens the Soundtrack window to fine-tune the timing,
+  span, or volume.
+- **You can now add music while reviewing an "available" clip**, before adding it
+  to the day — just like trimming or cropping. Preview Trim and Play both play
+  the video with the song mixed on top, so you can hear the combination first;
+  when you add the clip, the music comes with it. (A song added to a clip you
+  then skip without adding is cleaned up automatically.)
+
+## [1.18.1] - 2026-06-30
+
+- **Fixed: black video when previewing/exporting a range that a song spills out
+  of.** If a soundtrack song started inside the chosen range but was set to stop
+  on a clip *outside* it (e.g. a May song that ends on a June clip), previewing
+  just May played the audio over a black picture, while previewing everything
+  looked fine. The song was being laid down a few milliseconds past the end of
+  the last video, which left the rendered video "uncovered" at the very end and
+  turned the whole picture black. Songs are now trimmed exactly to the end of
+  the video, so the range previews and exports correctly.
+
+## [1.18.0] - 2026-06-30
+
+- **Day window: music moves to the Soundtrack timeline.** The clip editor no
+  longer has inline audio controls. Instead it shows a read-only **Soundtrack**
+  status — which song plays over the current clip, and whether it starts here or
+  carries in from an earlier day — and a button to jump to the Soundtrack window
+  to make changes. When a clip has no music, **Add Music…** lets you pick a file:
+  it's placed starting on that clip and the Soundtrack timeline opens on that day
+  with the new song selected, ready to position. All timing, volume, and
+  start/stop editing now lives in one place — the Soundtrack window.
+
+## [1.17.4] - 2026-06-30
+
+- **Soundtrack timeline: bigger clip thumbnails.** The clip strip is 50%
+  taller so thumbnails are easier to make out, each clip now has rounded
+  corners, and the "Clips"/"Audio" row captions (redundant once you've used it
+  once) are gone.
+
+## [1.17.3] - 2026-06-30
+
+- **Soundtrack opens where you're already looking.** The Soundtrack window now
+  lands on the same stretch of time the main window is showing: open it from the
+  calendar on May 2026 and it scrolls to May 2026; open it from the timeline
+  scrolled to a particular day and it scrolls to around that day, instead of
+  always jumping to the last-viewed calendar month.
+
+## [1.17.2] - 2026-06-30
+
+- **Soundtrack timeline: much faster on big projects.** Opening the Soundtrack
+  on a project with thousands of clips no longer hangs on a spinner, and
+  scrolling/zooming is smooth again. The timeline now only builds (and decodes
+  thumbnails for) the clips actually scrolled into view instead of the whole
+  project at once, skips thumbnails for slivers too thin to show one, and
+  caches the timeline layout and day/month grid so they aren't recomputed on
+  every scroll frame.
+
+## [1.17.1] - 2026-06-30
+
+- **Soundtrack timeline: clearer month boundaries.** Added a month-name row
+  above the day numbers (the day row now just shows the day number). The month
+  name stays in view as you scroll — as long as any of a month's days are on
+  screen, its name is too. A full-height line divides one month from the next,
+  while the lighter day separators stop just below the month name, and thin
+  rules underline both header rows.
+
+## [1.17.0] - 2026-06-29
+
+- **New: lay audio tracks over your clips.** In the clip editor (video or
+  photo) you can now **Add Audio…** — pick an mp3, wav, m4a, etc. — to play a
+  song or sound over a clip in the rendered video. The audio **mixes** with the
+  clip's own sound and **plays on its own over photos** (which are silent).
+  - **Start offset:** choose when the audio begins relative to the clip — `0`
+    plays them together, a **positive** value starts it later (silence first),
+    a **negative** value means the song is already partway in when the clip
+    begins.
+  - **Spanning multiple clips:** set a track to play for *Multiple clips* and it
+    keeps going across the following clips. To stop it, open a later clip and
+    click **"End audio here."** If the file is shorter than the span, it plays
+    once and then goes silent (no looping).
+  - **Volume:** each audio track has its own 0–400% level (boosts above 100% are
+    only audible in the saved file, like clip volume).
+  - Audio files are copied into a new **`Audio/`** folder in the project, and
+    are cleaned up when the clip using them is deleted. Back up `Audio/`
+    alongside `Clips/`.
+- **New: a Soundtrack timeline.** A new **Soundtrack** toolbar button opens a
+  timeline of your clips laid end-to-end, with an audio lane beneath. Click an
+  empty part of the lane to add a song; drag a song to reposition it, drag its
+  right edge to set where it stops and its left edge where it starts. Songs
+  never overlap, and what you see is exactly what renders. Zoom in/out and
+  preview the month from the same window.
+
 ## [1.16.1] - 2026-06-29
 
 - **Fixed: cropping a Live Photo's still could save it as an unplayable

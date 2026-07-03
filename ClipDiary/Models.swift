@@ -325,6 +325,103 @@ struct CropRect: Codable, Equatable, Hashable {
     var isFull: Bool { self == .full }
 }
 
+/// A music/audio track laid over the rendered video, attached to a **start
+/// clip** (`Clip.audio`). Its file is copied into the project's `Audio/`
+/// subfolder. It mixes with the underlying clips' own audio and plays alone over
+/// silent photos. It can play over just its start clip, or span following clips
+/// (in render order) until a later clip caps it. Played once — when the file is
+/// shorter than the span, the tail is silent (no loop).
+struct AudioTrack: Codable, Equatable, Hashable {
+    var id: UUID = UUID()
+    /// File name inside the project's `Audio/` subfolder (we copy imports there).
+    var fileName: String
+    /// The song's display name, defaulting to the picked file's name without its
+    /// extension (e.g. "Summer Song"), shown in place of the generated `fileName`
+    /// and editable in the Soundtrack window. Empty → fall back to `fileName`
+    /// (tracks made before this field carry no display name).
+    var displayName: String = ""
+    /// Where the audio starts relative to the start clip's beginning, in
+    /// seconds. **Positive** delays it (silence over the clip's first `offset`
+    /// seconds); **negative** means the file is already `|offset|` seconds in
+    /// when the clip begins (skip into the file). The file's t=0 is placed on the
+    /// timeline at `startClipStart + offsetSeconds`.
+    var offsetSeconds: Double = 0
+    /// Where the track stops, in the project's global render order
+    /// (`date` then `createdAt`):
+    /// - `== ` the start clip's id → plays only over the start clip;
+    /// - `nil` → open-ended: plays forward until the file ends or the render ends;
+    /// - any other clip's id → plays through that clip's segment, then stops.
+    /// A stale reference — the end clip deleted, or re-dated before the start
+    /// clip — collapses the span to the start clip at render
+    /// (`TimelineLayout.audibleSpan`), so the track neither silently swallows
+    /// the rest of the timeline nor vanishes from the Soundtrack lane.
+    var endClipID: UUID? = nil
+    /// Where inside the **end clip** the audio stops, in seconds from that clip's
+    /// start. `nil` → it plays through the end clip's full segment. Set by the
+    /// Soundtrack timeline so an end can
+    /// fall mid-clip — letting a drag keep the song's exact length instead of
+    /// snapping to a clip boundary. Ignored when `endClipID` is nil; clamped to
+    /// the end clip's current length at render (a re-trim can shorten the clip
+    /// after this was measured).
+    var endWithinSeconds: Double? = nil
+    /// Trim into the audio file, in seconds: how much of the file's head is
+    /// cut, i.e. the file time heard at the track's audible start (0 = the
+    /// song plays from its top). Set by the Soundtrack inspector's trim bar.
+    /// This picks *which part of the file* plays; `offsetSeconds` picks
+    /// *where on the timeline* it starts — the two together let a song start
+    /// mid-clip AND mid-file. Tracks from before this field express the same
+    /// idea as a negative `offsetSeconds`; read `fileInPoint`, which folds
+    /// both together.
+    var fileStartSeconds: Double = 0
+    /// The track's own playback level, 1.0 = 100% (0 mutes, up to 4.0 = 400%),
+    /// mirroring `Clip.volume`.
+    var volume: Double = 1.0
+    /// Optional fade in / out of the audio itself.
+    var transition = SegmentTransition()
+    /// The audio file's full length in seconds, measured once when the file is
+    /// copied into `Audio/` (the copy is never modified afterwards). Lets the
+    /// main-actor store cap a track's span by where the song actually runs out
+    /// without opening the asset (`activeAudio(over:)`, the lane before its
+    /// async duration load lands). `nil` = unknown (tracks from before this
+    /// field, or the measurement failed) — consumers then skip the cap, as
+    /// before.
+    var fileDurationSeconds: Double? = nil
+
+    /// What to show in the UI: the original name when known, else the stored file.
+    var label: String { displayName.isEmpty ? fileName : displayName }
+
+    /// The effective trim-in point: `fileStartSeconds` plus the legacy
+    /// negative-offset skip. Every consumer that maps span time → file time
+    /// (exporter, previews, the Soundtrack lane and trim bar) starts the file
+    /// here at the audible start.
+    var fileInPoint: Double { fileStartSeconds + max(0, -offsetSeconds) }
+
+    enum CodingKeys: String, CodingKey {
+        case id, fileName, displayName, offsetSeconds, endClipID, endWithinSeconds,
+             fileStartSeconds, volume, transition, fileDurationSeconds
+    }
+}
+
+extension AudioTrack {
+    // Declared in an extension so the compiler still synthesizes the memberwise
+    // init (the pattern `Clip` uses below). Every field decoded with
+    // `decodeIfPresent` so a track stored before a field existed (e.g.
+    // `displayName`) loads without migration.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        fileName = try c.decode(String.self, forKey: .fileName)
+        displayName = try c.decodeIfPresent(String.self, forKey: .displayName) ?? ""
+        offsetSeconds = try c.decodeIfPresent(Double.self, forKey: .offsetSeconds) ?? 0
+        endClipID = try c.decodeIfPresent(UUID.self, forKey: .endClipID)
+        endWithinSeconds = try c.decodeIfPresent(Double.self, forKey: .endWithinSeconds)
+        fileStartSeconds = try c.decodeIfPresent(Double.self, forKey: .fileStartSeconds) ?? 0
+        volume = try c.decodeIfPresent(Double.self, forKey: .volume) ?? 1.0
+        transition = try c.decodeIfPresent(SegmentTransition.self, forKey: .transition) ?? SegmentTransition()
+        fileDurationSeconds = try c.decodeIfPresent(Double.self, forKey: .fileDurationSeconds)
+    }
+}
+
 /// One video clip or photo assigned to a calendar day.
 struct Clip: Identifiable, Codable, Equatable, Hashable {
     var id: UUID = UUID()
@@ -385,6 +482,10 @@ struct Clip: Identifiable, Codable, Equatable, Hashable {
     /// 0 mutes; values above 1 boost the volume (the editor caps it at 4.0 =
     /// 400%). Videos only — photos are silent, so it's ignored for them.
     var volume: Double = 1.0
+    /// An optional music/audio track attached to this clip as its **start**.
+    /// It mixes with the clips' own audio and can span following clips — see
+    /// `AudioTrack`. nil = no overlaid audio.
+    var audio: AudioTrack? = nil
 
     var trimmedDuration: Double { max(0, outSeconds - inSeconds) }
 
@@ -410,7 +511,7 @@ struct Clip: Identifiable, Codable, Equatable, Hashable {
     enum CodingKeys: String, CodingKey {
         case id, fileName, date, inSeconds, outSeconds, durationSeconds, createdAt,
              tags, kind, crop, cardID, showsDateOverlay, caption, sourcePath,
-             sourceHash, sourceBytes, transition, volume
+             sourceHash, sourceBytes, transition, volume, audio
     }
 }
 
@@ -436,7 +537,18 @@ extension Clip {
         sourceBytes = try container.decodeIfPresent(Int64.self, forKey: .sourceBytes)
         transition = try container.decodeIfPresent(SegmentTransition.self, forKey: .transition) ?? SegmentTransition()
         volume = try container.decodeIfPresent(Double.self, forKey: .volume) ?? 1.0
+        audio = try container.decodeIfPresent(AudioTrack.self, forKey: .audio)
     }
+}
+
+/// An audio track playing over a clip that it didn't start on — the owning
+/// (start) clip paired with its track. Identified by the track so the editors'
+/// music bar (`ClipMusicLane`) can list several. Returned by
+/// `LibraryStore.activeAudio(over:)`.
+struct ActiveAudioRef: Identifiable {
+    let track: AudioTrack
+    let startClip: Clip
+    var id: UUID { track.id }
 }
 
 /// The 1SE-style date stamp rendered into the bottom-left corner of the

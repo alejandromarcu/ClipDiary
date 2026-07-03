@@ -21,6 +21,10 @@ struct ContentView: View {
     @State private var showSettingsSheet = false
     @Environment(\.openWindow) private var openWindow
     @State private var tagFilter: String?
+    /// The timeline's topmost visible day, tracked while in timeline mode so the
+    /// Soundtrack opens on the same stretch of time the timeline is scrolled to.
+    /// Not persisted (unlike `displayedMonth`); nil until the timeline reports.
+    @State private var timelineTopDay: Date?
     @State private var showMonthPicker = false
     @State private var pickerYear = Calendar.current.component(.year, from: Date())
 
@@ -75,7 +79,8 @@ struct ContentView: View {
                 weekdayHeader
                 calendarGrid
             case .timeline:
-                TimelineBody(displayedMonth: displayedMonth, tagFilter: tagFilter) { clip in
+                TimelineBody(displayedMonth: displayedMonth, tagFilter: tagFilter,
+                             topVisibleDay: $timelineTopDay) { clip in
                     openWindow(value: ReviewRequest(day: clip.date, startClipID: clip.id))
                 }
             }
@@ -135,6 +140,22 @@ struct ContentView: View {
                     Label("Cards", systemImage: "rectangle.on.rectangle.angled")
                 }
                 .help("Design and manage title cards (covers, endings, captioned slides)")
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    // Timeline mode → the day it's scrolled to; calendar mode
+                    // (or the timeline before it's reported) → the start of the
+                    // displayed month. Either way the soundtrack opens on the
+                    // same stretch of time the main window is showing.
+                    let monthStart = calendar.dateInterval(of: .month, for: displayedMonth)?.start
+                        ?? displayedMonth
+                    let anchor = viewMode == .timeline ? (timelineTopDay ?? monthStart) : monthStart
+                    openWindow(value: SoundtrackRequest(anchorDate: anchor))
+                } label: {
+                    Label("Soundtrack", systemImage: "waveform")
+                }
+                .help("Lay background music over the clips on a timeline")
+                .disabled(!store.hasClips())
             }
             ToolbarItem(placement: .primaryAction) {
                 Button { showRenderSheet = true } label: {
@@ -587,6 +608,16 @@ struct DayCell: View {
 
 /// The Timeline: the calendar's sibling browsing view (toggled in the toolbar).
 /// One continuous scroll across the whole project — every day that has clips is
+/// Collects each rendered timeline day row's top edge (in the scroll view's
+/// coordinate space) so `TimelineBody` can tell which day is scrolled to the top.
+/// Only rows currently in the lazy stack contribute, so there are no stale entries.
+private struct TimelineDayTopKey: PreferenceKey {
+    static let defaultValue: [Date: CGFloat] = [:]
+    static func reduce(value: inout [Date: CGFloat], nextValue: () -> [Date: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: { $1 })
+    }
+}
+
 /// a row of that day's clip thumbnails, grouped under sticky month headers.
 /// Clicking a clip opens the day editor with that clip selected.
 struct TimelineBody: View {
@@ -594,10 +625,18 @@ struct TimelineBody: View {
     /// The month the calendar is on, so the timeline opens scrolled there.
     let displayedMonth: Date
     var tagFilter: String?
+    /// Reports the topmost day currently scrolled into view (so the Soundtrack
+    /// can open on the same stretch of time). Updated only when the day changes.
+    @Binding var topVisibleDay: Date?
     /// Clicking a clip — opens the day window on it.
     var onOpenClip: (Clip) -> Void
 
     private var calendar: Calendar { Calendar.current }
+
+    /// Coordinate space the day rows measure themselves against, so their
+    /// scroll-relative position (used to find the topmost visible one) is
+    /// independent of window insets.
+    private static let scrollSpace = "timeline-scroll"
 
     /// One month's section in the Timeline. A `String` id keeps a section's
     /// identity from colliding with a day row's `Date` id — a month's first
@@ -642,12 +681,31 @@ struct TimelineBody: View {
                                 ForEach(section.days, id: \.self) { day in
                                     TimelineDayRow(day: day, tagFilter: tagFilter,
                                                    onOpenClip: onOpenClip)
+                                        // Each row near the pinned header reports
+                                        // its top edge relative to the scroll
+                                        // view; the reducer below picks the one
+                                        // sitting at the top. Rows far from the
+                                        // header report nothing, so the per-frame
+                                        // preference merge handles a couple of
+                                        // entries, not every rendered row.
+                                        .background(
+                                            GeometryReader { geo in
+                                                let y = geo.frame(in: .named(Self.scrollSpace)).minY
+                                                Color.clear.preference(
+                                                    key: TimelineDayTopKey.self,
+                                                    value: abs(y - Self.headerLine) < 600 ? [day: y] : [:])
+                                            }
+                                        )
                                 }
                             } header: {
                                 TimelineMonthHeader(month: section.start, tagFilter: tagFilter)
                             }
                         }
                     }
+                }
+                .coordinateSpace(name: Self.scrollSpace)
+                .onPreferenceChange(TimelineDayTopKey.self) { tops in
+                    updateTopVisibleDay(from: tops)
                 }
                 .onAppear {
                     // Land near the month the calendar was on. Pinned headers can
@@ -658,6 +716,23 @@ struct TimelineBody: View {
                 }
             }
         }
+    }
+
+    /// ~ pinned month-header height: the y the "top" day row sits under.
+    private static let headerLine: CGFloat = 44
+
+    /// Picks the topmost visible day from the near-header rows' scroll-relative
+    /// top edges and reports it up (only on change). The day sitting under the
+    /// pinned month header is the one whose top is the largest value still
+    /// at/above the header line; if none has reached it yet, the nearest
+    /// upcoming row. An empty report (nothing near the header mid-fling) keeps
+    /// the last known day.
+    private func updateTopVisibleDay(from tops: [Date: CGFloat]) {
+        guard !tops.isEmpty else { return }
+        let reached = tops.filter { $0.value <= Self.headerLine }
+        let day = (reached.max(by: { $0.value < $1.value })
+                   ?? tops.min(by: { $0.value < $1.value }))?.key
+        if let day, day != topVisibleDay { topVisibleDay = day }
     }
 
     /// The id of the month section to open on: the one containing

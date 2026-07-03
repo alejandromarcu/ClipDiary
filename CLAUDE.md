@@ -17,10 +17,13 @@ Deliberate improvements over 1SE:
 - `ClipDiaryApp.swift` — app entry, injects `LibraryStore` as environment
   object. File-menu commands (replacing `.newItem`): New Project… (⌘N), Open
   Project… (⇧⌘O — plain ⌘O is the trim editor's Set Out), Open Recent ▸ submenu
-  + Clear Menu.
+  + Clear Menu. Declares the windows: the main calendar, plus value-keyed
+  WindowGroups for Preview (`PreviewRequest`), the day window (`ReviewRequest`),
+  and the **Soundtrack** timeline (`SoundtrackRequest`), and id-keyed Cards /
+  Keyboard Shortcuts windows.
 - `Models.swift` — `Clip` struct (id, fileName, date, inSeconds, outSeconds,
   durationSeconds, createdAt, tags, kind, crop, cardID, sourcePath, sourceHash,
-  sourceBytes) + date/time helpers. (`id` is a random `UUID`, not a content
+  sourceBytes, audio) + date/time helpers. (`id` is a random `UUID`, not a content
   hash.) A clip is a video or a photo (`ClipKind`); photos store their
   display duration in durationSeconds/outSeconds and an optional `CropRect`
   (unit coords, top-left origin). A clip with `cardID` set is a **live
@@ -32,7 +35,23 @@ Deliberate improvements over 1SE:
   deduped case-insensitively. `sourcePath` records which source-folder file a
   clip was picked from: clips picked twice from one source (two segments of a
   long video) **share one copied media file**, so `delete` only removes the
-  file when the last clip referencing it goes. `sourceHash` (lowercase-hex
+  file when the last clip referencing it goes. A clip may also carry an optional
+  `AudioTrack` (`audio`): a music/audio file (copied into the project's `Audio/`
+  folder, keeping its original name in `displayName` for the editor) laid over
+  the video — with an `offsetSeconds` (± relative to the clip
+  start), a `fileStartSeconds` **trim into the file** (where in the song
+  playback starts; read via `fileInPoint`, which folds in the legacy
+  negative-offset skip), its own `volume`/`transition`, the file's measured
+  length (`fileDurationSeconds`, recorded when the file is copied in — nil on
+  older tracks), and an `endClipID`
+  marking how far it
+  spans in render order (`==` the start clip = this clip only; `nil` =
+  open-ended; another clip id = ends after that clip — a stale reference from a
+  later delete/re-date collapses the span to the start clip via
+  `TimelineLayout.audibleSpan`). It mixes with the clip's
+  own audio and plays alone over silent photos. `ActiveAudioRef` pairs a
+  spanning track with its start clip for the editors' music bar.
+  `sourceHash` (lowercase-hex
   SHA-256 of the copied media bytes) + `sourceBytes` (file size) are recorded at
   pick/import time so the project can be rebuilt by content if `Clips/` is lost
   — see "Backup / reconstruction" below. Also `ProjectSettings`
@@ -69,7 +88,29 @@ Deliberate improvements over 1SE:
   ProjectPanel(store:)` are the shared NSSavePanel/NSOpenPanel flows used by both
   the File menu and the welcome screen. Copies imported media into the project's
   `Clips/`, generates cached thumbnails via `AVAssetImageGenerator` (videos) or
-  ImageIO (photos). `importMedia` routes by UTType. Imported clips default to the recording
+  ImageIO (photos). A parallel `Audio/` subfolder holds copied audio-track files
+  (`audioURL(for:)`); `copyAudioFile(from:)` copies a user-picked file in (the
+  editor then sets the `AudioTrack` on its clip draft), `pruneUnusedAudioFile`
+  deletes it when no clip references it (also from `delete`, which additionally
+  re-anchors any track *ending* on the deleted clip to the clip before it),
+  `setAudioTrack`/`moveAudioTrack`
+  set/clear/relocate a block (the Soundtrack timeline; a move refuses to land
+  on a clip that already starts another song), and `activeAudio(over:)`
+  lists the tracks playing over a clip (by global render order, capped by each
+  track's recorded file length so a song isn't claimed past where it runs out)
+  for the editors' music bar. `timelineLayout()` (+ `orderedClips`) is the
+  **shared source of truth**
+  for where each clip sits on the rendered timeline (seconds), used by both the
+  exporter's audio positioning and the Soundtrack view so the lane is WYSIWYG;
+  its `audibleSpan(of:startingOn:)` resolves a track's placed span (offset +
+  end reference, stale references repaired), and its `tracks` lists every
+  placement so resolved — clamped so no span overlaps the next (the safety net
+  for degenerate data left by later clip edits) — the one placement list the
+  exporter, the lane, and `activeAudio` all consume. Decoded song waveforms +
+  durations are memoized per file (`audioWaveform(for:buckets:)` — the files in
+  `Audio/` are immutable), and `discardDraftAudio(of:)` is the one cleanup the
+  editors call when a review draft that picked up music is discarded.
+  `importMedia` routes by UTType. Imported clips default to the recording
   date (video creationDate / photo EXIF DateTimeOriginal, fallback file
   creation date). Also home of `loadOrientedCGImage` (EXIF orientation baked
   in — crop coords are always relative to the oriented image). Owns the
@@ -155,7 +196,16 @@ Deliberate improvements over 1SE:
 - `TrimView.swift` — `TrimEditor` (the video editor), plus the shared pieces:
   `LiveEditBuffer` (lets the day window flush an editor's in-flight edit before
   Preview Day, since editors only persist on disappear), `TagRow` (tag chips +
-  new-tag field + reuse menu), `DayPickerField`, `ReviewItemInfo`/
+  new-tag field + reuse menu), `ClipMusicLane` (the **music bar** both editors
+  draw under the clip's own waveform / the photo: empty it's a dashed "＋ Add
+  music" button — pick a file and a this-clip-only track is laid over the clip,
+  via the store for a picked clip or onto the draft's `audio` in review; filled
+  it shows the track's waveform **read-only** — clicking opens the Soundtrack
+  window, where all fine-tuning lives — and a track spanning in from an earlier
+  clip (`store.activeAudio(over:)`) shows read-only too. A review draft gets a
+  ✕ to drop its track instead, and its orphaned `Audio/` copy is pruned on
+  revert/skip; `TrimEditor` also previews the song over Play/Preview Trim with
+  a synced `AVAudioPlayer`), `DayPickerField`, `ReviewItemInfo`/
   `ReviewItemHeader`, `ResizablePaneDivider` (drag-resizes the side pane), and
   `TrimSlider` (filmstrip of 10 thumbnails with draggable yellow in/out handles,
   min gap 0.1s). Set In/Set Out buttons (⌘I/⌘O) mark trim points at the current
@@ -176,6 +226,51 @@ Deliberate improvements over 1SE:
   controls (only the display duration is editable), and offers an **"Edit Card…"**
   button that presents `CardEditorView` for the referenced card (re-rendering the
   preview on close).
+- `SoundtrackView.swift` — `SoundtrackView` (+ `SoundtrackRequest`), the
+  background-audio **timeline** window opened from the calendar's Soundtrack
+  toolbar button. Lays the project's clips on a horizontal time axis (widths ∝
+  `LibraryStore.TimelineLayout.duration`, scrolled to the anchor month, zoomable)
+  with an audio lane beneath. Each `clip.audio` is a draggable block (positions
+  come from `store.timelineLayout()`, identical to what the exporter renders):
+  click an empty lane spot to add a file (`store.copyAudioFile` +
+  `setAudioTrack`), drag the body to reposition (`moveAudioTrack` reassigns the
+  start clip + offset), drag the right edge to set the stop, the
+  left edge to set the start. Edge-resize drags clamp to the immediate neighbour
+  (`neighborBounds`) so a track can't overlap the next, but a **body drag can leap
+  over neighbours** into any free gap big enough to hold it (`freeGaps` picks the
+  gap whose nearest fitting start is closest to the drag, flipping to the far
+  side past the midpoint) — so dragging one track past another **reorders** it.
+  Below the timeline a **track list** (`Table`, `TrackInspector`) lists every
+  track in play order with its start day, **Used** length (its span here) and
+  **Total** length (the audio file's full duration); selecting a row is the same
+  `selected` the lane highlights (and `revealTrack` scrolls it into view if
+  off-screen), so the table is a jump-between-tracks navigator. The selected
+  track's side inspector renames it (a committed `displayName` draft), shows
+  "Plays used of total", sets its volume, removes it, **trims it** — a
+  full-file waveform with a draggable yellow window (`AudioTrimBar`, the video
+  trim slider's idiom): the left edge trims where the song starts (its
+  timeline start moves with it, so kept content stays put against the
+  picture), the right edge where it stops, and dragging the window's body
+  slides *which part* of the file plays without moving the block
+  (`applyTrim`, writing `fileStartSeconds` via `moveAudioTrack`; edge drags
+  clamp to the neighbour slacks). The bar **zooms** (−/+ buttons, ×2 steps to
+  64×) into a horizontal scroll that re-centers on the window each step, since
+  a short window on a long song is otherwise only a few pixels wide; narrow
+  windows also move the yellow handles *outside* the square so its whole body
+  stays a slide target. A **Listen** button plays just the windowed
+  part (`AVAudioPlayer` + a stop-at-end timer, with a playhead in the bar).
+  The inspector also offers **Restore Full
+  Length** (`restoreFullLength`: extends the track's end back to its whole file
+  *and resets the trim-in point*,
+  clamped to the next track / timeline end, returning a warning when a following
+  track cut it short). A Preview button renders **the days scrolled into view**
+  (`visibleDayRange`: viewport metrics → grid days → a `.custom` day span, edge
+  days included whole) in `PreviewWindow`, its label naming the span live — so
+  scrolling picks where and zoom picks how much gets previewed.
+  A track whose file is missing/unreadable still draws (uncapped) so it stays
+  selectable and removable; errors from interactions here alert over this
+  window, not the calendar. Waveforms come from the store's memoized
+  `audioWaveform(for:buckets:)`; thumbnails reuse `store.thumbnail(for:)`.
 - `MashImport.swift` — "Import 1SE Video": splits a mashed 1 Second Everyday
   export into per-day clips by OCR'ing (Vision) the date stamp burned into
   the bottom-left corner ("MAR 03 2026"). Coarse 0.3s sampling pass, then
@@ -233,6 +328,30 @@ Deliberate improvements over 1SE:
   stamp to 0 — each skipped if that clip already fades itself. The `audioMix`
   and the date `dateOverlays`' fade fields carry the same spans so preview and
   export stay in sync (the preview dims its SwiftUI stamp over the same ranges).
+  After the clip loop (which records each clip's placed `segmentByClipID`
+  range), an **audio-track pass** lays each `clip.audio` onto its *own*
+  composition audio track — so it mixes with the clips' own audio and keeps
+  playing over silent photo segments. Positions come from
+  `store.timelineLayout()` — the **project-wide global render order** (all clips,
+  durations from metadata, photos floored to 0.5s), shared with the Soundtrack
+  view — not just the clips in this render: each track's span comes from the
+  layout's resolved `tracks` (offset + end reference, stale references
+  repaired, overlapping spans clamped). The rendered clips are grouped into
+  globally-contiguous **runs** —
+  a plain range render is one run; a tag filter (or a failed insert) splits
+  them — and each run maps global→local time with its own constant, every
+  fragment clamped inside its run's actual CMTime range (Double↔CMTime drift
+  otherwise leaves the composition's tail uncovered → black picture). So **a
+  track that started on an earlier day/month is picked up mid-file** (a
+  single-day "Preview Day" included), a track spanning a filtered-out gap cuts
+  and resumes mid-file like the picture does, and only songs whose span
+  overlaps a run get their asset opened at all. A negative offset skips into
+  the file; it plays once (silent tail if the file is shorter than the span).
+  Every placed song gets an `AVMutableAudioMixInputParameters` envelope
+  (volume, its own fades at its true start/end — and the render's bookend
+  fade-in/out ramps the music with the picture; a clip fading mid-video
+  doesn't), folded into the same `audioMix`. Preview and export need no
+  further work — `MonthComposition.audioMix` already flows to both.
 
 ## Conventions & constraints
 
@@ -323,12 +442,13 @@ source-folder counterpart — 1SE imports (re-encoded per-day MP4s) and one-off
 `importMedia` files — store a hash for integrity but can't be reconstructed.
 **Card clips** (`cardID` set) have no media bytes at all (no `sourceHash`):
 they render from the card document under `Cards/<id>/`, so backing up the
-`Cards/` folder alongside `clips.json` preserves them.
+`Cards/` folder alongside `clips.json` preserves them. **Audio tracks**
+(`clip.audio`) reference copied files in the project's `Audio/` folder (no
+`sourceHash` either), so back up `Audio/` alongside `Clips/`.
 
 ## Roadmap ideas (not yet built)
 
 - Drag-and-drop video files directly onto a calendar day.
 - Keyboard nudging of trim handles (arrow keys, frame-by-frame).
-- Background music track for the monthly export.
 - Year view and a "best of the year" export.
 
