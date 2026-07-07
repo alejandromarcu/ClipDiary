@@ -608,8 +608,12 @@ func formatTime(_ seconds: Double) -> String {
 }
 
 /// Coarse `m:ss` length (no fractional seconds) for at-a-glance totals like
-/// a calendar day's available footage.
+/// a calendar day's available footage; totals of an hour or more read as
+/// `h:mm:ss` instead of an unbounded minute count.
 func formatDurationShort(_ seconds: Double) -> String {
     let total = Int(max(0, seconds).rounded())
+    if total >= 3600 {
+        return String(format: "%d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60)
+    }
     return String(format: "%d:%02d", total / 60, total % 60)
 }

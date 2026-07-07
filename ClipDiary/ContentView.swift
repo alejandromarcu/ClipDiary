@@ -249,9 +249,20 @@ struct ContentView: View {
                     .padding(.horizontal, 8).padding(.vertical, 3)
                     .background(Capsule().fill(.yellow.opacity(0.25)))
             }
+            let monthClips = store.clips(inMonthOf: displayedMonth, taggedWith: tagFilter)
+            if !monthClips.isEmpty {
+                let total = monthClips.reduce(0) { $0 + $1.trimmedDuration }
+                statChip("Picked") {
+                    Label("\(monthClips.count) clips · \(formatDurationShort(total))",
+                          systemImage: "film")
+                        .monospacedDigit()
+                }
+                .help("Clips picked this month and their total running time")
+            }
+
             let avail = store.availability(inMonthOf: displayedMonth)
             if !avail.isEmpty {
-                HStack(spacing: 10) {
+                statChip("To review") {
                     if avail.videoCount > 0 {
                         Label("\(avail.videoCount) · \(formatDurationShort(avail.videoDuration))",
                               systemImage: "video.fill")
@@ -261,19 +272,24 @@ struct ContentView: View {
                         Label("\(avail.photoCount)", systemImage: "photo.fill")
                     }
                 }
-                .font(.callout)
-                .foregroundStyle(.secondary)
                 .help("Photos and videos available to review this month, from your source folders")
-                Divider().frame(height: 16)
             }
-
-            let monthClips = store.clips(inMonthOf: displayedMonth, taggedWith: tagFilter)
-            let total = monthClips.reduce(0) { $0 + $1.trimmedDuration }
-            Text("\(monthClips.count) clips · \(formatTime(total))")
-                .foregroundStyle(.secondary)
-                .font(.callout.monospacedDigit())
         }
         .padding()
+    }
+
+    /// A labeled capsule for the month header's stats, so the number clusters
+    /// read at a glance instead of needing the tooltip to tell them apart.
+    private func statChip(_ title: String, @ViewBuilder content: () -> some View) -> some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 10) { content() }
+        }
+        .font(.callout)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 3)
+        .background(Capsule().fill(.quaternary.opacity(0.5)))
     }
 
     /// Popover for jumping straight to any month/year: ‹ year › arrows over a
@@ -324,7 +340,7 @@ struct ContentView: View {
     }
 
     private var weekdayHeader: some View {
-        let symbols = calendar.veryShortStandaloneWeekdaySymbols
+        let symbols = calendar.shortStandaloneWeekdaySymbols
         let ordered = Array(symbols[(calendar.firstWeekday - 1)...] + symbols[..<(calendar.firstWeekday - 1)])
         return HStack {
             ForEach(Array(ordered.enumerated()), id: \.offset) { _, symbol in
@@ -357,7 +373,11 @@ struct ContentView: View {
                                 )
                                 .environmentObject(store)
                             } else {
-                                Color(nsColor: .controlBackgroundColor).opacity(0.35)
+                                // Out-of-month padding: a faint gray wash over
+                                // the cell background so these read as grayed
+                                // out, not as empty days.
+                                Color(nsColor: .controlBackgroundColor)
+                                    .overlay(.quaternary)
                             }
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -516,12 +536,6 @@ struct DayCell: View {
                         Image(nsImage: thumbnail)
                             .resizable()
                             .scaledToFill()
-                            .overlay(
-                                LinearGradient(
-                                    colors: [.black.opacity(0.6), .clear, .black.opacity(0.55)],
-                                    startPoint: .top, endPoint: .bottom
-                                )
-                            )
                     }
                 }
             }
@@ -555,23 +569,27 @@ struct DayCell: View {
     }
 
 
-    /// Day number plus a badge for clips already picked on this day.
+    /// Day number plus a `count · length` badge for clips already picked on
+    /// this day. Scrim pills (rather than a full-width gradient over the
+    /// thumbnail) keep both legible on any photo.
     private var header: some View {
         HStack(alignment: .top) {
             Text("\(Calendar.current.component(.day, from: day))")
                 .font(.callout.bold())
                 .foregroundStyle(hasThumbnail ? .white : Color.primary)
+                .padding(.horizontal, hasThumbnail ? 6 : 0)
+                .padding(.vertical, hasThumbnail ? 1 : 0)
+                .background {
+                    if hasThumbnail { Capsule().fill(.black.opacity(0.55)) }
+                }
             Spacer()
-            if dayClips.count > 1 {
-                Text("\(dayClips.count)")
-                    .font(.caption2.bold())
+            if !dayClips.isEmpty {
+                let total = dayClips.reduce(0) { $0 + $1.trimmedDuration }
+                Text("\(dayClips.count) · \(formatDurationShort(total))")
+                    .font(.caption2.bold().monospacedDigit())
                     .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(Capsule().fill(.blue))
                     .foregroundStyle(.white)
-            } else if let first = dayClips.first {
-                Text(formatTime(first.trimmedDuration))
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(hasThumbnail ? .white.opacity(0.9) : .secondary)
             }
         }
     }
@@ -599,7 +617,14 @@ struct DayCell: View {
             .font(.caption2)
             .lineLimit(1)
             .minimumScaleFactor(0.7)
-            .foregroundStyle(hasThumbnail ? .white.opacity(0.95) : .secondary)
+            .foregroundStyle(hasThumbnail ? .white : .secondary)
+            .padding(.horizontal, hasThumbnail ? 5 : 0)
+            .padding(.vertical, hasThumbnail ? 2 : 0)
+            .background {
+                if hasThumbnail {
+                    RoundedRectangle(cornerRadius: 6).fill(.black.opacity(0.45))
+                }
+            }
         }
     }
 }
@@ -771,7 +796,7 @@ private struct TimelineMonthHeader: View {
             Text(month.formatted(.dateTime.month(.wide).year()))
                 .font(.title3.bold())
             Spacer()
-            Text("\(clips.count) clips · \(formatTime(total))")
+            Text("\(clips.count) clips · \(formatDurationShort(total))")
                 .foregroundStyle(.secondary)
                 .font(.callout.monospacedDigit())
         }
