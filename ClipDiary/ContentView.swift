@@ -27,6 +27,10 @@ struct ContentView: View {
     @State private var timelineTopDay: Date?
     @State private var showMonthPicker = false
     @State private var pickerYear = Calendar.current.component(.year, from: Date())
+    /// Keyboard selection on the calendar grid: arrow keys move it, Return
+    /// opens it. nil until the first arrow press (or a cell click) anchors it.
+    @State private var selectedDay: Date?
+    @FocusState private var calendarFocused: Bool
 
     private var calendar: Calendar { Calendar.current }
 
@@ -78,6 +82,21 @@ struct ContentView: View {
                 monthHeader
                 weekdayHeader
                 calendarGrid
+                    .focusable()
+                    .focusEffectDisabled()
+                    .focused($calendarFocused)
+                    .onMoveCommand(perform: moveSelection)
+                    .onKeyPress(.return) { openSelectedDay() }
+                    .onKeyPress(.escape) {
+                        guard selectedDay != nil else { return .ignored }
+                        selectedDay = nil
+                        return .handled
+                    }
+                    .onAppear {
+                        // Focus the grid once it exists so arrow keys work
+                        // right away (also on return from timeline mode).
+                        DispatchQueue.main.async { calendarFocused = true }
+                    }
             case .timeline:
                 TimelineBody(displayedMonth: displayedMonth, tagFilter: tagFilter,
                              topVisibleDay: $timelineTopDay) { clip in
@@ -230,6 +249,8 @@ struct ContentView: View {
     private var monthHeader: some View {
         HStack {
             Button { shiftMonth(by: -1) } label: { Image(systemName: "chevron.left") }
+                .keyboardShortcut(.leftArrow, modifiers: .command)
+                .help("Previous month (⌘←)")
             Button {
                 pickerYear = calendar.component(.year, from: displayedMonth)
                 showMonthPicker = true
@@ -242,6 +263,8 @@ struct ContentView: View {
             .help("Jump to any month or year")
             .popover(isPresented: $showMonthPicker, arrowEdge: .bottom) { monthYearPicker }
             Button { shiftMonth(by: 1) } label: { Image(systemName: "chevron.right") }
+                .keyboardShortcut(.rightArrow, modifiers: .command)
+                .help("Next month (⌘→)")
             Spacer()
             if let tagFilter {
                 Text("Tag: \(tagFilter)")
@@ -368,8 +391,12 @@ struct ContentView: View {
                                 DayCell(
                                     day: day,
                                     tagFilter: tagFilter,
+                                    isSelected: selectedDay.map { day.isSameDay(as: $0) } ?? false,
                                     onReview: { openWindow(value: ReviewRequest(day: day, focusSources: true)) },
-                                    onEdit: { openWindow(value: ReviewRequest(day: day)) }
+                                    onEdit: {
+                                        selectedDay = day
+                                        openWindow(value: ReviewRequest(day: day))
+                                    }
                                 )
                                 .environmentObject(store)
                             } else {
@@ -401,6 +428,36 @@ struct ContentView: View {
         if let newMonth = calendar.date(byAdding: .month, value: delta, to: displayedMonth) {
             displayedMonth = newMonth
         }
+    }
+
+    /// Arrow-key navigation: ←/→ step a day, ↑/↓ a week, following across
+    /// month edges. The first press only anchors the selection (today when
+    /// its month is shown, else the 1st) without moving it.
+    private func moveSelection(_ direction: MoveCommandDirection) {
+        guard let current = selectedDay else {
+            let today = Date().dayKey
+            selectedDay = today.isSameMonth(as: displayedMonth)
+                ? today
+                : calendar.dateInterval(of: .month, for: displayedMonth)?.start
+            return
+        }
+        let step: Int
+        switch direction {
+        case .left: step = -1
+        case .right: step = 1
+        case .up: step = -7
+        case .down: step = 7
+        @unknown default: return
+        }
+        guard let next = calendar.date(byAdding: .day, value: step, to: current) else { return }
+        selectedDay = next
+        if !next.isSameMonth(as: displayedMonth) { displayedMonth = next.dayKey }
+    }
+
+    private func openSelectedDay() -> KeyPress.Result {
+        guard let selectedDay else { return .ignored }
+        openWindow(value: ReviewRequest(day: selectedDay))
+        return .handled
     }
 
     /// Jump to the first day of the given year/month (used by the picker popover).
@@ -503,8 +560,11 @@ struct MashSource: Identifiable {
 
 struct DayCell: View {
     @EnvironmentObject var store: LibraryStore
+    @Environment(\.openWindow) private var openWindow
     let day: Date
     var tagFilter: String?
+    /// Keyboard selection: the calendar grid's arrow keys land here.
+    var isSelected = false
     /// Context-menu "Review Sources…": open the day window focused on its source
     /// media to add clips.
     var onReview: () -> Void
@@ -513,41 +573,66 @@ struct DayCell: View {
     var onEdit: () -> Void
 
     @State private var thumbnail: NSImage?
+    @State private var hovering = false
+    @State private var showClipsPopover = false
 
     private var dayClips: [Clip] { store.clips(on: day, taggedWith: tagFilter) }
     private var hasThumbnail: Bool { thumbnail != nil }
 
+    // A tap gesture rather than a whole-cell Button, so the badge and the
+    // hover ▶ can be real buttons inside the cell (child gestures win).
     var body: some View {
-        Button(action: onEdit) {
-            VStack(alignment: .leading, spacing: 0) {
-                header
-                Spacer(minLength: 2)
-                availabilityFooter
-            }
-            .padding(6)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            // The thumbnail goes in the background so a scaledToFill image
-            // can't stretch the cell — every cell sizes purely from its
-            // content, letting the grid split height evenly.
-            .background {
-                ZStack {
-                    Color(nsColor: .controlBackgroundColor)
-                    if let thumbnail {
-                        Image(nsImage: thumbnail)
-                            .resizable()
-                            .scaledToFill()
-                    }
-                }
-            }
-            .clipped()
-            .overlay {
-                if day.isSameDay(as: Date()) {
-                    Rectangle().stroke(Color.accentColor, lineWidth: 2)
-                }
-            }
-            .contentShape(Rectangle())
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            Spacer(minLength: 2)
+            availabilityFooter
         }
-        .buttonStyle(.plain)
+        .padding(6)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        // The thumbnail goes in the background so a scaledToFill image
+        // can't stretch the cell — every cell sizes purely from its
+        // content, letting the grid split height evenly.
+        .background {
+            ZStack {
+                Color(nsColor: .controlBackgroundColor)
+                if let thumbnail {
+                    Image(nsImage: thumbnail)
+                        .resizable()
+                        .scaledToFill()
+                }
+            }
+        }
+        .clipped()
+        .overlay {
+            if day.isSameDay(as: Date()) {
+                Rectangle().stroke(Color.accentColor, lineWidth: 2)
+            }
+            if isSelected {
+                Rectangle().fill(Color.accentColor.opacity(0.1))
+                Rectangle().stroke(Color.accentColor, lineWidth: 3)
+            } else if hovering {
+                Rectangle().stroke(Color.accentColor.opacity(0.5), lineWidth: 2)
+            }
+        }
+        .overlay(alignment: .bottomTrailing) {
+            if hovering, !dayClips.isEmpty {
+                Button {
+                    openWindow(value: PreviewRequest(
+                        range: .custom(start: day, end: day), tagFilter: tagFilter,
+                        includeBookends: false))
+                } label: {
+                    Image(systemName: "play.circle.fill")
+                        .font(.system(size: 20))
+                        .foregroundStyle(.white, .black.opacity(0.55))
+                }
+                .buttonStyle(.plain)
+                .padding(5)
+                .help("Preview this day's clips, stitched like the final video")
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onEdit)
+        .onHover { hovering = $0 }
         .contextMenu {
             // Both open the same day window, focused on picks vs. sources.
             Button(dayClips.isEmpty ? "Open Day…" : "Edit This Day…", action: onEdit)
@@ -585,13 +670,42 @@ struct DayCell: View {
             Spacer()
             if !dayClips.isEmpty {
                 let total = dayClips.reduce(0) { $0 + $1.trimmedDuration }
-                Text("\(dayClips.count) · \(formatDurationShort(total))")
-                    .font(.caption2.bold().monospacedDigit())
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Capsule().fill(.blue))
-                    .foregroundStyle(.white)
+                Button { showClipsPopover = true } label: {
+                    Text("\(dayClips.count) · \(formatDurationShort(total))")
+                        .font(.caption2.bold().monospacedDigit())
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Capsule().fill(.blue))
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                .help("See this day's clips")
+                .popover(isPresented: $showClipsPopover, arrowEdge: .bottom) {
+                    clipsPopover
+                }
             }
         }
+    }
+
+    /// The badge popover: the day's picked clips as a filmstrip, a peek
+    /// without opening the day window. Clicking a thumbnail jumps straight
+    /// to editing that clip.
+    private var clipsPopover: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(dayClips) { clip in
+                    Button {
+                        showClipsPopover = false
+                        openWindow(value: ReviewRequest(day: day, startClipID: clip.id))
+                    } label: {
+                        TimelineClipThumb(clip: clip)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(10)
+        }
+        .frame(width: min(CGFloat(dayClips.count) * 132 + 12, 566), height: 90)
+        .environmentObject(store)
     }
 
     /// What's still available to review for this day, from the source folders:

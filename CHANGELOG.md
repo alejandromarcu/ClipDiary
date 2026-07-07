@@ -7,6 +7,19 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.25.0] - 2026-07-07
+
+The calendar is now properly interactive:
+
+- **Hover a day** and it highlights, with a ▶ button to preview just that
+  day's clips stitched together — the same single-day preview the day
+  window offers, without opening it.
+- **Click a day's blue badge** to peek at its picked clips in a small
+  filmstrip; clicking a thumbnail jumps straight to editing that clip.
+- **Keyboard navigation**: arrow keys move a selection around the grid
+  (crossing into neighbouring months), Return opens the selected day,
+  Esc clears the selection, and ⌘← / ⌘→ flip months.
+
 ## [1.24.1] - 2026-07-07
 
 A readability pass over the month calendar:
