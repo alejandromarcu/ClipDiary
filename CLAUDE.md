@@ -16,7 +16,7 @@ Deliberate improvements over 1SE:
 
 - `ClipDiaryApp.swift` — app entry, injects `LibraryStore` as environment
   object. File-menu commands (replacing `.newItem`): New Project… (⌘N), Open
-  Project… (⇧⌘O — plain ⌘O is the trim editor's Set Out), Open Recent ▸ submenu
+  Project… (⇧⌘O — plain O is the trim editor's Set Out key), Open Recent ▸ submenu
   + Clear Menu. Declares the windows: the main calendar, plus value-keyed
   WindowGroups for Preview (`PreviewRequest`), the day window (`ReviewRequest`),
   and the **Soundtrack** timeline (`SoundtrackRequest`), and id-keyed Cards /
@@ -24,9 +24,11 @@ Deliberate improvements over 1SE:
 - `Models.swift` — `Clip` struct (id, fileName, date, inSeconds, outSeconds,
   durationSeconds, createdAt, tags, kind, crop, cardID, sourcePath, sourceHash,
   sourceBytes, audio) + date/time helpers. (`id` is a random `UUID`, not a content
-  hash.) A clip is a video or a photo (`ClipKind`); photos store their
-  display duration in durationSeconds/outSeconds and an optional `CropRect`
-  (unit coords, top-left origin). A clip with `cardID` set is a **live
+  hash.) A clip is a video or a photo (`ClipKind`); either kind may carry an
+  optional `CropRect` (unit coords, top-left origin, relative to the oriented
+  image/frame — photos crop in `PhotoCropView`, videos via the trim editor's
+  `CropOverlay`); photos store their
+  display duration in durationSeconds/outSeconds. A clip with `cardID` set is a **live
   reference to a designed card** (`isCard`): a `.photo` clip with no media file
   in `Clips/` — the card is rendered fresh from its current document for
   thumbnails/preview/export, so editing the card updates the placement (its
@@ -138,11 +140,13 @@ Deliberate improvements over 1SE:
   `motionURL` (+ its `duration`); the motion file is not surfaced as its own
   video, so a Live Photo counts as one photo, not a phantom extra video.
 - `ReviewView.swift` — `ReviewWindow`, the **day window** (one window does both
-  reviewing source media *and* editing the day's picked clips). A left
+  reviewing source media *and* editing the day's picked clips; its title
+  carries the weekday). A left
   **thumbnail rail** lists the day's content in two sections: *Picked* (the
   clips already added — click to edit, drag to reorder via `reorderClips`) and
   *Available* (`store.sourceItems(on:)`, each with an "Added ✓×n" badge via
-  `usageCount(of:)`). A `Selection` is `.clip(UUID)` or `.source(path)`:
+  `usageCount(of:)` and a capture-time badge). Section headers tally count +
+  total length (Picked = trimmed total, Available = source footage). A `Selection` is `.clip(UUID)` or `.source(path)`:
   selecting a clip shows `TrimEditor`/`PhotoEditor` in library mode, a source in
   review mode on a per-item draft. ↑/↓ navigate within the active section (the
   rail auto-scrolls to keep the selection visible); the source flow runs into
@@ -198,7 +202,7 @@ Deliberate improvements over 1SE:
   Preview Day, since editors only persist on disappear), `TagRow` (tag chips +
   new-tag field + reuse menu), `ClipMusicLane` (the **music bar** both editors
   draw under the clip's own waveform / the photo: empty it's a dashed "＋ Add
-  music" button — pick a file and a this-clip-only track is laid over the clip,
+  Track" button — pick a file and a this-clip-only track is laid over the clip,
   via the store for a picked clip or onto the draft's `audio` in review; filled
   it shows the track's waveform **read-only** — clicking opens the Soundtrack
   window, where all fine-tuning lives — and a track spanning in from an earlier
@@ -206,16 +210,28 @@ Deliberate improvements over 1SE:
   ✕ to drop its track instead, and its orphaned `Audio/` copy is pruned on
   revert/skip; `TrimEditor` also previews the song over Play/Preview Trim with
   a synced `AVAudioPlayer`), `DayPickerField`, `ReviewItemInfo`/
-  `ReviewItemHeader`, `ResizablePaneDivider` (drag-resizes the side pane), and
+  `ReviewItemHeader`, `ClipInfoHeader` (library mode's pane header: original
+  source file name, resolution/length/capture time, Reveal in Finder),
+  `PaneSectionLabel`, `ResizablePaneDivider` (drag-resizes the side pane),
+  `TrimRuler` (tick ruler under the filmstrip; the "Trim x of y" summary
+  overlays its right end), and
   `TrimSlider` (filmstrip of 10 thumbnails with draggable yellow in/out handles,
-  min gap 0.1s). Set In/Set Out buttons (⌘I/⌘O) mark trim points at the current
-  playback time. "Preview Trim" plays exactly the in→out segment using a periodic
+  min gap 0.1s; clicking or dragging anywhere else on the strip scrubs the
+  playhead there). Set In/Set Out buttons (plain I/O) mark trim points at the
+  current playback time — shown in a monospaced readout beside the play button —
+  and ⌥←/→ (in point) / ⌥⇧←/→ (out point) nudge a trim point by 0.1s. "Preview
+  Trim" plays exactly the in→out segment using a periodic
   time observer to pause at the out point. `TrimEditor` has two modes — library
   (auto-saves on disappear, can delete) and **review** (`sourceURL:` plays the
   original source file, `onAdd:` shows an "Add to Clips" ⌘↩ button handing back
   the configured draft) — both drawn in **one two-column layout**: media + trim
-  controls on the left, metadata/actions in the right side pane (the action is
-  Add in review, Delete in library). The day's reorder (drag clips) lives in the
+  controls on the left, metadata/actions in the right side pane, grouped
+  Details / Playback / Placement (the action is
+  Add in review, Delete in library — Delete asks for confirmation, in both
+  editors). The video's crop chrome stays faint until hovered
+  (`CropOverlay.subdueUntilHover`), and a cropped video wears a "Cropped ✕"
+  badge over the player that clears the crop when clicked (there is no
+  separate Reset Crop button). The day's reorder (drag clips) lives in the
   day window's rail, calling `LibraryStore.reorderClips`.
 - `PhotoView.swift` — `PhotoEditor` (crop, display-duration stepper, aspect
   lock picker Free/16:9/9:16, tags, date, delete) and `PhotoCropView`
@@ -319,7 +335,9 @@ Deliberate improvements over 1SE:
   since deleted is skipped). Per-
   segment `AVMutableVideoCompositionInstruction` aspect-fits each clip into
   the render size (handles preferredTransform / rotated iPhone video,
-  letterboxes mixed orientations). Exports MP4 via `AVAssetExportSession`,
+  letterboxes mixed orientations); a video's `crop` folds into the same
+  transform — only the crop sub-rectangle is fit — while photos bake theirs
+  in when rendered to a segment. Exports MP4 via `AVAssetExportSession`,
   highest quality, 30fps frameDuration. `buildComposition` also takes an
   optional `fadeInSeconds`/`fadeOutSeconds` (the per-period bookend fades, when
   no cover/ending card): the **fade-in** ramps the first clip's opacity up from
@@ -449,6 +467,5 @@ they render from the card document under `Cards/<id>/`, so backing up the
 ## Roadmap ideas (not yet built)
 
 - Drag-and-drop video files directly onto a calendar day.
-- Keyboard nudging of trim handles (arrow keys, frame-by-frame).
 - Year view and a "best of the year" export.
 

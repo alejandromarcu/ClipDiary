@@ -7,6 +7,41 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.24.0] - 2026-07-05
+
+A precision-and-polish pass over the day window:
+
+- **Click anywhere on the filmstrip to jump the playhead there** — no more
+  playing in real time (or 5-second skips) to reach a moment. Dragging scrubs
+  continuously; the yellow in/out handles still win when you grab them.
+- **A current-time readout** sits beside the play button, so Set In / Set Out
+  are precise instead of eyeballed. The in and out times are now labeled
+  ("In 0:22.21" / "Out 0:29.18") so the numbers read unambiguously.
+- **A time ruler under the filmstrip** gives the strip a time scale to aim
+  at; the "Trim x of y" summary moved down beside it, decluttering the
+  transport row.
+- **Nudge trim points from the keyboard**: ⌥←/→ moves the in point by 0.1s,
+  ⌥⇧←/→ the out point — for frame-tight cuts the filmstrip is too coarse
+  for. Listed in the Keyboard Shortcuts window.
+- **Deleting now asks first.** Delete Clip / Delete Photo / Delete Card show a
+  confirmation dialog — deleting was a single unrecoverable click before.
+- **Editing a picked clip now shows what it is**: the side pane header names
+  the original source file with its resolution, full length and capture time,
+  plus a Reveal in Finder link.
+- **The editors' side pane is grouped** into Details / Playback / Placement
+  sections instead of one flat stack of controls.
+- **The video crop box stays subtle until you hover it**, and a cropped video
+  wears a "Cropped ✕" badge — click it to clear the crop (replacing the old
+  Reset Crop button hidden at the bottom of the pane).
+- **The day rail tells time**: source thumbnails badge when each photo/video
+  was shot (e.g. "2:14 PM"), and the section headers tally total length —
+  Picked shows the day's contribution to the month video, Available the
+  footage left to review.
+- **Day window titles include the weekday** ("Tue, Jun 16, 2026") — it's a
+  diary, after all.
+- The editors' music bar is slimmer, and its empty state now reads
+  "＋ Add Track" — matching the Soundtrack window's terminology.
+
 ## [1.23.1] - 2026-07-02
 
 Robustness and speed fixes from the soundtrack feature's code review:

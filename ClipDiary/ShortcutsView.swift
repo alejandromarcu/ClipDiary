@@ -58,6 +58,10 @@ let shortcutGroups: [ShortcutGroup] = [
         ShortcutEntry(["P"], "Preview the trimmed in → out segment"),
         ShortcutEntry(["←"], "Skip back 5 seconds"),
         ShortcutEntry(["→"], "Skip forward 5 seconds"),
+        ShortcutEntry(["⌥", "←"], "Nudge the in point 0.1s earlier"),
+        ShortcutEntry(["⌥", "→"], "Nudge the in point 0.1s later"),
+        ShortcutEntry(["⌥", "⇧", "←"], "Nudge the out point 0.1s earlier"),
+        ShortcutEntry(["⌥", "⇧", "→"], "Nudge the out point 0.1s later"),
         ShortcutEntry(["⌘", "↩"], "Add the clip to the day"),
     ]),
     ShortcutGroup("Photo Editor", subtitle: "Editing a photo or card in the day window", [
