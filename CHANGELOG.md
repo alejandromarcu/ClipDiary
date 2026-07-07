@@ -7,6 +7,39 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.25.0] - 2026-07-07
+
+The calendar is now properly interactive:
+
+- **Hover a day** and it highlights, with a ▶ button to preview just that
+  day's clips stitched together — the same single-day preview the day
+  window offers, without opening it.
+- **Click a day's blue badge** to peek at its picked clips in a small
+  filmstrip; clicking a thumbnail jumps straight to editing that clip.
+- **Keyboard navigation**: arrow keys move a selection around the grid
+  (crossing into neighbouring months), Return opens the selected day,
+  Esc clears the selection, and ⌘← / ⌘→ flip months.
+
+## [1.24.1] - 2026-07-07
+
+A readability pass over the month calendar:
+
+- **Every day with picked clips now shows the same blue `count · length`
+  badge.** Before, a day with a single clip showed only its duration (with
+  trim-editor precision, like "0:09.75") and hid the count.
+- **Totals round to whole seconds** — the calendar and timeline month headers
+  no longer show centiseconds, and anything over an hour reads as `h:mm:ss`
+  instead of a huge minute count.
+- **The month header's stats are labeled** — "Picked" and "To review" chips
+  replace the three bare number clusters that only a tooltip could explain.
+- **Day numbers are legible on any photo**: they sit in a small dark pill
+  (as does the footage tally) instead of relying on a gradient that darkened
+  a big slice of every thumbnail.
+- **Weekday names are spelled out** ("Sun Mon Tue…") instead of the ambiguous
+  single letters.
+- **Out-of-month cells are lightly grayed out**, so where the month starts
+  and ends reads at a glance.
+
 ## [1.24.0] - 2026-07-05
 
 A precision-and-polish pass over the day window:
