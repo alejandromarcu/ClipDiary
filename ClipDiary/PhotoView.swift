@@ -1,4 +1,5 @@
 import SwiftUI
+import ImageIO
 
 /// Editor for a photo clip: crop by dragging the yellow corners, choose how
 /// long the photo is shown, change its date, tag it, or delete it. Like
@@ -15,6 +16,11 @@ struct PhotoEditor: View {
     @State private var showTransition = false
     /// Card clips only: presents the card editor for the referenced card.
     @State private var editingCard = false
+    @State private var showDeleteConfirm = false
+    /// Library-mode info header: the photo's true pixel size and EXIF capture
+    /// time, read from the file's metadata without decoding the image.
+    @State private var pixelSize: CGSize?
+    @State private var captureDate: Date?
     /// Width of the review metadata pane; shared with the video editor and
     /// remembered across items and launches.
     @AppStorage("reviewPaneWidth") private var paneWidth: Double = 280
@@ -149,6 +155,21 @@ struct PhotoEditor: View {
                 .padding(30)
             }
         }
+        .confirmationDialog(isCard ? "Delete this card placement?" : "Delete this photo?",
+                            isPresented: $showDeleteConfirm) {
+            Button(isCard ? "Delete Card" : "Delete Photo", role: .destructive) {
+                if let onDelete {
+                    onDelete()
+                } else {
+                    store.delete(clip)
+                    dismiss()
+                }
+            }
+        } message: {
+            Text(isCard
+                 ? "The card is removed from this day — its design is kept and stays usable elsewhere. This can't be undone."
+                 : "The photo and its crop settings are removed from this day. This can't be undone.")
+        }
     }
 
     // MARK: - Layouts
@@ -175,25 +196,34 @@ struct PhotoEditor: View {
         }
     }
 
-    /// Right-hand metadata + actions pane.
+    /// Right-hand metadata + actions pane, grouped Details / Playback /
+    /// Placement so the flat control stack scans at a glance.
     private var sidePane: some View {
         VStack(alignment: .leading, spacing: 14) {
             if let reviewInfo {
                 ReviewItemHeader(info: reviewInfo)
                 Divider()
+            } else if !isCard {
+                // Cards have no file — nothing to identify or reveal.
+                ClipInfoHeader(title: displayFileName, detail: libraryInfoDetail,
+                               revealURL: store.fileURL(for: clip))
+                Divider()
             }
+            PaneSectionLabel(title: "Details")
             TagRow(tags: $clip.tags)
             // A card carries its own composed text, so the caption overlay and
             // date stamp don't apply to it.
             if !isCard { captionField }
-            TransitionRow(transition: clip.transition) { showTransition = true }
-            Divider()
-            DayPickerField(selection: $editedDate)
-            if !isCard { dateStampToggle }
             if isCard && !isReview { editCardButton }
+            PaneSectionLabel(title: "Playback")
+                .padding(.top, 6)
+            TransitionRow(transition: clip.transition) { showTransition = true }
+            if !isCard { dateStampToggle }
+            PaneSectionLabel(title: "Placement")
+                .padding(.top, 6)
+            DayPickerField(selection: $editedDate)
             // Library mode only: post this picked clip/card to another project.
             if !isReview {
-                Divider()
                 CopyClipToProjectMenu(clip: editedClip)
             }
             Spacer(minLength: 0)
@@ -205,6 +235,27 @@ struct PhotoEditor: View {
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    /// Original source file's name — the copy in `Clips/` is UUID-named, so
+    /// `sourcePath` is what the user recognizes.
+    private var displayFileName: String {
+        if let path = clip.sourcePath {
+            return URL(fileURLWithPath: path).lastPathComponent
+        }
+        return clip.fileName
+    }
+
+    /// "4032×3024 · 2:14 PM", each part appearing as it loads.
+    private var libraryInfoDetail: String {
+        var parts: [String] = []
+        if let pixelSize {
+            parts.append("\(Int(pixelSize.width))×\(Int(pixelSize.height))")
+        }
+        if let captureDate {
+            parts.append(captureDate.formatted(date: .omitted, time: .shortened))
+        }
+        return parts.joined(separator: " · ")
     }
 
     // MARK: - Shared pieces
@@ -332,12 +383,7 @@ struct PhotoEditor: View {
 
     private var deleteButton: some View {
         Button(role: .destructive) {
-            if let onDelete {
-                onDelete()
-            } else {
-                store.delete(clip)
-                dismiss()
-            }
+            showDeleteConfirm = true
         } label: {
             Label(isCard ? "Delete Card" : "Delete Photo", systemImage: "trash")
         }
@@ -350,6 +396,7 @@ struct PhotoEditor: View {
     }
 
     private func load() {
+        loadInfo()
         // A card clip has no file — render its card document (on the main actor,
         // where the store lives) so it reflects the card's current design.
         if let cardID = clip.cardID {
@@ -369,6 +416,25 @@ struct PhotoEditor: View {
             await MainActor.run {
                 if let cg { image = NSImage(cgImage: cg, size: .zero) }
             }
+        }
+    }
+
+    /// Library mode only — review mode's header shows the source's context,
+    /// and cards have no file. Metadata-only read (file header, no image
+    /// decode), so it's cheap enough to stay on the main actor.
+    private func loadInfo() {
+        guard !isReview, !isCard else { return }
+        let url = store.fileURL(for: clip)
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return }
+        captureDate = exifCreationDate(of: src)
+        if let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+           let w = props[kCGImagePropertyPixelWidth] as? Int,
+           let h = props[kCGImagePropertyPixelHeight] as? Int {
+            // EXIF orientations 5–8 are 90°-rotated: swap so the size
+            // matches the oriented image shown (crop coords are too).
+            let o = props[kCGImagePropertyOrientation] as? UInt32 ?? 1
+            pixelSize = o >= 5 ? CGSize(width: h, height: w)
+                               : CGSize(width: w, height: h)
         }
     }
 }
@@ -404,6 +470,11 @@ struct CropOverlay<Base: View>: View {
     @Binding var crop: CropRect
     /// Desired pixel width/height ratio of the crop, nil = unconstrained.
     var aspect: Double?
+    /// Video editor: keep the box/handle chrome faint until the pointer is
+    /// over the media or a crop exists — always-on yellow otherwise competes
+    /// with the trim handles below. The photo editor (where cropping is the
+    /// main job) leaves this off.
+    var subdueUntilHover = false
     @ViewBuilder var base: (CGRect) -> Base
 
     private let handleRadius: CGFloat = 8
@@ -424,6 +495,8 @@ struct CropOverlay<Base: View>: View {
 
     /// Crop at the start of an interior (move) drag.
     @State private var moveAnchor: CropRect?
+    /// Whether the pointer is over the media, for `subdueUntilHover`.
+    @State private var hovering = false
 
     private enum Corner: CaseIterable {
         case topLeft, topRight, bottomLeft, bottomRight
@@ -443,35 +516,45 @@ struct CropOverlay<Base: View>: View {
             let fit = fittedRect(in: geo.size)
             let rect = viewRect(in: fit)
 
+            // Faint while idle and uncropped (when asked to): the chrome only
+            // announces itself on hover or once a crop actually exists.
+            let chromeOpacity: Double =
+                (!subdueUntilHover || hovering || !crop.isFull) ? 1 : 0.35
+
             ZStack(alignment: .topLeading) {
                 base(fit)
 
-                // Dim the cropped-away part of the content.
-                Path { path in
-                    path.addRect(fit)
-                    path.addRect(rect)
-                }
-                .fill(.black.opacity(0.55), style: FillStyle(eoFill: true))
+                Group {
+                    // Dim the cropped-away part of the content.
+                    Path { path in
+                        path.addRect(fit)
+                        path.addRect(rect)
+                    }
+                    .fill(.black.opacity(0.55), style: FillStyle(eoFill: true))
 
-                Rectangle()
-                    .stroke(Color.yellow, lineWidth: 2)
-                    .contentShape(Rectangle())
-                    .frame(width: rect.width, height: rect.height)
-                    .offset(x: rect.minX, y: rect.minY)
-                    .gesture(moveGesture(fit: fit))
+                    Rectangle()
+                        .stroke(Color.yellow, lineWidth: 2)
+                        .contentShape(Rectangle())
+                        .frame(width: rect.width, height: rect.height)
+                        .offset(x: rect.minX, y: rect.minY)
+                        .gesture(moveGesture(fit: fit))
 
-                ForEach(Corner.allCases, id: \.self) { corner in
-                    let p = corner.point(in: rect)
-                    Circle()
-                        .fill(Color.yellow)
-                        .frame(width: handleRadius * 2, height: handleRadius * 2)
-                        .contentShape(Circle().inset(by: -8))
-                        .offset(x: p.x - handleRadius, y: p.y - handleRadius)
-                        .gesture(cornerGesture(corner, fit: fit))
+                    ForEach(Corner.allCases, id: \.self) { corner in
+                        let p = corner.point(in: rect)
+                        Circle()
+                            .fill(Color.yellow)
+                            .frame(width: handleRadius * 2, height: handleRadius * 2)
+                            .contentShape(Circle().inset(by: -8))
+                            .offset(x: p.x - handleRadius, y: p.y - handleRadius)
+                            .gesture(cornerGesture(corner, fit: fit))
+                    }
                 }
+                .opacity(chromeOpacity)
+                .animation(.easeInOut(duration: 0.15), value: chromeOpacity)
             }
             .coordinateSpace(name: "crop")
         }
+        .onHover { hovering = $0 }
         .onChange(of: aspect) { _, _ in snapToAspect() }
     }
 

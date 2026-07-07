@@ -122,7 +122,9 @@ struct ReviewWindow: View {
                 .keyboardShortcut(.cancelAction)
                 .hidden()
         }
-        .navigationTitle(currentDay.formatted(date: .abbreviated, time: .omitted))
+        // Weekday included — "was that the weekend?" matters in a diary.
+        .navigationTitle(currentDay.formatted(
+            .dateTime.weekday(.abbreviated).month(.abbreviated).day().year()))
         .toolbar {
             // All navigation lives in the toolbar: day-stepping then item-stepping.
             ToolbarItemGroup(placement: .navigation) {
@@ -256,7 +258,8 @@ struct ReviewWindow: View {
     private var pickedSection: some View {
         let clips = dayClips
         return VStack(alignment: .leading, spacing: 6) {
-            railHeader("Picked", count: clips.count)
+            railHeader("Picked", count: clips.count,
+                       totalSeconds: clips.reduce(0) { $0 + $1.trimmedDuration })
             if clips.isEmpty {
                 Text("Nothing picked yet")
                     .font(.caption)
@@ -283,7 +286,8 @@ struct ReviewWindow: View {
         let undatedMode = selectedSource?.isUndated == true
         let items = undatedMode ? sourceItems.filter(\.isUndated) : store.sourceItems(on: currentDay)
         VStack(alignment: .leading, spacing: 6) {
-            railHeader(undatedMode ? "Undated" : "Available", count: items.count)
+            railHeader(undatedMode ? "Undated" : "Available", count: items.count,
+                       totalSeconds: items.compactMap(\.duration).reduce(0, +))
             if items.isEmpty {
                 Text(undatedMode ? "No undated media" : "No source media on this day")
                     .font(.caption)
@@ -300,12 +304,16 @@ struct ReviewWindow: View {
         }
     }
 
-    private func railHeader(_ title: String, count: Int) -> some View {
+    /// `totalSeconds` (when > 0) appends the section's summed length — the
+    /// day's contribution to the month video for Picked, the footage still to
+    /// review for Available.
+    private func railHeader(_ title: String, count: Int, totalSeconds: Double = 0) -> some View {
         HStack(spacing: 4) {
             Text(title.uppercased())
                 .font(.caption2.bold())
                 .foregroundStyle(.secondary)
-            Text("\(count)")
+            Text(totalSeconds > 0 ? "\(count) · \(formatDurationShort(totalSeconds))"
+                                  : "\(count)")
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.tertiary)
             Spacer()
@@ -792,6 +800,17 @@ private struct RailSourceThumb: View {
                     .background(Capsule().fill(.green.opacity(0.9)))
                     .padding(4)
             }
+        } topLeading: {
+            // Time of day the item was shot — the fastest way to orient in a
+            // long day without clicking through every thumbnail.
+            if let date = item.captureDate {
+                Text(date.formatted(date: .omitted, time: .shortened))
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 5).padding(.vertical, 2)
+                    .background(Capsule().fill(.black.opacity(0.55)))
+                    .padding(4)
+            }
         }
         .help(item.fileName)
         .task(id: item.id) { image = await store.thumbnail(for: item) }
@@ -799,21 +818,24 @@ private struct RailSourceThumb: View {
 }
 
 /// Shared rail thumbnail container: a fixed 16:9 box with the image (or a
-/// placeholder), a selection ring, and caller-supplied bottom-leading and
-/// top-trailing overlays.
-private struct RailThumbBox<BottomLeading: View, TopTrailing: View>: View {
+/// placeholder), a selection ring, and caller-supplied bottom-leading,
+/// top-trailing and top-leading overlays.
+private struct RailThumbBox<BottomLeading: View, TopTrailing: View, TopLeading: View>: View {
     let image: NSImage?
     let isSelected: Bool
     @ViewBuilder var bottomLeading: BottomLeading
     @ViewBuilder var topTrailing: TopTrailing
+    @ViewBuilder var topLeading: TopLeading
 
     init(image: NSImage?, isSelected: Bool,
          @ViewBuilder bottomLeading: () -> BottomLeading,
-         @ViewBuilder topTrailing: () -> TopTrailing = { EmptyView() }) {
+         @ViewBuilder topTrailing: () -> TopTrailing = { EmptyView() },
+         @ViewBuilder topLeading: () -> TopLeading = { EmptyView() }) {
         self.image = image
         self.isSelected = isSelected
         self.bottomLeading = bottomLeading()
         self.topTrailing = topTrailing()
+        self.topLeading = topLeading()
     }
 
     var body: some View {
@@ -834,6 +856,7 @@ private struct RailThumbBox<BottomLeading: View, TopTrailing: View>: View {
             )
             .overlay(alignment: .bottomLeading) { bottomLeading }
             .overlay(alignment: .topTrailing) { topTrailing }
+            .overlay(alignment: .topLeading) { topLeading }
         }
         .contentShape(Rectangle())
     }

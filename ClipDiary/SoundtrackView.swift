@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 /// topmost visible day) so the soundtrack lands on the same stretch of time.
 struct SoundtrackRequest: Codable, Hashable {
     var anchorDate: Date
-    /// A track to pre-select and scroll to (the day window's "Add Music" / "Open
+    /// A track to pre-select and scroll to (the day window's "Add Track" / "Open
     /// in Soundtrack" hands off the clip's track here). Nil → just anchor to the
     /// day.
     var selectTrackID: UUID? = nil

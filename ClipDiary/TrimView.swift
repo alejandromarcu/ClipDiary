@@ -89,7 +89,7 @@ struct TagRow: View {
 
 /// A music bar shown directly under a clip's own audio in the editors, so laying
 /// a song over a clip looks like the rest of the editor. Empty, it reads "＋ Add
-/// music" and a click picks a file, laid over this clip (starting at the clip's
+/// Track" and a click picks a file, laid over this clip (starting at the clip's
 /// start, ending at its end) with its waveform drawn in place. Once a track is
 /// present the bar is **read-only** for a picked clip — clicking it opens the
 /// Soundtrack window for anything finer (offset, span, volume). In **review** (a
@@ -113,7 +113,7 @@ struct ClipMusicLane: View {
     @State private var waveform: [Float] = []
 
     private static let audioTypes: [UTType] = [.mp3, .wav, .mpeg4Audio, .aiff, .audio]
-    private let laneHeight: CGFloat = 44
+    private let laneHeight: CGFloat = 32
     private var accent: Color { .accentColor }
 
     /// The track that starts on this clip: the draft's in review, the store's
@@ -193,7 +193,7 @@ struct ClipMusicLane: View {
                 .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
                 .foregroundStyle(.secondary.opacity(0.6))
                 .overlay(
-                    Label("Add music", systemImage: "music.note")
+                    Label("Add Track", systemImage: "music.note")
                         .font(.caption).foregroundStyle(.secondary)
                 )
                 .contentShape(Rectangle())
@@ -408,6 +408,54 @@ struct ReviewItemHeader: View {
     }
 }
 
+/// File/context block atop the side pane when editing a *picked* clip —
+/// library mode's counterpart to `ReviewItemHeader` (review mode already shows
+/// time + file there). Title is the original source file's name when known
+/// (the copy in `Clips/` is UUID-named), detail is resolution/length/capture
+/// time as they load. Used by both editors.
+struct ClipInfoHeader: View {
+    var title: String
+    var detail: String?
+    /// The media file to reveal in Finder; nil hides the link (cards).
+    var revealURL: URL?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.callout.weight(.medium))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(title)
+            if let detail, !detail.isEmpty {
+                Text(detail)
+                    .font(.callout.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            if let revealURL {
+                Button("Reveal in Finder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([revealURL])
+                }
+                .buttonStyle(.link)
+                .font(.callout)
+                .help("Show the clip's media file in the project's Clips folder")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Small uppercase label grouping the editors' side panes (Details / Playback
+/// / Placement) — same idiom as the day rail's section headers.
+struct PaneSectionLabel: View {
+    let title: String
+    var body: some View {
+        Text(title.uppercased())
+            .font(.caption2.bold())
+            .foregroundStyle(.secondary)
+    }
+}
+
 /// A thin vertical divider that resizes the column to its right by dragging.
 /// Used between the media and the metadata pane in the review editors; the
 /// width it drives is stored in `@AppStorage` so it sticks across items and
@@ -476,9 +524,13 @@ struct TrimEditor: View {
     @State private var spaceKeyMonitor: Any?
     @State private var editedDate: Date
     @State private var showTransition = false
+    @State private var showDeleteConfirm = false
     /// The video's oriented display size, loaded once — the crop box is fit and
     /// aspect-locked to it. Nil until known (the plain player shows meanwhile).
     @State private var videoDisplaySize: CGSize?
+    /// The clip's recorded capture timestamp, for the library-mode info header
+    /// (review mode shows the source item's time instead).
+    @State private var captureDate: Date?
     /// Width of the review metadata pane; shared with the photo editor and
     /// remembered across items and launches.
     @AppStorage("reviewPaneWidth") private var paneWidth: Double = 280
@@ -543,6 +595,7 @@ struct TrimEditor: View {
                 url: sourceURL ?? store.fileURL(for: clip), buckets: 600).samples
         }
         .task { await loadVideoDisplaySize() }
+        .task { await loadCaptureDate() }
         .onDisappear {
             // Auto-save so switching clips or closing the sheet keeps edits.
             // No-op if the clip was just deleted. Review drafts aren't in the
@@ -565,6 +618,18 @@ struct TrimEditor: View {
         .onChange(of: currentAudioTrack?.fileName) { _, _ in loadMusicPlayer() }
         .sheet(isPresented: $showTransition) {
             TransitionEditorSheet(transition: $clip.transition, maxSeconds: clip.trimmedDuration)
+        }
+        .confirmationDialog("Delete this clip?", isPresented: $showDeleteConfirm) {
+            Button("Delete Clip", role: .destructive) {
+                if let onDelete {
+                    onDelete()
+                } else {
+                    store.delete(clip)
+                    dismiss()
+                }
+            }
+        } message: {
+            Text("The clip and its trim settings are removed from this day. This can't be undone.")
         }
     }
 
@@ -592,40 +657,72 @@ struct TrimEditor: View {
         }
     }
 
-    /// Right-hand metadata + actions pane.
+    /// Right-hand metadata + actions pane, grouped Details / Playback /
+    /// Placement so the flat control stack scans at a glance.
     private var sidePane: some View {
         VStack(alignment: .leading, spacing: 14) {
             if let reviewInfo {
                 ReviewItemHeader(info: reviewInfo)
-                Divider()
+            } else {
+                ClipInfoHeader(title: displayFileName, detail: libraryInfoDetail,
+                               revealURL: store.fileURL(for: clip))
             }
+            Divider()
+            PaneSectionLabel(title: "Details")
             TagRow(tags: $clip.tags)
             captionField
+            PaneSectionLabel(title: "Playback")
+                .padding(.top, 6)
             TransitionRow(transition: clip.transition) { showTransition = true }
             volumeRow
-            Divider()
-            DayPickerField(selection: $editedDate)
             dateStampToggle
+            PaneSectionLabel(title: "Placement")
+                .padding(.top, 6)
+            DayPickerField(selection: $editedDate)
             // Library mode only: post this picked clip to another project.
             if !isReview {
-                Divider()
                 CopyClipToProjectMenu(clip: editedClip)
             }
             Spacer(minLength: 0)
             HStack {
                 revertButton
-                // Precise full-frame reset for the video crop (hand-dragging the
-                // box never lands exactly on the edges); only when there's a crop.
-                if clip.crop != nil {
-                    Button("Reset Crop") { clip.crop = nil }
-                        .help("Clear the crop and show the whole video frame")
-                }
                 Spacer()
                 // Review adds a draft; library edits an existing clip.
                 if isReview { addButton } else { deleteButton }
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    /// Original source file's name — the copy in `Clips/` is UUID-named, so
+    /// `sourcePath` is what the user recognizes. Imports without one (1SE,
+    /// one-off Import Media) fall back to the copy's name.
+    private var displayFileName: String {
+        if let path = clip.sourcePath {
+            return URL(fileURLWithPath: path).lastPathComponent
+        }
+        return clip.fileName
+    }
+
+    /// "1920×1080 · 0:29.18 · 2:14 PM", each part appearing as it loads.
+    private var libraryInfoDetail: String {
+        var parts: [String] = []
+        if let s = videoDisplaySize {
+            parts.append("\(Int(s.width))×\(Int(s.height))")
+        }
+        parts.append(formatTime(clip.durationSeconds))
+        if let captureDate {
+            parts.append(captureDate.formatted(date: .omitted, time: .shortened))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Library mode only — review mode's header already shows the source time.
+    private func loadCaptureDate() async {
+        guard !isReview else { return }
+        let asset = AVURLAsset(url: store.fileURL(for: clip))
+        guard let item = (try? await asset.load(.creationDate)) ?? nil else { return }
+        captureDate = (try? await item.load(.dateValue)) ?? nil
     }
 
     // MARK: - Shared pieces
@@ -638,8 +735,11 @@ struct TrimEditor: View {
                     // The yellow crop box is drawn right on the player, like the
                     // photo editor crops the still. The player is sized to the
                     // same fitted rect as the box, so the two stay aligned.
+                    // Subdued until hovered so the uncropped box's chrome
+                    // doesn't compete with the trim handles below.
                     CropOverlay(contentSize: videoDisplaySize,
-                                crop: cropBinding, aspect: nativeAspect) { fit in
+                                crop: cropBinding, aspect: nativeAspect,
+                                subdueUntilHover: true) { fit in
                         PlayerView(player: player, controlsStyle: .none)
                             .frame(width: fit.width, height: fit.height)
                             .offset(x: fit.minX, y: fit.minY)
@@ -650,10 +750,36 @@ struct TrimEditor: View {
                 }
             }
             .frame(minHeight: 260, maxHeight: .infinity)
+            .overlay(alignment: .topTrailing) {
+                if clip.crop != nil { cropBadge }
+            }
             // The on-screen skip buttons were removed; surface the keys here,
             // on the natural hover target for jogging playback.
             .help("Drag the yellow box to crop · ← / → skip back / forward 5 seconds")
         }
+    }
+
+    /// Shown while the video is cropped: names the state and clears it on
+    /// click — hand-dragging the box back to the exact frame edges is nearly
+    /// impossible, so this replaces the old side-pane "Reset Crop" button.
+    private var cropBadge: some View {
+        Button { clip.crop = nil } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "crop")
+                    .foregroundStyle(.yellow)
+                Text("Cropped")
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+            .font(.caption.bold())
+            .foregroundStyle(.white)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Capsule().fill(.black.opacity(0.65)))
+        }
+        .buttonStyle(.plain)
+        .padding(8)
+        .help("This video is cropped — click to clear the crop and show the whole frame")
     }
 
     private var cropBinding: Binding<CropRect> {
@@ -672,16 +798,27 @@ struct TrimEditor: View {
 
     private var trimControls: some View {
         VStack(spacing: 14) {
-            TrimSlider(
-                duration: clip.durationSeconds,
-                inSeconds: $clip.inSeconds,
-                outSeconds: $clip.outSeconds,
-                playheadSeconds: playheadSeconds,
-                thumbnails: thumbnails,
-                waveform: waveform,
-                onScrub: { seconds in seek(to: seconds) }
-            )
-            .frame(height: waveform.isEmpty ? 56 : 92)
+            VStack(spacing: 3) {
+                TrimSlider(
+                    duration: clip.durationSeconds,
+                    inSeconds: $clip.inSeconds,
+                    outSeconds: $clip.outSeconds,
+                    playheadSeconds: playheadSeconds,
+                    thumbnails: thumbnails,
+                    waveform: waveform,
+                    onScrub: { seconds in seek(to: seconds) }
+                )
+                .frame(height: waveform.isEmpty ? 56 : 92)
+                TrimRuler(duration: clip.durationSeconds)
+                    .overlay(alignment: .trailing) {
+                        Text("Trim \(formatTime(clip.trimmedDuration)) of \(formatTime(clip.durationSeconds))")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .padding(.leading, 8)
+                            .background(.background)
+                            .help("Length of the trimmed segment, out of the clip's full length")
+                    }
+            }
 
             // A music bar sits right under the clip's own audio waveform: lay a
             // song over the clip here, or (picked clips) jump to the Soundtrack
@@ -695,14 +832,16 @@ struct TrimEditor: View {
                     Label("Set In", systemImage: "arrow.right.to.line")
                 }
                 .keyboardShortcut("i", modifiers: [])
-                .help("Mark the current playback time as the start of the trim (I)")
-                Text(formatTime(clip.inSeconds))
+                .help("Mark the current playback time as the start of the trim (I) · ⌥ ← / → nudges it by 0.1s")
+                Text("In \(formatTime(clip.inSeconds))")
                 Spacer()
                 Button { togglePlay() } label: {
                     Image(systemName: isPlaying ? "pause.fill" : "play.fill")
                         .frame(width: 14)
                 }
                 .help("Play / pause the whole clip (Space)")
+                Text(formatTime(playheadSeconds))
+                    .help("Current playback time — click the filmstrip to move it")
                 Button {
                     isPreviewingTrim ? pausePlayback() : playTrimmedPreview()
                 } label: {
@@ -718,28 +857,33 @@ struct TrimEditor: View {
                 }
                 .keyboardShortcut("p", modifiers: [])
                 .help("Play just the trimmed in → out segment (P)")
-                Text("Trim \(formatTime(clip.trimmedDuration)) of \(formatTime(clip.durationSeconds))")
-                    .foregroundStyle(.secondary)
-                    .help("Length of the trimmed segment, out of the clip's full length")
                 Spacer()
-                Text(formatTime(clip.outSeconds))
+                Text("Out \(formatTime(clip.outSeconds))")
                 Button {
                     setOutPoint()
                 } label: {
                     Label("Set Out", systemImage: "arrow.left.to.line")
                 }
                 .keyboardShortcut("o", modifiers: [])
-                .help("Mark the current playback time as the end of the trim (O)")
+                .help("Mark the current playback time as the end of the trim (O) · ⌥⇧ ← / → nudges it by 0.1s")
             }
             .font(.callout.monospacedDigit())
             // Keep the keyboard skip shortcuts even though the on-screen
-            // Back/Forward buttons were removed.
+            // Back/Forward buttons were removed, plus the trim-point nudges.
             .background {
                 HStack {
                     Button("Back \(Int(skipStep))s") { skip(by: -skipStep) }
                         .keyboardShortcut(.leftArrow, modifiers: [])
                     Button("Forward \(Int(skipStep))s") { skip(by: skipStep) }
                         .keyboardShortcut(.rightArrow, modifiers: [])
+                    Button("Nudge In Earlier") { nudgeIn(by: -nudgeStep) }
+                        .keyboardShortcut(.leftArrow, modifiers: .option)
+                    Button("Nudge In Later") { nudgeIn(by: nudgeStep) }
+                        .keyboardShortcut(.rightArrow, modifiers: .option)
+                    Button("Nudge Out Earlier") { nudgeOut(by: -nudgeStep) }
+                        .keyboardShortcut(.leftArrow, modifiers: [.option, .shift])
+                    Button("Nudge Out Later") { nudgeOut(by: nudgeStep) }
+                        .keyboardShortcut(.rightArrow, modifiers: [.option, .shift])
                 }
                 .hidden()
             }
@@ -843,12 +987,7 @@ struct TrimEditor: View {
     private var deleteButton: some View {
         Button(role: .destructive) {
             pausePlayback()
-            if let onDelete {
-                onDelete()
-            } else {
-                store.delete(clip)
-                dismiss()
-            }
+            showDeleteConfirm = true
         } label: {
             Label("Delete Clip", systemImage: "trash")
         }
@@ -873,6 +1012,17 @@ struct TrimEditor: View {
     private func setOutPoint() {
         guard let now = currentPlayerSeconds else { return }
         clip.outSeconds = max(min(clip.durationSeconds, now), clip.inSeconds + minGap)
+    }
+
+    /// How far ⌥ ← / → (in point) and ⌥⇧ ← / → (out point) move a trim point.
+    private let nudgeStep = 0.1
+
+    private func nudgeIn(by delta: Double) {
+        clip.inSeconds = min(max(0, clip.inSeconds + delta), clip.outSeconds - minGap)
+    }
+
+    private func nudgeOut(by delta: Double) {
+        clip.outSeconds = max(min(clip.durationSeconds, clip.outSeconds + delta), clip.inSeconds + minGap)
     }
 
     /// How far the back/forward buttons (← / →) jump.
@@ -959,6 +1109,9 @@ struct TrimEditor: View {
     }
 
     private func seek(to seconds: Double) {
+        // Move the playhead (and its readout) right away — the periodic
+        // observer confirms it asynchronously, which lags a paused scrub.
+        playheadSeconds = seconds
         player?.seek(
             to: CMTime(seconds: seconds, preferredTimescale: 600),
             toleranceBefore: .zero, toleranceAfter: .zero
@@ -1070,6 +1223,46 @@ struct TrimEditor: View {
 
 /// Thumbnail filmstrip with draggable in/out handles, plus an optional audio
 /// waveform lane underneath so speech and sound onsets are easy to trim to.
+/// Thin tick ruler drawn directly under the trim filmstrip, so positions on
+/// the strip read as times (and click-to-scrub has something to aim at).
+/// Full-width like the strip, so tick x-positions line up with it; the trim
+/// summary overlays its right end (on an opaque background) instead of
+/// shortening it, which would skew every tick.
+struct TrimRuler: View {
+    let duration: Double
+
+    /// Largest "nice" interval that yields at most ~8 ticks.
+    private var step: Double {
+        let candidates: [Double] = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800]
+        return candidates.first { duration / $0 <= 8 } ?? 3600
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let width = geo.size.width
+            if duration > 0 {
+                ZStack(alignment: .topLeading) {
+                    ForEach(Array(stride(from: 0.0, through: duration, by: step)),
+                            id: \.self) { t in
+                        let x = width * CGFloat(t / duration)
+                        Rectangle()
+                            .fill(Color.secondary.opacity(0.5))
+                            .frame(width: 1, height: 4)
+                            .offset(x: x - 0.5)
+                        Text(formatDurationShort(t))
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            // Centered on the tick, but kept inside the edges
+                            // so the 0:00 / last labels don't clip.
+                            .position(x: min(max(x, 13), width - 13), y: 11)
+                    }
+                }
+            }
+        }
+        .frame(height: 16)
+    }
+}
+
 struct TrimSlider: View {
     let duration: Double
     @Binding var inSeconds: Double
@@ -1153,6 +1346,16 @@ struct TrimSlider: View {
                             }
                     )
             }
+            .contentShape(Rectangle())
+            // Click or drag anywhere else on the strip to scrub the playhead
+            // there. The handles' own gestures sit deeper in the hierarchy, so
+            // they keep priority when a drag starts on a handle.
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        onScrub(time(at: value.location.x, width: width))
+                    }
+            )
         }
     }
 
