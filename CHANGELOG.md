@@ -7,6 +7,12 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.28.1] - 2026-07-08
+
+- **Fixed**: the video Preview window's background was white, which looked
+  odd around letterboxed/pillarboxed footage (e.g. portrait clips). It's
+  black now, matching the picture.
+
 ## [1.28.0] - 2026-07-08
 
 A usability and polish pass over the **Soundtrack** window:

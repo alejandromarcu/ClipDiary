@@ -2263,6 +2263,7 @@ struct PreviewWindow: View {
         .frame(minWidth: 480, idealWidth: store.settings.orientation == .portrait ? 520 : 860,
                maxWidth: .infinity,
                minHeight: 480, idealHeight: 720, maxHeight: .infinity)
+        .background(Color.black.ignoresSafeArea())
         // Esc closes the window, matching the app's other windows. Hidden, but
         // still wired up for the keyboard shortcut.
         .background {
