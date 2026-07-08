@@ -1251,6 +1251,9 @@ final class LibraryStore: ObservableObject {
     struct TimelineSpan: Identifiable {
         let key: String
         let label: String
+        /// Roomier variant drawn when the span is wide enough at the current
+        /// zoom (day spans carry "Sun 7"; months don't need one).
+        var longLabel: String? = nil
         let start: Double
         let end: Double
         var id: String { key }
@@ -1298,6 +1301,7 @@ final class LibraryStore: ObservableObject {
             }
             days.append(TimelineSpan(key: "\(day.timeIntervalSinceReferenceDate)",
                                      label: "\(cal.component(.day, from: clip.date))",
+                                     longLabel: clip.date.formatted(.dateTime.weekday(.abbreviated).day()),
                                      start: start, end: end))
             idx = j
         }

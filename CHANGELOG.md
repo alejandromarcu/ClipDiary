@@ -7,6 +7,35 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.28.0] - 2026-07-08
+
+A usability and polish pass over the **Soundtrack** window:
+
+- **Fade a song in and out**: the track inspector now has Fade in / Fade out
+  controls (the render always honored them — now you can set them), and a
+  track's fades draw as the classic corner ramps on its block in the lane.
+- **See where a track ends, not just where it starts**: the inspector header
+  and the track list now show the full range of days a song plays over
+  ("Jun 7 – 9, 2026"), and the list's Day column became **Plays**.
+- **⌫ removes the selected track** (with a confirmation, since the song's
+  copied audio file is deleted too), and **⌘Z undoes** soundtrack edits —
+  moves, resizes, trims, volume, name, and fade changes.
+- **Easier to add a second song**: hovering an empty stretch of the lane now
+  shows a ghost "＋ Add Track" block where a click would add one.
+- **Pinch to zoom** the timeline around the pointer, and the zoom buttons now
+  keep the middle of the view in place instead of drifting.
+- **Volume slider got a 100% detent**: a tick marks normal volume, releases
+  near it snap onto it, and double-clicking the percentage resets to 100%.
+- **A missing or unreadable audio file is now called out** with a warning in
+  the track list and an explanation in the inspector, instead of an
+  eternally "loading" waveform.
+- **Each track gets its own color** in the lane and the track list, so
+  back-to-back songs no longer read as one block.
+- Day headers show the **weekday** ("Sun 7") when zoomed in enough.
+- Fixed a clip-duration badge that could wrap onto two lines on narrow
+  timeline thumbnails, and the track list no longer fills its empty space
+  with blank rows.
+
 ## [1.27.1] - 2026-07-07
 
 - **Faster Timeline scrolling on large libraries**: a day's clip thumbnails
