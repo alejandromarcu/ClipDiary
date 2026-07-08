@@ -7,6 +7,34 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.27.0] - 2026-07-07
+
+A big usability pass over the **Timeline** view:
+
+- **Captions and tags show on each day row**, filling the previously empty
+  space beside the thumbnails — the timeline now reads like a diary.
+- **Days you haven't reviewed yet show up as gap rows**: a compact amber line
+  for any stretch of days with no clips but with footage waiting in your
+  source folders, with a "Review Sources…" shortcut straight into it. (Hidden
+  while a tag filter is on.)
+- Each day now shows its **clip count and total length** under the date, and
+  busy days that don't fit fade out with a **"+n" chip** instead of hiding
+  clips behind an invisible scroll.
+- The timeline caught up with the calendar's interactions: **hover a row for
+  a ▶ day preview**, right-click for Edit This Day / Review Sources / Preview
+  Day, and use the **arrow keys** to move between days and clips (Return
+  opens, Space previews, Esc clears).
+- The sticky month header gained a **Preview button** for that month, and the
+  month name is now a **jump menu** (any month, or Today).
+- A small **S–L slider** (bottom right) resizes the thumbnails.
+- Clip lengths read as "0:06" instead of "0:05.87", switching back to the
+  calendar lands on the month you scrolled to, and the toolbar stays opaque
+  so thumbnails no longer bleed into the window title.
+
+Also fixed: with scroll bars set to "Always" in System Settings, the day
+window's thumbnail rail no longer loses its left margin (clipping the
+section headers) once enough clips make its scroll bar appear.
+
 ## [1.26.0] - 2026-07-07
 
 A polish pass over the Create Video window, now titled **Render Video**:
