@@ -32,6 +32,7 @@ struct SoundtrackView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.undoManager) private var undoManager
     /// The day to land near (see `SoundtrackRequest`).
     let anchorDate: Date
     /// A track to pre-select and scroll to on open (see `SoundtrackRequest`).
@@ -56,6 +57,17 @@ struct SoundtrackView: View {
     /// Guards the one-time scroll-to-anchor so re-layouts don't yank the user
     /// back to the anchor day after they've scrolled away.
     @State private var didInitialScroll = false
+    /// Where the pointer hovers over the lane (timeline seconds) — drives the
+    /// ghost "＋ Add Track" affordance over free lane space. Nil when not
+    /// hovering (or mid-drag).
+    @State private var laneHover: Double?
+    /// A pinch-zoom in flight: the pps / anchor / viewport-x captured at the
+    /// gesture start, so the timeline point under the fingers stays put.
+    @State private var magnify: (pps: Double, anchorSec: Double, viewportX: CGFloat)?
+    /// The track a Remove (inspector button or ⌫) is asking to confirm.
+    /// Removal deletes the song's copied audio file, so it can't be undone —
+    /// hence the confirmation, matching the editors' Delete.
+    @State private var pendingRemoveID: UUID?
 
     private let monthRowH: CGFloat = 24   // month name above the day numbers
     private let labelRowH: CGFloat = 22   // day numbers above the clips
@@ -81,6 +93,11 @@ struct SoundtrackView: View {
     private enum DragMode { case body, leftEdge, rightEdge }
     private struct DragState { let id: UUID; let mode: DragMode; var dx: CGFloat }
 
+    /// Tints cycled across the tracks in play order, so back-to-back songs
+    /// read as separate blocks (and the table's note icons match the lane).
+    /// Position-based on purpose: adjacent tracks always differ.
+    static let trackPalette: [Color] = [.blue, .purple, .teal, .pink, .orange, .indigo]
+
     /// A placed audio block on the timeline (seconds), derived from a clip's
     /// `audio` and the shared layout.
     private struct Block: Identifiable {
@@ -88,7 +105,10 @@ struct SoundtrackView: View {
         let startClipID: UUID
         let start: Double          // audible start, seconds
         let end: Double            // audible end, seconds
+        /// Index in play order, cycling the shared palette.
+        let colorIndex: Int
         var id: UUID { track.id }
+        var color: Color { SoundtrackView.trackPalette[colorIndex % SoundtrackView.trackPalette.count] }
     }
 
     var body: some View {
@@ -113,8 +133,19 @@ struct SoundtrackView: View {
         .frame(minWidth: 720, idealWidth: 1040, maxWidth: .infinity,
                minHeight: 460, idealHeight: 680, maxHeight: .infinity, alignment: .top)
         .background {
-            Button("Close") { dismiss() }
-                .keyboardShortcut(.cancelAction).hidden()
+            Group {
+                Button("Close") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                // ⌫ removes the selected track (after the same confirmation as
+                // the inspector button). A plain-key equivalent doesn't fire
+                // while a text field is being edited — the trim editor's I/O
+                // keys rely on the same behaviour.
+                Button("Remove Track") {
+                    if let selected { pendingRemoveID = selected }
+                }
+                .keyboardShortcut(.delete, modifiers: [])
+            }
+            .hidden()
         }
         .navigationTitle("Soundtrack")
         .fileImporter(isPresented: $showImporter,
@@ -135,6 +166,80 @@ struct SoundtrackView: View {
         } message: {
             Text(errorMessage ?? "")
         }
+        // Removal deletes the track's copied audio file, so — unlike the
+        // move/trim edits, which are undoable — it asks first (the editors'
+        // Delete convention).
+        .alert("Remove Track?", isPresented: Binding(
+            get: { pendingRemoveID != nil },
+            set: { if !$0 { pendingRemoveID = nil } }
+        )) {
+            Button("Remove", role: .destructive) {
+                if let id = pendingRemoveID { performRemove(id) }
+                pendingRemoveID = nil
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("\u{201C}\(pendingRemoveLabel)\u{201D} comes off the timeline and its audio file is removed from the project. This can't be undone.")
+        }
+    }
+
+    /// Display name of the track a removal is confirming (for the alert text).
+    private var pendingRemoveLabel: String {
+        guard let id = pendingRemoveID else { return "" }
+        return store.clips.first(where: { $0.audio?.id == id })?.audio?.label ?? "this track"
+    }
+
+    /// Removes track `id` (already confirmed), selecting its neighbour so the
+    /// inspector doesn't just go blank.
+    private func performRemove(_ id: UUID) {
+        let blocks = audioBlocks(store.timelineLayout())
+        guard let b = blocks.first(where: { $0.track.id == id }) else { return }
+        let next = neighborToSelect(after: b, in: blocks)
+        store.setAudioTrack(nil, onClip: b.startClipID)
+        selected = next
+    }
+
+    // MARK: - Undo
+
+    /// Registers ⌘Z for a metadata-only soundtrack edit (move, resize, trim,
+    /// volume, name, fades) about to be applied: a snapshot of every clip's
+    /// current track, restored wholesale on undo. Add and Remove are *not*
+    /// routed here — both change which files exist in `Audio/` (a copy in, a
+    /// prune out), which a snapshot can't bring back; Remove confirms instead.
+    private func registerAudioUndo(_ actionName: String) {
+        Self.registerAudioRestore(audioSnapshot(), on: store,
+                                  undoManager: undoManager, actionName: actionName)
+    }
+
+    /// Every clip that currently carries a track, with it.
+    private func audioSnapshot() -> [(UUID, AudioTrack)] {
+        store.clips.compactMap { c in c.audio.map { (c.id, $0) } }
+    }
+
+    /// Registers an undo that restores `snapshot` — and re-registers the state
+    /// it replaced, so redo works. Static (and keyed to the store, not the
+    /// view) so the closure survives the view being rebuilt.
+    private static func registerAudioRestore(_ snapshot: [(UUID, AudioTrack)],
+                                             on store: LibraryStore,
+                                             undoManager: UndoManager?,
+                                             actionName: String) {
+        undoManager?.registerUndo(withTarget: store) { store in
+            MainActor.assumeIsolated {
+                let current = store.clips.compactMap { c in c.audio.map { (c.id, $0) } }
+                registerAudioRestore(current, on: store,
+                                     undoManager: undoManager, actionName: actionName)
+                // Set the snapshot's tracks before clearing anything: a moved
+                // track briefly sits on both clips, so its file is never
+                // momentarily unreferenced (`setAudioTrack(nil)` prunes files
+                // with no remaining reference).
+                for (clipID, track) in snapshot { store.setAudioTrack(track, onClip: clipID) }
+                let keep = Set(snapshot.map(\.0))
+                for c in store.clips where c.audio != nil && !keep.contains(c.id) {
+                    store.setAudioTrack(nil, onClip: c.id)
+                }
+            }
+        }
+        undoManager?.setActionName(actionName)
     }
 
     // MARK: - Header
@@ -150,12 +255,28 @@ struct SoundtrackView: View {
             .disabled(visibleDays == nil)
             .help("Preview the days on screen with their soundtrack — scroll to pick where, zoom to pick how much")
             Divider().frame(height: 16)
-            Button { pps = max(6, pps / 1.5) } label: { Image(systemName: "minus.magnifyingglass") }
-                .help("Zoom out")
-            Button { pps = min(240, pps * 1.5) } label: { Image(systemName: "plus.magnifyingglass") }
-                .help("Zoom in")
+            Button { zoomAroundCenter(by: 1 / 1.5) } label: { Image(systemName: "minus.magnifyingglass") }
+                .help("Zoom out (or pinch on the timeline)")
+            Button { zoomAroundCenter(by: 1.5) } label: { Image(systemName: "plus.magnifyingglass") }
+                .help("Zoom in (or pinch on the timeline)")
         }
         .padding(.horizontal, 14).padding(.vertical, 10)
+    }
+
+    /// Applies a zoom keeping `anchorSec` at the same viewport x — the timeline
+    /// point under the pointer (pinch) or the viewport centre (buttons) stays
+    /// put instead of the whole timeline sliding away from what's being looked
+    /// at.
+    private func setZoom(_ newPps: Double, anchorSec: Double, viewportX: CGFloat) {
+        let clamped = min(240, max(6, newPps))
+        guard clamped != pps else { return }
+        pps = clamped
+        scrollPosition.scrollTo(x: max(0, CGFloat(anchorSec) * clamped - viewportX))
+    }
+
+    private func zoomAroundCenter(by factor: Double) {
+        let centerX = scrollLeft + viewportWidth / 2
+        setZoom(pps * factor, anchorSec: Double(centerX) / pps, viewportX: viewportWidth / 2)
     }
 
     private var emptyState: some View {
@@ -187,6 +308,20 @@ struct SoundtrackView: View {
                     .allowsHitTesting(false)
             }
             .padding(.top, topPad)
+            // Trackpad pinch zooms around the point under the fingers.
+            // `startLocation` is in this content's coordinates (timeline
+            // points), so the anchor second is a straight division.
+            .simultaneousGesture(
+                MagnifyGesture()
+                    .onChanged { v in
+                        let base = magnify ?? (pps, Double(v.startLocation.x) / pps,
+                                               v.startLocation.x - scrollLeft)
+                        magnify = base
+                        setZoom(base.pps * v.magnification,
+                                anchorSec: base.anchorSec, viewportX: base.viewportX)
+                    }
+                    .onEnded { _ in magnify = nil }
+            )
         }
         .scrollPosition($scrollPosition)
         .onScrollGeometryChange(for: ScrollMetrics.self) { geo in
@@ -304,7 +439,10 @@ struct SoundtrackView: View {
                 if ex - px >= 18 {
                     let cx = (px + ex) / 2
                     if cx >= lo, cx <= hi {
-                        ctx.draw(Text(d.label).font(.callout).foregroundStyle(.secondary),
+                        // With room, the weekday too ("Sun 7") — which day of
+                        // the week it was is how a day is usually remembered.
+                        let label = ex - px >= 64 ? (d.longLabel ?? d.label) : d.label
+                        ctx.draw(Text(label).font(.callout).foregroundStyle(.secondary),
                                  at: CGPoint(x: cx, y: monthRowH + labelRowH / 2))
                     }
                 }
@@ -338,6 +476,15 @@ struct SoundtrackView: View {
                 .gesture(SpatialTapGesture().onEnded { value in
                     beginAdd(atSeconds: Double(value.location.x) / pps, layout: layout)
                 })
+                // The blocks stacked above have their own gestures, so this
+                // only tracks the empty parts — exactly where the ghost goes.
+                .onContinuousHover(coordinateSpace: .local) { phase in
+                    switch phase {
+                    case .active(let p): laneHover = Double(p.x) / pps
+                    case .ended: laneHover = nil
+                    }
+                }
+                .help("Click an empty spot to add a song starting there")
 
             ForEach(blocks) { base in
                 let g = geometry(base, layout: layout, blocks: blocks)
@@ -346,6 +493,9 @@ struct SoundtrackView: View {
                 AudioBlockView(
                     label: base.track.label,
                     waveform: waveformSlice(base, geometry: g),
+                    tint: base.color,
+                    fadeInPoints: CGFloat(base.track.transition.fadeInSeconds) * pps,
+                    fadeOutPoints: CGFloat(base.track.transition.fadeOutSeconds) * pps,
                     selected: selected == base.track.id,
                     onSelect: { selected = base.track.id },
                     onBody: { tx, ended in handleDrag(base, .body, tx, ended, layout: layout, blocks: blocks) },
@@ -355,8 +505,50 @@ struct SoundtrackView: View {
                 .frame(width: w, height: laneHeight)
                 .position(x: x0 + w / 2, y: laneHeight / 2)
             }
+
+            // Ghost "＋ Add Track" affordance under the pointer, over free lane
+            // space only — makes the click-to-add discoverable once the empty
+            // state's hint is gone. Purely visual; the click lands on the lane.
+            if drag == nil, let hs = laneHover,
+               let gap = freeGap(containing: hs, blocks: blocks, total: layout.total) {
+                let gapX0 = xPos(gap.start), gapX1 = xPos(gap.end)
+                let ghostW = min(gapX1 - gapX0, 150)
+                if ghostW >= 24 {
+                    let x0 = min(max(xPos(hs), gapX0), gapX1 - ghostW)
+                    ghostAddBlock(width: ghostW)
+                        .position(x: x0 + ghostW / 2, y: laneHeight / 2)
+                        .allowsHitTesting(false)
+                }
+            }
         }
         .frame(width: width, height: laneHeight, alignment: .topLeading)
+    }
+
+    private func ghostAddBlock(width: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: 6)
+            .strokeBorder(Color.secondary.opacity(0.5), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+            .frame(width: width, height: laneHeight - 8)
+            .overlay {
+                if width >= 90 {
+                    Label("Add Track", systemImage: "plus")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Image(systemName: "plus").foregroundStyle(.secondary)
+                }
+            }
+    }
+
+    /// The free stretch of lane containing `sec`, or nil when `sec` falls on a
+    /// block (or off the timeline). The hover ghost's gate.
+    private func freeGap(containing sec: Double, blocks: [Block], total: Double) -> (start: Double, end: Double)? {
+        guard sec >= 0, sec <= total else { return nil }
+        var cursor = 0.0
+        for b in blocks.sorted(by: { $0.start < $1.start }) {
+            if sec < b.start { return sec >= cursor ? (cursor, b.start) : nil }
+            cursor = max(cursor, b.end)
+            if sec < cursor { return nil }   // inside a block
+        }
+        return total > cursor ? (cursor, total) : nil
     }
 
     // MARK: - Tracks list + inspector
@@ -382,14 +574,23 @@ struct SoundtrackView: View {
     private func tracksTable(_ blocks: [Block]) -> some View {
         Table(blocks, selection: $selected) {
             TableColumn("Track") { b in
-                Label(b.track.label, systemImage: "music.note")
-                    .lineLimit(1).truncationMode(.middle)
+                HStack(spacing: 5) {
+                    Image(systemName: "music.note")
+                        .foregroundStyle(b.color)
+                    Text(b.track.label)
+                        .lineLimit(1).truncationMode(.middle)
+                    if let issue = fileIssue(b.track) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                            .help(issue)
+                    }
+                }
             }
-            TableColumn("Day") { b in
-                Text(startDay(b).map { $0.formatted(date: .abbreviated, time: .omitted) } ?? "—")
+            TableColumn("Plays") { b in
+                Text(playsText(b))
                     .foregroundStyle(.secondary)
             }
-            .width(min: 96, ideal: 116)
+            .width(min: 96, ideal: 150)
             TableColumn("Used") { b in
                 Text(formatDurationShort(b.end - b.start))
                     .monospacedDigit().foregroundStyle(.secondary)
@@ -401,6 +602,10 @@ struct SoundtrackView: View {
             }
             .width(min: 56, ideal: 64)
         }
+        // With two or three tracks the default stripes fill the rest of the
+        // pane with empty rows that read as missing data — plain background
+        // instead.
+        .alternatingRowBackgrounds(.disabled)
         .overlay {
             if blocks.isEmpty {
                 VStack(spacing: 6) {
@@ -423,26 +628,26 @@ struct SoundtrackView: View {
             let bounds = neighborBounds(b, blocks: blocks, total: layout.total)
             let anchor = startAnchorBounds(b, layout: layout, bounds: bounds)
             TrackInspector(track: b.track, startClipID: b.startClipID,
-                           day: startDay(b), used: b.end - b.start,
+                           day: startDay(b), endDay: endDay(b),
+                           tint: b.color,
+                           fileIssue: fileIssue(b.track),
+                           used: b.end - b.start,
                            total: knownDuration(of: b.track),
                            waveform: waveforms[b.track.fileName] ?? [],
                            leftSlack: max(0, b.start - anchor.lo),
                            startRightSlack: max(0, anchor.hi - b.start),
                            rightSlack: max(0, bounds.hi - b.end),
+                           registerUndo: { registerAudioUndo($0) },
                            onTrim: { applyTrim(b, $0) },
                            onRestore: { restoreFullLength(b) },
-                           onRemove: {
-                               let next = neighborToSelect(after: b, in: blocks)
-                               store.setAudioTrack(nil, onClip: b.startClipID)
-                               selected = next
-                           })
+                           onRemove: { pendingRemoveID = b.track.id })
                 .id(b.track.id)
                 .frame(width: 300)
                 .frame(maxHeight: .infinity, alignment: .top)
         } else {
             VStack(spacing: 8) {
                 Image(systemName: "hand.tap").font(.title2).foregroundStyle(.secondary)
-                Text("Select a track to rename it, trim it, change its volume, or remove it.")
+                Text("Select a track to rename it, trim it, fade it, change its volume, or remove it — or click an empty spot in the lane above to add one.")
                     .font(.callout).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
@@ -455,6 +660,37 @@ struct SoundtrackView: View {
     /// The calendar day a track starts on (its start clip's date).
     private func startDay(_ b: Block) -> Date? {
         store.clip(withID: b.startClipID)?.date
+    }
+
+    /// The calendar day a track's audible span ends on (the date of the clip
+    /// its last second plays over) — where a song *stops* is the thing the lane
+    /// edits most, so the table and inspector show it alongside the start.
+    private func endDay(_ b: Block) -> Date? {
+        let l = store.timelineLayout()
+        let (clipID, _) = clipAndOffset(atSeconds: max(b.start, b.end - 0.001), layout: l)
+        return store.clip(withID: clipID)?.date
+    }
+
+    /// "Jun 6, 2026" for a single-day track, "Jun 7 – 9, 2026" for a span.
+    private func playsText(_ b: Block) -> String {
+        guard let s = startDay(b) else { return "—" }
+        guard let e = endDay(b), !Calendar.current.isDate(e, inSameDayAs: s) else {
+            return s.formatted(date: .abbreviated, time: .omitted)
+        }
+        return (s..<e).formatted(.interval.month(.abbreviated).day().year())
+    }
+
+    /// Why a track's audio file can't be used, or nil when it's fine. A track
+    /// whose file is gone still shows (so it stays removable) — this is the
+    /// explanation shown next to it.
+    private func fileIssue(_ track: AudioTrack) -> String? {
+        if !FileManager.default.fileExists(atPath: store.audioURL(for: track).path) {
+            return "This song's audio file is missing from the project's Audio folder, so it will render silent. Remove the track or restore the file."
+        }
+        if let d = durations[track.fileName], d <= 0.05 {
+            return "This song's audio file couldn't be read, so it will render silent. Remove the track or restore the file."
+        }
+        return nil
     }
 
     /// The track to select after removing `b`: the following one, or the previous
@@ -487,6 +723,7 @@ struct SoundtrackView: View {
                 : nil
         }
         let (eClip, eWithin) = endAnchor(atSeconds: target, layout: l)
+        registerAudioUndo("Restore Track Length")
         store.moveAudioTrack(b.track.id, toStartClip: b.startClipID,
                              offset: max(0, b.track.offsetSeconds),
                              endClipID: eClip, endWithin: eWithin, fileStart: 0)
@@ -503,6 +740,7 @@ struct SoundtrackView: View {
     /// where it is and changes only which part of the file plays over it.
     private func applyTrim(_ b: Block, _ edit: AudioTrimBar.Edit) {
         let l = store.timelineLayout()
+        registerAudioUndo("Trim Track")
         switch edit {
         case .slide(let inPoint):
             // Pin the end exactly where it audibly is today (an open-ended or
@@ -585,14 +823,14 @@ struct SoundtrackView: View {
     /// block, so it stays selectable and removable instead of sitting in
     /// clips.json with no UI to reach it.
     private func audioBlocks(_ l: LibraryStore.TimelineLayout) -> [Block] {
-        l.tracks.map { placed in
+        l.tracks.enumerated().map { index, placed in
             // An unknown/unreadable duration caps nothing — better a too-long
             // block than an invisible track.
             let fileCap = knownDuration(of: placed.track)
                 .map { placed.start + max(0, $0 - placed.track.fileInPoint) } ?? placed.end
             let end = max(min(placed.end, fileCap), placed.start)
             return Block(track: placed.track, startClipID: placed.startClipID,
-                         start: placed.start, end: end)
+                         start: placed.start, end: end, colorIndex: index)
         }
     }
 
@@ -748,6 +986,8 @@ struct SoundtrackView: View {
         }
         let g = geometry(base, layout: l, blocks: blocks)
         drag = nil
+        // A drag released where it started commits (and undo-registers) nothing.
+        guard abs(g.start - base.start) > 0.001 || abs(g.end - base.end) > 0.001 else { return }
         // Start moves for body/left drags; the right-edge drag keeps it.
         let sClip: UUID
         let off: Double
@@ -758,6 +998,7 @@ struct SoundtrackView: View {
             (sClip, off) = clipAndOffset(atSeconds: g.start, layout: l)
         }
         let (eClip, eWithin) = endAnchor(atSeconds: g.end, layout: l)
+        registerAudioUndo(mode == .body ? "Move Track" : "Resize Track")
         store.moveAudioTrack(base.track.id, toStartClip: sClip, offset: off,
                              endClipID: eClip, endWithin: eWithin)
     }
@@ -922,6 +1163,15 @@ private struct TrackInspector: View {
     let track: AudioTrack
     let startClipID: UUID
     let day: Date?
+    /// The day the track's audible span ends on (nil when unknown; equal to
+    /// `day` for a single-day track).
+    let endDay: Date?
+    /// The track's lane colour, echoed here so the inspector visibly belongs
+    /// to the highlighted block.
+    let tint: Color
+    /// Why the track's audio file can't be used (missing/unreadable), nil
+    /// when it's fine.
+    let fileIssue: String?
     /// How much of the track plays here (its span on the timeline).
     let used: Double
     /// Full length of the audio file, nil until it's been measured.
@@ -936,6 +1186,9 @@ private struct TrackInspector: View {
     /// a clip that anchors another song.
     let startRightSlack: Double
     let rightSlack: Double
+    /// Called just before a commit (volume, name, fades) with the ⌘Z action
+    /// name, so the owning window snapshots the pre-edit state.
+    let registerUndo: (String) -> Void
     /// Commits a trim-bar drag (see `AudioTrimBar.Edit`).
     let onTrim: (AudioTrimBar.Edit) -> Void
     /// Restores the track to full length; returns a warning if it couldn't.
@@ -972,15 +1225,27 @@ private struct TrackInspector: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     HStack {
-                        Text("Track").font(.headline)
+                        HStack(spacing: 6) {
+                            Image(systemName: "music.note").foregroundStyle(tint)
+                            Text("Track").font(.headline)
+                        }
                         Spacer()
                         if let day {
                             HStack(spacing: 5) {
                                 Image(systemName: "calendar")
-                                Text(day.formatted(date: .abbreviated, time: .omitted))
+                                Text(playsRangeText(from: day))
                             }
                             .font(.callout).foregroundStyle(.secondary)
+                            .help(track.endClipID == nil
+                                  ? "The days this song plays over. It's open-ended: it keeps playing until it runs out."
+                                  : "The days this song plays over.")
                         }
+                    }
+
+                    if let fileIssue {
+                        Label(fileIssue, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption).foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
                     VStack(alignment: .leading, spacing: 4) {
@@ -998,11 +1263,28 @@ private struct TrackInspector: View {
                             Slider(value: $volumeDraft, in: 0...4) { editing in
                                 if !editing { commitVolume() }
                             }
+                            // Tick under the 100% position — the range runs to
+                            // 400% (a boost), so normal sits a quarter along.
+                            .overlay(alignment: .bottom) {
+                                GeometryReader { g in
+                                    Rectangle()
+                                        .fill(.secondary.opacity(0.6))
+                                        .frame(width: 1, height: 5)
+                                        .position(x: 10 + (g.size.width - 20) * 0.25,
+                                                  y: g.size.height - 1)
+                                }
+                                .allowsHitTesting(false)
+                            }
                             Text("\(Int((volumeDraft * 100).rounded()))%")
                                 .font(.callout.monospacedDigit()).foregroundStyle(.secondary)
                                 .frame(width: 46, alignment: .trailing)
+                                .contentShape(Rectangle())
+                                .onTapGesture(count: 2) { volumeDraft = 1; commitVolume() }
+                                .help("Double-click to reset to 100%")
                         }
                     }
+
+                    fadeSection
 
                     trimSection
 
@@ -1035,6 +1317,77 @@ private struct TrackInspector: View {
         // covers deselection/removal via onDisappear.
         .onChange(of: track) { _, _ in stopPreview() }
         .onDisappear { stopPreview() }
+    }
+
+    /// "Jun 7, 2026" for a single-day track, "Jun 7 – 9, 2026" for a span.
+    private func playsRangeText(from day: Date) -> String {
+        guard let endDay, !Calendar.current.isDate(endDay, inSameDayAs: day) else {
+            return day.formatted(date: .abbreviated, time: .omitted)
+        }
+        return (day..<endDay).formatted(.interval.month(.abbreviated).day().year())
+    }
+
+    // MARK: Fades
+
+    /// Fade in/out of the song itself (`AudioTrack.transition`) — the exporter
+    /// has always rendered these at the track's true start/end; this is the
+    /// control that sets them. Each commit writes the track back through the
+    /// same guarded path as volume/name.
+    private var fadeSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Fade").font(.caption).foregroundStyle(.secondary)
+            fadeRow("Fade in", \.fadeInSeconds)
+            fadeRow("Fade out", \.fadeOutSeconds)
+        }
+    }
+
+    /// Each fade is capped to the part of the song that actually plays here.
+    private var fadeCap: Double { max(0.1, used) }
+
+    /// One fade's checkbox + duration controls — `TransitionEditorSheet`'s row,
+    /// committing straight to the store instead of a bound draft.
+    private func fadeRow(_ label: String, _ keyPath: WritableKeyPath<SegmentTransition, Double>) -> some View {
+        let isOn = track.transition[keyPath: keyPath] > 0
+        return HStack(spacing: 8) {
+            Toggle(label, isOn: Binding(
+                get: { isOn },
+                set: { on in
+                    commitFade(keyPath, on ? min(SegmentTransition.defaultFadeSeconds, fadeCap) : 0)
+                }
+            ))
+            .toggleStyle(.checkbox)
+            Spacer()
+            // Only the duration controls dim/disable when the fade is off —
+            // the toggle stays live (the transition sheet's idiom).
+            Group {
+                TextField("", value: Binding(
+                    get: { track.transition[keyPath: keyPath] },
+                    set: { commitFade(keyPath, min(max($0, 0.1), fadeCap)) }
+                ), format: .number.precision(.fractionLength(1)))
+                    .labelsHidden()
+                    .multilineTextAlignment(.trailing)
+                    .monospacedDigit()
+                    .frame(width: 44)
+                Text("s")
+                Stepper("", value: Binding(
+                    get: { track.transition[keyPath: keyPath] },
+                    set: { commitFade(keyPath, min(max($0, 0.1), fadeCap)) }
+                ), in: 0.1...fadeCap, step: 0.1)
+                    .labelsHidden()
+            }
+            .disabled(!isOn)
+            .foregroundStyle(isOn ? .primary : .secondary)
+        }
+    }
+
+    /// Commits one fade length; same existence guard as volume/name so a
+    /// focus-loss commit can't re-add a just-removed track.
+    private func commitFade(_ keyPath: WritableKeyPath<SegmentTransition, Double>, _ seconds: Double) {
+        guard seconds != track.transition[keyPath: keyPath],
+              store.clip(withID: startClipID)?.audio?.id == track.id else { return }
+        registerUndo("Change Fade")
+        var t = track; t.transition[keyPath: keyPath] = seconds
+        store.setAudioTrack(t, onClip: startClipID)
     }
 
     /// The trim bar and its "Listen" button: the whole file's waveform with a
@@ -1076,11 +1429,14 @@ private struct TrackInspector: View {
                              onDragStarted: { stopPreview() },
                              onEdit: { stopPreview(); onTrim($0) })
             } else {
-                // Same footprint as the loaded bar, so nothing jumps.
+                // Same footprint as the loaded bar, so nothing jumps. A broken
+                // file never loads — say so instead of spinning forever.
                 RoundedRectangle(cornerRadius: 6)
                     .fill(Color.secondary.opacity(0.08))
                     .frame(height: 64)
-                    .overlay(Text("Loading waveform…").font(.caption).foregroundStyle(.secondary))
+                    .overlay(Text(fileIssue == nil ? "Loading waveform…" : "No waveform — the audio file can't be read.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center).padding(.horizontal, 8))
             }
         }
     }
@@ -1125,9 +1481,12 @@ private struct TrackInspector: View {
 
     /// Commits the released slider value, skipped when the track no longer
     /// exists on its clip (just removed) so the write can't re-add it.
+    /// A release near 100% snaps onto it — the detent for the slider's tick.
     private func commitVolume() {
+        if abs(volumeDraft - 1) < 0.05 { volumeDraft = 1 }
         guard volumeDraft != track.volume,
               store.clip(withID: startClipID)?.audio?.id == track.id else { return }
+        registerUndo("Change Volume")
         var t = track; t.volume = volumeDraft
         store.setAudioTrack(t, onClip: startClipID)
     }
@@ -1141,6 +1500,7 @@ private struct TrackInspector: View {
         guard !trimmed.isEmpty else { nameDraft = track.label; return }
         guard trimmed != track.label,
               store.clip(withID: startClipID)?.audio?.id == track.id else { return }
+        registerUndo("Rename Track")
         var t = track; t.displayName = trimmed
         store.setAudioTrack(t, onClip: startClipID)
     }
@@ -1581,8 +1941,13 @@ private struct ClipStripCell: View {
             HStack(spacing: 2) {
                 Image(systemName: clip.isCard ? "rectangle.on.rectangle.angled"
                                               : (clip.kind == .photo ? "photo" : "video"))
-                if tileWidth >= 52 {
+                // The gate leaves room for icon + "m:ss.cc"; `fixedSize` +
+                // one line stop SwiftUI's last-resort mid-token wrap ("0:02.0"
+                // over a stray "0") in cells a few points too narrow for it.
+                if tileWidth >= 68 {
                     Text(formatTime(clip.trimmedDuration))
+                        .lineLimit(1)
+                        .fixedSize()
                 }
             }
             .font(.caption2.monospacedDigit())
@@ -1598,30 +1963,37 @@ private struct ClipStripCell: View {
 private struct AudioBlockView: View {
     let label: String
     let waveform: [Float]
+    /// The track's own colour (cycled per track so neighbours differ).
+    let tint: Color
+    /// The track's fade in/out lengths in *pixels* at the current zoom — drawn
+    /// as the classic NLE corner ramps so a fade is visible at a glance.
+    let fadeInPoints: CGFloat
+    let fadeOutPoints: CGFloat
     let selected: Bool
     let onSelect: () -> Void
     let onBody: (CGFloat, Bool) -> Void
     let onLeft: (CGFloat, Bool) -> Void
     let onRight: (CGFloat, Bool) -> Void
 
-    private let accent = Color.accentColor
-
     var body: some View {
         ZStack(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: 6)
-                .fill(accent.opacity(selected ? 0.22 : 0.13))
+                .fill(tint.opacity(selected ? 0.22 : 0.13))
                 .overlay(RoundedRectangle(cornerRadius: 6)
-                    .stroke(accent.opacity(selected ? 0.9 : 0.4), lineWidth: selected ? 2 : 1))
+                    .stroke(tint.opacity(selected ? 0.9 : 0.4), lineWidth: selected ? 2 : 1))
 
-            WaveformView(samples: waveform, color: accent.opacity(0.7))
+            WaveformView(samples: waveform, color: tint.opacity(0.7))
                 .padding(.top, 19).padding(.bottom, 6).padding(.horizontal, 9)
+                .allowsHitTesting(false)
+
+            fadeRamps
                 .allowsHitTesting(false)
 
             HStack(spacing: 4) {
                 Image(systemName: "music.note")
                 Text(label).lineLimit(1).truncationMode(.middle)
             }
-            .font(.caption2.weight(.medium)).foregroundStyle(accent)
+            .font(.caption2.weight(.medium)).foregroundStyle(tint)
             .padding(.horizontal, 9).padding(.top, 4)
             .allowsHitTesting(false)
 
@@ -1642,9 +2014,44 @@ private struct AudioBlockView: View {
             .onEnded { onBody($0.translation.width, true) })
     }
 
+    /// The corner ramps: a shaded triangle over the faded stretch with a
+    /// diagonal edge tracing the volume — rising over the fade-in, falling over
+    /// the fade-out. Skipped when the fade is off (or subpixel at this zoom).
+    private var fadeRamps: some View {
+        Canvas { ctx, size in
+            let h = size.height
+            let fi = min(fadeInPoints, size.width)
+            if fi >= 2 {
+                var shade = Path()
+                shade.move(to: .zero)
+                shade.addLine(to: CGPoint(x: fi, y: 0))
+                shade.addLine(to: CGPoint(x: 0, y: h))
+                shade.closeSubpath()
+                ctx.fill(shade, with: .color(.black.opacity(0.15)))
+                var edge = Path()
+                edge.move(to: CGPoint(x: 0, y: h))
+                edge.addLine(to: CGPoint(x: fi, y: 0))
+                ctx.stroke(edge, with: .color(tint.opacity(0.75)), style: StrokeStyle(lineWidth: 1.5))
+            }
+            let fo = min(fadeOutPoints, size.width)
+            if fo >= 2 {
+                var shade = Path()
+                shade.move(to: CGPoint(x: size.width - fo, y: 0))
+                shade.addLine(to: CGPoint(x: size.width, y: 0))
+                shade.addLine(to: CGPoint(x: size.width, y: h))
+                shade.closeSubpath()
+                ctx.fill(shade, with: .color(.black.opacity(0.15)))
+                var edge = Path()
+                edge.move(to: CGPoint(x: size.width - fo, y: 0))
+                edge.addLine(to: CGPoint(x: size.width, y: h))
+                ctx.stroke(edge, with: .color(tint.opacity(0.75)), style: StrokeStyle(lineWidth: 1.5))
+            }
+        }
+    }
+
     private var grip: some View {
         Rectangle()
-            .fill(accent.opacity(0.55))
+            .fill(tint.opacity(0.55))
             .frame(width: 7)
             .overlay(Rectangle().fill(.white.opacity(0.5)).frame(width: 1))
             .contentShape(Rectangle())

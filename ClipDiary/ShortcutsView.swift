@@ -69,6 +69,10 @@ let shortcutGroups: [ShortcutGroup] = [
         ShortcutEntry(["−"], "Show the photo for less time"),
         ShortcutEntry(["⌘", "↩"], "Add the photo to the day"),
     ]),
+    ShortcutGroup("Soundtrack", subtitle: "Laying music over the timeline", [
+        ShortcutEntry(["⌫"], "Remove the selected track"),
+        ShortcutEntry(["⌘", "Z"], "Undo a move, resize, or trim"),
+    ]),
 ]
 
 struct ShortcutsView: View {

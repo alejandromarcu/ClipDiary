@@ -250,23 +250,40 @@ Deliberate improvements over 1SE:
   background-audio **timeline** window opened from the calendar's Soundtrack
   toolbar button. Lays the project's clips on a horizontal time axis (widths ∝
   `LibraryStore.TimelineLayout.duration`, scrolled to the anchor month, zoomable)
-  with an audio lane beneath. Each `clip.audio` is a draggable block (positions
+  with an audio lane beneath. The timeline zooms around the pointer (trackpad
+  pinch, `MagnifyGesture`) or the viewport centre (the −/+ buttons), via
+  `setZoom`'s anchor math; day headers show the weekday ("Sun 7") when a day is
+  wide enough. Each `clip.audio` is a draggable block, tinted from a palette
+  cycled in play order so neighbours differ (positions
   come from `store.timelineLayout()`, identical to what the exporter renders):
   click an empty lane spot to add a file (`store.copyAudioFile` +
-  `setAudioTrack`), drag the body to reposition (`moveAudioTrack` reassigns the
+  `setAudioTrack`; hovering free lane space shows a ghost "＋ Add Track" block
+  as the affordance), drag the body to reposition (`moveAudioTrack` reassigns the
   start clip + offset), drag the right edge to set the stop, the
   left edge to set the start. Edge-resize drags clamp to the immediate neighbour
   (`neighborBounds`) so a track can't overlap the next, but a **body drag can leap
   over neighbours** into any free gap big enough to hold it (`freeGaps` picks the
   gap whose nearest fitting start is closest to the drag, flipping to the far
   side past the midpoint) — so dragging one track past another **reorders** it.
-  Below the timeline a **track list** (`Table`, `TrackInspector`) lists every
-  track in play order with its start day, **Used** length (its span here) and
-  **Total** length (the audio file's full duration); selecting a row is the same
+  **⌘Z undoes** the metadata edits (moves, resizes, trims, volume/name/fades):
+  `registerAudioUndo` snapshots every clip's track and restores it wholesale
+  (Add/Remove are excluded — they change which files exist in `Audio/`, which a
+  snapshot can't bring back; Remove — the inspector button or **⌫** — confirms
+  instead, since it deletes the copied file).
+  Below the timeline a **track list** (`Table`, `TrackInspector`, stripes off)
+  lists every track in play order with the day range it **Plays**
+  ("Jun 7 – 9, 2026" via `endDay`), **Used** length (its span here) and
+  **Total** length (the audio file's full duration), plus a ⚠️ when its file is
+  missing/unreadable (`fileIssue`); selecting a row is the same
   `selected` the lane highlights (and `revealTrack` scrolls it into view if
   off-screen), so the table is a jump-between-tracks navigator. The selected
-  track's side inspector renames it (a committed `displayName` draft), shows
-  "Plays used of total", sets its volume, removes it, **trims it** — a
+  track's side inspector (tinted to match its block) renames it (a committed
+  `displayName` draft), shows the same Plays range,
+  sets its volume (0–400%, with a tick + snap detent at 100% and double-click
+  on the readout to reset), **fades it in/out** (`AudioTrack.transition`,
+  checkbox + duration rows; the fades draw as shaded corner ramps on the lane
+  block and cap at the span's length — the exporter has always rendered them),
+  removes it, **trims it** — a
   full-file waveform with a draggable yellow window (`AudioTrimBar`, the video
   trim slider's idiom): the left edge trims where the song starts (its
   timeline start moves with it, so kept content stays put against the
