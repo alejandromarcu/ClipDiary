@@ -7,6 +7,30 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.26.0] - 2026-07-07
+
+A polish pass over the Create Video window, now titled **Render Video**:
+
+- **Nothing jumps around anymore.** The Cover and Ending rows sit on a fixed
+  grid — the card menus stay the same width, the duration stepper and fade
+  button keep their place (disabled instead of hidden) — and the window holds
+  one fixed size: switching between Month, Year, All and Custom, wide clip
+  counts, or the export progress appearing no longer nudge its height.
+- **Clearer at a glance**: the counts row now says "12 videos · 3 photos"
+  instead of bare icons, thin dividers group the sections, and an empty
+  range explains itself ("No clips in July 2026") instead of silently
+  graying out Preview and Save.
+- **Months and years without clips are grayed out** in the month/year menus,
+  so it's obvious which periods have content before picking one.
+- **The render orientation is visible** in the corner ("Landscape · Project
+  Settings") and clicking it opens Project Settings to change it.
+- **Exports can be cancelled**: while saving, the Cancel button becomes
+  Cancel Export and stops the render, cleaning up the partial file.
+- **The preview window shows its build progress.** While the preview is
+  stitched together (slow on photo-heavy ranges) a progress bar with a
+  percentage now appears — the old "Preparing preview…" hint was drawn
+  black-on-black in light mode, so the window just looked frozen.
+
 ## [1.25.0] - 2026-07-07
 
 The calendar is now properly interactive:
