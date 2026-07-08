@@ -1091,6 +1091,9 @@ struct RenderSheet: View {
     @State private var isExporting = false
     @State private var progress: Double = 0
     @State private var errorMessage: String?
+    /// The running export, kept so the Cancel Export button can abort it.
+    @State private var exportTask: Task<Void, Never>?
+    @State private var showingProjectSettings = false
 
     /// Seeded from the project's remembered range (or the current month when it
     /// was never changed). Seeding in `init` rather than a `@State` default
@@ -1119,11 +1122,13 @@ struct RenderSheet: View {
         let videoCount = clips.filter { $0.kind == .video }.count
         let photoCount = clips.count - videoCount
 
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Create Video")
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Render Video")
                 .font(.title3.bold())
 
             rangePicker
+
+            Divider()
 
             bookendPicker
 
@@ -1132,11 +1137,36 @@ struct RenderSheet: View {
                     .font(.callout.bold())
             }
 
-            HStack(spacing: 16) {
-                Label("\(videoCount)", systemImage: "video.fill")
-                Label("\(photoCount)", systemImage: "photo.fill")
-                Label(formatDurationShort(total), systemImage: "clock")
+            Divider()
+
+            HStack(spacing: 12) {
+                if clips.isEmpty {
+                    // Explains why Preview/Save are disabled — otherwise the
+                    // sheet just grays out silently on an empty range.
+                    Label(emptyRangeMessage, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                } else {
+                    Label(countLabel(videoCount, "video"), systemImage: "video.fill")
+                    Label(countLabel(photoCount, "photo"), systemImage: "photo.fill")
+                    Label(formatDurationShort(total), systemImage: "clock")
+                }
+                Spacer()
+                // Orientation is applied from Project Settings; surface it here
+                // so a wrong-orientation render doesn't come as a surprise.
+                // fixedSize so wide stats (an all-clips render) push into the
+                // spacer instead of wrapping this caption — a second line here
+                // is what made the window quietly grow taller.
+                Button {
+                    showingProjectSettings = true
+                } label: {
+                    Text("\(store.settings.orientation.shortLabel) · Project Settings")
+                        .font(.caption)
+                        .fixedSize()
+                }
+                .buttonStyle(.plain)
+                .help("Videos render in \(store.settings.orientation.label). Click to change.")
             }
+            .lineLimit(1)
             .font(.callout)
             .monospacedDigit()
             .foregroundStyle(.secondary)
@@ -1151,8 +1181,19 @@ struct RenderSheet: View {
                 Text(errorMessage).foregroundStyle(.red).font(.callout)
             }
 
+            // Pin the buttons to the bottom of the fixed-height sheet; the
+            // occasional rows above (tag note, progress, error) eat into this
+            // gap instead of resizing the window.
+            Spacer(minLength: 0)
+
             HStack {
-                Button("Cancel") { dismiss() }.disabled(isExporting)
+                Button(isExporting ? "Cancel Export" : "Cancel") {
+                    if isExporting {
+                        exportTask?.cancel()
+                    } else {
+                        dismiss()
+                    }
+                }
                 Spacer()
                 Button {
                     openWindow(value: PreviewRequest(range: range, tagFilter: tagFilter))
@@ -1166,7 +1207,10 @@ struct RenderSheet: View {
             }
         }
         .padding(24)
-        .frame(width: 460)
+        // One constant size: minHeight is sized past the tallest content, so
+        // neither the mode switch nor transient rows change the window.
+        .frame(width: 480)
+        .frame(minHeight: 380)
         // Esc would otherwise close the sheet mid-export (the Cancel button
         // is already disabled while exporting).
         .interactiveDismissDisabled(isExporting)
@@ -1179,6 +1223,9 @@ struct RenderSheet: View {
         }
         .onChange(of: bookends) { _, new in
             store.updateSettings { $0.setBookends(new, for: range) }
+        }
+        .sheet(isPresented: $showingProjectSettings) {
+            ProjectSettingsSheet()
         }
         .sheet(item: $editingBookendFade) { which in
             switch which {
@@ -1214,38 +1261,42 @@ struct RenderSheet: View {
     /// the fade applies to the card; with **None** it instead fades the first
     /// clip in / the last clip out (the video's own opening/closing fade).
     /// Persisted per period (via `onChange`) and applied by Preview/Export.
+    ///
+    /// Laid out as a Grid with a fixed slot per column (label / card / duration
+    /// / fade) so both rows stay aligned: controls disable instead of
+    /// disappearing, and the fade button has a constant width, so nothing
+    /// reflows when a selection changes.
     @ViewBuilder
     private var bookendPicker: some View {
         let hasClips = !clips.isEmpty
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Cover")
-                    .frame(width: 60, alignment: .leading)
-                cardMenu(selection: $bookends.coverCardID)
-                if bookends.coverCardID != nil {
-                    durationStepper($bookends.coverDurationSeconds)
+        VStack(alignment: .leading, spacing: 10) {
+            sectionLabel("Cover & Ending")
+            Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 8) {
+                GridRow {
+                    Text("Cover")
+                    cardMenu(selection: $bookends.coverCardID)
+                    durationStepper($bookends.coverDurationSeconds,
+                                    enabled: bookends.coverCardID != nil)
+                    fadeButton(label: coverFadeLabel,
+                               enabled: bookends.coverCardID != nil || hasClips,
+                               help: bookends.coverCardID != nil
+                                   ? "Fade this card in and/or out"
+                                   : "Fade the first clip in from black") {
+                        editingBookendFade = .cover
+                    }
                 }
-                fadeButton(label: coverFadeLabel,
-                           enabled: bookends.coverCardID != nil || hasClips,
-                           help: bookends.coverCardID != nil
-                               ? "Fade this card in and/or out"
-                               : "Fade the first clip in from black") {
-                    editingBookendFade = .cover
-                }
-            }
-            HStack {
-                Text("Ending")
-                    .frame(width: 60, alignment: .leading)
-                cardMenu(selection: $bookends.endingCardID)
-                if bookends.endingCardID != nil {
-                    durationStepper($bookends.endingDurationSeconds)
-                }
-                fadeButton(label: endingFadeLabel,
-                           enabled: bookends.endingCardID != nil || hasClips,
-                           help: bookends.endingCardID != nil
-                               ? "Fade this card in and/or out"
-                               : "Fade the last clip out to black") {
-                    editingBookendFade = .ending
+                GridRow {
+                    Text("Ending")
+                    cardMenu(selection: $bookends.endingCardID)
+                    durationStepper($bookends.endingDurationSeconds,
+                                    enabled: bookends.endingCardID != nil)
+                    fadeButton(label: endingFadeLabel,
+                               enabled: bookends.endingCardID != nil || hasClips,
+                               help: bookends.endingCardID != nil
+                                   ? "Fade this card in and/or out"
+                                   : "Fade the last clip out to black") {
+                        editingBookendFade = .ending
+                    }
                 }
             }
             if store.cards.isEmpty {
@@ -1289,25 +1340,31 @@ struct RenderSheet: View {
         .disabled(store.cards.isEmpty)
     }
 
+    /// Constant-width so the Cover and Ending rows stay aligned no matter what
+    /// the label says ("Fade in…", "Fade out 2.0s", a transition summary, …).
     private func fadeButton(label: String, enabled: Bool, help: String,
                             _ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Label(label, systemImage: "circle.lefthalf.filled")
+                .lineLimit(1)
+                .frame(width: 110)
         }
         .disabled(!enabled)
         .help(help)
-        .fixedSize()
     }
 
-    /// Compact "show for N.Ns" stepper for a Cover/Ending card's duration,
-    /// shown only when that side has a card selected.
-    private func durationStepper(_ binding: Binding<Double>) -> some View {
+    /// Compact "show for N.Ns" stepper for a Cover/Ending card's duration. The
+    /// slot is always present so the row never reflows — it's disabled (value
+    /// blanked) while that side is None.
+    private func durationStepper(_ binding: Binding<Double>, enabled: Bool) -> some View {
         Stepper(value: binding, in: 0.5...30, step: 0.5) {
-            Text(String(format: "%.1fs", binding.wrappedValue))
+            Text(enabled ? String(format: "%.1fs", binding.wrappedValue) : "—")
                 .monospacedDigit()
+                .foregroundStyle(enabled ? .primary : .tertiary)
                 .frame(minWidth: 34, alignment: .trailing)
         }
         .fixedSize()
+        .disabled(!enabled)
         .help("How long this card is shown")
     }
 
@@ -1327,43 +1384,53 @@ struct RenderSheet: View {
             .pickerStyle(.segmented)
             .labelsHidden()
 
-            switch RenderMode(range) {
-            case .month:
-                HStack {
-                    Picker("Month", selection: monthBinding) {
-                        ForEach(1...12, id: \.self) { month in
-                            Text(calendar.monthSymbols[month - 1]).tag(month)
+            // One constant-height slot for every mode's controls, so switching
+            // Month/Year/All/Custom never resizes the sheet.
+            ZStack(alignment: .leading) {
+                switch RenderMode(range) {
+                case .month:
+                    let monthCounts = self.monthClipCounts
+                    HStack {
+                        Picker("Month", selection: monthBinding) {
+                            ForEach(1...12, id: \.self) { month in
+                                Text(calendar.monthSymbols[month - 1])
+                                    .tag(month)
+                                    .selectionDisabled(monthCounts[month - 1] == 0)
+                            }
                         }
+                        .labelsHidden()
+                        .frame(width: 140)
+                        yearPicker
                     }
-                    .labelsHidden()
-                    Picker("Year", selection: yearBinding) {
-                        ForEach(availableYears, id: \.self) { year in
-                            Text(verbatim: String(year)).tag(year)
-                        }
+                case .year:
+                    yearPicker
+                case .all:
+                    Text("Every clip in the project, oldest first.")
+                        .font(.callout).foregroundStyle(.secondary)
+                case .custom:
+                    HStack(spacing: 12) {
+                        DatePicker("From", selection: customStartBinding,
+                                   displayedComponents: .date)
+                        DatePicker("To", selection: customEndBinding,
+                                   in: customStart..., displayedComponents: .date)
                     }
-                    .labelsHidden()
-                    .frame(width: 90)
-                }
-            case .year:
-                Picker("Year", selection: yearBinding) {
-                    ForEach(availableYears, id: \.self) { year in
-                        Text(verbatim: String(year)).tag(year)
-                    }
-                }
-                .labelsHidden()
-                .frame(width: 90)
-            case .all:
-                Text("Every clip in the project, oldest first.")
-                    .font(.callout).foregroundStyle(.secondary)
-            case .custom:
-                HStack(spacing: 12) {
-                    DatePicker("From", selection: customStartBinding,
-                               displayedComponents: .date)
-                    DatePicker("To", selection: customEndBinding,
-                               in: customStart..., displayedComponents: .date)
                 }
             }
+            .frame(height: 28, alignment: .leading)
         }
+    }
+
+    private var yearPicker: some View {
+        let yearCounts = self.yearClipCounts
+        return Picker("Year", selection: yearBinding) {
+            ForEach(availableYears, id: \.self) { year in
+                Text(verbatim: String(year))
+                    .tag(year)
+                    .selectionDisabled(yearCounts[year, default: 0] == 0)
+            }
+        }
+        .labelsHidden()
+        .frame(width: 90)
     }
 
     /// Years offered in the month/year pickers: every year that has a clip, plus
@@ -1373,6 +1440,49 @@ struct RenderSheet: View {
         years.insert(calendar.component(.year, from: Date()))
         years.insert(calendar.component(.year, from: range.anchorDate))
         return years.sorted()
+    }
+
+    /// Clip counts per month of the selected year (index 0 = January),
+    /// respecting the tag filter like the render does — months with nothing to
+    /// render are grayed out (unselectable) in the menu.
+    private var monthClipCounts: [Int] {
+        let year = calendar.component(.year, from: range.anchorDate)
+        var counts = [Int](repeating: 0, count: 12)
+        for clip in store.clips where clip.matches(tagFilter: tagFilter) {
+            let comps = calendar.dateComponents([.year, .month], from: clip.date)
+            if comps.year == year, let month = comps.month { counts[month - 1] += 1 }
+        }
+        return counts
+    }
+
+    /// Clip counts per year, same idea as `monthClipCounts`.
+    private var yearClipCounts: [Int: Int] {
+        var counts: [Int: Int] = [:]
+        for clip in store.clips where clip.matches(tagFilter: tagFilter) {
+            counts[calendar.component(.year, from: clip.date), default: 0] += 1
+        }
+        return counts
+    }
+
+    private func sectionLabel(_ title: String) -> some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+    }
+
+    private func countLabel(_ count: Int, _ noun: String) -> String {
+        "\(count) \(noun)\(count == 1 ? "" : "s")"
+    }
+
+    /// Why the sheet is inert: names the empty scope ("No clips in July 2026").
+    private var emptyRangeMessage: String {
+        let scope: String
+        switch range {
+        case .all: scope = "the project"
+        case .custom: scope = "this range"
+        default: scope = range.label
+        }
+        return tagFilter == nil ? "No clips in \(scope)" : "No matching clips in \(scope)"
     }
 
     // MARK: Bindings into the range (writes persist via setRange)
@@ -1440,7 +1550,7 @@ struct RenderSheet: View {
         let trailing = bookend(for: bookends.endingCardID, transition: bookends.endingTransition,
                                seconds: bookends.endingDurationSeconds, renderSize: renderSize)
 
-        Task {
+        exportTask = Task {
             do {
                 try await Exporter.exportMovie(
                     clips: clips, store: store, outputURL: url,
@@ -1453,6 +1563,10 @@ struct RenderSheet: View {
                 isExporting = false
                 NSWorkspace.shared.activateFileViewerSelecting([url])
                 dismiss()
+            } catch is CancellationError {
+                // User hit Cancel Export: clean up the partial file, no error.
+                try? FileManager.default.removeItem(at: url)
+                isExporting = false
             } catch {
                 isExporting = false
                 errorMessage = error.localizedDescription
@@ -1573,6 +1687,9 @@ struct PreviewWindow: View {
     @State private var built: MonthComposition?
     @State private var player: AVPlayer?
     @State private var errorMessage: String?
+    /// Fraction of the composition build done (photo segments render in that
+    /// pass, so big months take a while) — drives the placeholder progress bar.
+    @State private var buildProgress: Double = 0
     @State private var stampText: String?
     @State private var captionText: String?
     @State private var stampObserver: Any?
@@ -1598,7 +1715,19 @@ struct PreviewWindow: View {
                 } else if let errorMessage {
                     Text(errorMessage).foregroundStyle(.red).font(.callout)
                 } else {
-                    ProgressView("Preparing preview…")
+                    // Explicit white on the black canvas — a default-colored
+                    // ProgressView is black-on-black in light mode, which made
+                    // the build phase look like a blank, frozen window.
+                    ProgressView(value: buildProgress) {
+                        Text("Preparing preview…")
+                            .foregroundStyle(.white)
+                    } currentValueLabel: {
+                        Text("\(Int(buildProgress * 100))%")
+                            .foregroundStyle(.white.opacity(0.7))
+                            .monospacedDigit()
+                    }
+                    .tint(.white)
+                    .frame(maxWidth: 240)
                 }
             }
             .aspectRatio(store.settings.orientation.size, contentMode: .fit)
@@ -1670,6 +1799,7 @@ struct PreviewWindow: View {
         built?.cleanUp()
         built = nil
         errorMessage = nil
+        buildProgress = 0
 
         let clips = store.clips(in: range, taggedWith: tagFilter)
         let renderSize = store.settings.orientation.size
@@ -1682,7 +1812,10 @@ struct PreviewWindow: View {
                 clips: clips, store: store,
                 renderSize: renderSize,
                 fadeInSeconds: fadeIn, fadeOutSeconds: fadeOut,
-                leading: leading, trailing: trailing
+                leading: leading, trailing: trailing,
+                buildProgress: { value in
+                    Task { @MainActor in buildProgress = value }
+                }
             )
             // A settings change cancels and restarts this task; a stale build
             // finishing late must not overwrite the newer one.

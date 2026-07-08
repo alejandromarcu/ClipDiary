@@ -110,14 +110,21 @@ struct Exporter {
                 try? await Task.sleep(nanoseconds: 200_000_000)
             }
         }
-        await session.export()
+        // Cancelling the surrounding task (the Cancel Export button) aborts the
+        // session mid-render instead of letting it run to completion.
+        await withTaskCancellationHandler {
+            await session.export()
+        } onCancel: {
+            session.cancelExport()
+        }
         poller.cancel()
-        progress(1.0)
 
+        if session.status == .cancelled { throw CancellationError() }
         if session.status != .completed {
             let reason = session.error?.localizedDescription ?? "Unknown error."
             throw ExportError.sessionFailed(reason)
         }
+        progress(1.0)
 
         // AVAssetExportSession stamps the movie/track header atoms with the
         // wall-clock export time, which is what tools (and Photos) report as
@@ -128,7 +135,10 @@ struct Exporter {
 
     /// Builds the month composition without exporting it, for in-app preview
     /// (the same composition the export path uses). The caller must call
-    /// `cleanUp()` on the result when done with it.
+    /// `cleanUp()` on the result when done with it. `buildProgress` reports the
+    /// fraction of clips processed (photo segments are rendered in this pass,
+    /// which is what makes a build take a while) so the preview window can show
+    /// a progress bar instead of a blank frame.
     static func buildComposition(
         clips: [Clip],
         store: LibraryStore,
@@ -136,7 +146,8 @@ struct Exporter {
         fadeInSeconds: Double? = nil,
         fadeOutSeconds: Double? = nil,
         leading: Bookend? = nil,
-        trailing: Bookend? = nil
+        trailing: Bookend? = nil,
+        buildProgress: @escaping @Sendable (Double) -> Void = { _ in }
     ) async throws -> MonthComposition {
         guard !clips.isEmpty else { throw ExportError.noClips }
 
@@ -277,6 +288,11 @@ struct Exporter {
         if let leading { try await insertBookend(leading, name: "cover") }
 
         for (index, (clip, url, cardImage)) in items.enumerated() {
+            // Bail out between clips when the export was cancelled — photo
+            // segments are rendered here, before the session even starts.
+            try Task.checkCancellation()
+            buildProgress(Double(index) / Double(items.count))
+
             // A card clip whose card was deleted has nothing to render — skip it
             // rather than fail the whole export.
             if clip.isCard && cardImage == nil { continue }
@@ -370,6 +386,7 @@ struct Exporter {
             cursor = cursor + range.duration
         }
 
+        buildProgress(1)
         if let trailing { try await insertBookend(trailing, name: "ending") }
 
         guard cursor > .zero else { throw ExportError.noClips }

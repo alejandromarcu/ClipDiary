@@ -108,6 +108,11 @@ struct ProjectSettings: Codable, Equatable {
         var label: String {
             self == .portrait ? "Portrait (1080×1920)" : "Landscape (1920×1080)"
         }
+        /// Just the orientation word, for compact read-only mentions (the
+        /// Create Video sheet's footnote).
+        var shortLabel: String {
+            self == .portrait ? "Portrait" : "Landscape"
+        }
         var size: CGSize {
             self == .portrait ? CGSize(width: 1080, height: 1920)
                               : CGSize(width: 1920, height: 1080)
