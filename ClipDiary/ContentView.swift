@@ -1274,7 +1274,7 @@ private struct TimelineDayRow: View {
     private func strip(clips: [Clip],
                        layout: (width: CGFloat?, hidden: Int, contentWidth: CGFloat)) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: Self.thumbSpacing) {
+            LazyHStack(spacing: Self.thumbSpacing) {
                 ForEach(clips) { clip in
                     Button { onOpenClip(clip) } label: {
                         TimelineClipThumb(clip: clip, width: thumbWidth, height: thumbHeight,
