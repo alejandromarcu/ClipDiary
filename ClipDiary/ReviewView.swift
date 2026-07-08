@@ -202,13 +202,20 @@ struct ReviewWindow: View {
                         pickedSection
                         sourcesSection
                     }
+                    // A fixed content width instead of filling the proposal:
+                    // with legacy ("Always") scroll bars the vertical scroller
+                    // carves ~16pt out of the rail, and the ScrollView pins a
+                    // full-width document against it — shoving the leading
+                    // margin (and the section headers) off the window edge.
+                    // 16 + 164 + 14 + the scroller stays inside the rail's 210
+                    // whether or not the bar is showing.
+                    .frame(width: 164, alignment: .leading)
                     // Extra leading room so the content clears the window edge,
                     // and trailing room so the scrollbar doesn't crowd the
                     // thumbnails.
                     .padding(.leading, 16)
                     .padding(.trailing, 14)
                     .padding(.vertical, 12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 // Keep the selected thumbnail in view as ↑/↓ walks past the fold.
                 .onChange(of: selection) { _, sel in

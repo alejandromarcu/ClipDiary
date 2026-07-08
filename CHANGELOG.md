@@ -31,6 +31,10 @@ A big usability pass over the **Timeline** view:
   calendar lands on the month you scrolled to, and the toolbar stays opaque
   so thumbnails no longer bleed into the window title.
 
+Also fixed: with scroll bars set to "Always" in System Settings, the day
+window's thumbnail rail no longer loses its left margin (clipping the
+section headers) once enough clips make its scroll bar appear.
+
 ## [1.26.0] - 2026-07-07
 
 A polish pass over the Create Video window, now titled **Render Video**:
