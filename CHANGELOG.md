@@ -7,6 +7,14 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.27.1] - 2026-07-07
+
+- **Faster Timeline scrolling on large libraries**: a day's clip thumbnails
+  now load lazily as they scroll into view instead of all at once, and
+  generated thumbnails are now cached on disk (not just in memory), so they
+  no longer have to be re-decoded from the original video every time the app
+  launches.
+
 ## [1.27.0] - 2026-07-07
 
 A big usability pass over the **Timeline** view:

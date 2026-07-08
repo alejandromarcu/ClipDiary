@@ -42,6 +42,11 @@ final class LibraryStore: ObservableObject {
     private var clipsDir: URL!
     /// Subfolder of copied audio-track files (`Audio/`), parallel to `Clips/`.
     private var audioDir: URL!
+    /// Subfolder of cached thumbnail JPEGs (`Thumbnails/`), parallel to
+    /// `Clips/`. A disposable disk cache (not needed for backup/reconstruction):
+    /// mirrors `thumbnailCache` so thumbnails survive across launches instead of
+    /// re-decoding every video frame from scratch each time the app opens.
+    private var thumbnailsDir: URL!
     private var metadataURL: URL!
     private var sourcesURL: URL!
     private var settingsURL: URL!
@@ -256,8 +261,10 @@ final class LibraryStore: ObservableObject {
         sourcesURL = url.appendingPathComponent("sources.json")
         settingsURL = url.appendingPathComponent("settings.json")
         cardsDir = url.appendingPathComponent("Cards", isDirectory: true)
+        thumbnailsDir = url.appendingPathComponent("Thumbnails", isDirectory: true)
         try? FileManager.default.createDirectory(at: clipsDir, withIntermediateDirectories: true)
         try? FileManager.default.createDirectory(at: audioDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: thumbnailsDir, withIntermediateDirectories: true)
         thumbnailCache.removeAllObjects()
         sourceThumbnailCache.removeAllObjects()
         audioWaveformCache.removeAll()
@@ -1059,6 +1066,7 @@ final class LibraryStore: ObservableObject {
         guard clips[idx] != clip else { return }
         if clips[idx].thumbnailKey != clip.thumbnailKey {
             thumbnailCache.removeObject(forKey: clip.id as NSUUID)
+            try? FileManager.default.removeItem(at: thumbnailDiskURL(for: clip.id))
         }
         clips[idx] = clip
         save()
@@ -1110,6 +1118,7 @@ final class LibraryStore: ObservableObject {
         // Drop the attached audio file too, unless another clip still uses it.
         if let track = clip.audio { pruneUnusedAudioFile(track) }
         thumbnailCache.removeObject(forKey: clip.id as NSUUID)
+        try? FileManager.default.removeItem(at: thumbnailDiskURL(for: clip.id))
         save()
     }
 
@@ -1565,6 +1574,7 @@ final class LibraryStore: ObservableObject {
         // `thumbnailKey(for:)`, which folds in the card's hash).
         for clip in clips where clip.cardID == doc.id {
             thumbnailCache.removeObject(forKey: clip.id as NSUUID)
+            try? FileManager.default.removeItem(at: thumbnailDiskURL(for: clip.id))
         }
     }
 
@@ -1692,10 +1702,32 @@ final class LibraryStore: ObservableObject {
         return CGSize(width: s.width * scale, height: s.height * scale)
     }
 
-    /// Thumbnail at the clip's in-point (or the photo itself), cached in memory.
+    /// Disk location of a clip's cached thumbnail JPEG (`Thumbnails/<clip
+    /// id>.jpg`), one file per still-existing clip. Kept in sync with
+    /// `thumbnailCache`: removed at the same call sites that drop the memory
+    /// entry, overwritten whenever a thumbnail is regenerated.
+    private func thumbnailDiskURL(for clipID: UUID) -> URL {
+        thumbnailsDir.appendingPathComponent(clipID.uuidString + ".jpg")
+    }
+
+    /// Writes a freshly generated thumbnail frame to disk so it survives
+    /// across launches instead of re-decoding the source media every time.
+    private func cacheThumbnailToDisk(_ cgImage: CGImage, clipID: UUID) {
+        let rep = NSBitmapImageRep(cgImage: cgImage)
+        guard let jpeg = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.8])
+        else { return }
+        try? jpeg.write(to: thumbnailDiskURL(for: clipID))
+    }
+
+    /// Thumbnail at the clip's in-point (or the photo itself), cached in memory
+    /// and on disk (`Thumbnails/`).
     func thumbnail(for clip: Clip) async -> NSImage? {
         if let cached = thumbnailCache.object(forKey: clip.id as NSUUID) {
             return cached
+        }
+        if let onDisk = NSImage(contentsOf: thumbnailDiskURL(for: clip.id)) {
+            thumbnailCache.setObject(onDisk, forKey: clip.id as NSUUID)
+            return onDisk
         }
         // Card clips have no media file — render the card document fresh.
         if let cardID = clip.cardID {
@@ -1705,6 +1737,7 @@ final class LibraryStore: ObservableObject {
             }
             let image = NSImage(cgImage: cg, size: .zero)
             thumbnailCache.setObject(image, forKey: clip.id as NSUUID)
+            cacheThumbnailToDisk(cg, clipID: clip.id)
             return image
         }
         if clip.kind == .photo {
@@ -1716,6 +1749,7 @@ final class LibraryStore: ObservableObject {
             }
             let image = NSImage(cgImage: cg, size: .zero)
             thumbnailCache.setObject(image, forKey: clip.id as NSUUID)
+            cacheThumbnailToDisk(cg, clipID: clip.id)
             return image
         }
         let asset = AVURLAsset(url: fileURL(for: clip))
@@ -1732,6 +1766,7 @@ final class LibraryStore: ObservableObject {
             }
             let image = NSImage(cgImage: cgImage, size: .zero)
             thumbnailCache.setObject(image, forKey: clip.id as NSUUID)
+            cacheThumbnailToDisk(cgImage, clipID: clip.id)
             return image
         } catch {
             return nil

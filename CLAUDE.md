@@ -89,8 +89,12 @@ Deliberate improvements over 1SE:
   feeds Open Recent (`recentProjects`/`openFromBookmark`). `presentNew/Open
   ProjectPanel(store:)` are the shared NSSavePanel/NSOpenPanel flows used by both
   the File menu and the welcome screen. Copies imported media into the project's
-  `Clips/`, generates cached thumbnails via `AVAssetImageGenerator` (videos) or
-  ImageIO (photos). A parallel `Audio/` subfolder holds copied audio-track files
+  `Clips/`, generates thumbnails via `AVAssetImageGenerator` (videos) or ImageIO
+  (photos), cached both in memory (`NSCache`) and on disk as JPEGs in
+  `Thumbnails/` (one per clip id, `thumbnailDiskURL(for:)`) — a disposable cache,
+  not needed for backup, that saves re-decoding every video frame on each
+  launch; it's kept in sync with the memory cache at the same invalidation
+  sites (`update`, `delete`, card saves). A parallel `Audio/` subfolder holds copied audio-track files
   (`audioURL(for:)`); `copyAudioFile(from:)` copies a user-picked file in (the
   editor then sets the `AudioTrack` on its clip draft), `pruneUnusedAudioFile`
   deletes it when no clip references it (also from `delete`, which additionally
@@ -462,7 +466,9 @@ source-folder counterpart — 1SE imports (re-encoded per-day MP4s) and one-off
 they render from the card document under `Cards/<id>/`, so backing up the
 `Cards/` folder alongside `clips.json` preserves them. **Audio tracks**
 (`clip.audio`) reference copied files in the project's `Audio/` folder (no
-`sourceHash` either), so back up `Audio/` alongside `Clips/`.
+`sourceHash` either), so back up `Audio/` alongside `Clips/`. **`Thumbnails/`
+is a disposable cache** (not needed for backup) — it regenerates from the
+media/card data on demand if missing.
 
 ## Roadmap ideas (not yet built)
 
