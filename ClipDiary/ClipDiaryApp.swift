@@ -1,8 +1,15 @@
 import SwiftUI
+import Combine
+import Sparkle
 
 @main
 struct ClipDiaryApp: App {
     @StateObject private var store = LibraryStore()
+
+    // Sparkle auto-updater: starting it on launch enables the scheduled
+    // background checks; the menu item below triggers manual ones.
+    private let updaterController = SPUStandardUpdaterController(
+        startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
 
     var body: some Scene {
         WindowGroup {
@@ -10,6 +17,9 @@ struct ClipDiaryApp: App {
                 .environmentObject(store)
         }
         .commands {
+            CommandGroup(after: .appInfo) {
+                CheckForUpdatesButton(updater: updaterController.updater)
+            }
             CommandGroup(replacing: .newItem) {
                 Button("New Project…") { presentNewProjectPanel(store: store) }
                     .keyboardShortcut("n")
@@ -81,6 +91,19 @@ struct ClipDiaryApp: App {
             ShortcutsView()
         }
         .windowResizability(.contentMinSize)
+    }
+}
+
+/// App-menu "Check for Updates…" backed by Sparkle. Disabled while a check is
+/// already in progress, tracked via Sparkle's `canCheckForUpdates` KVO.
+private struct CheckForUpdatesButton: View {
+    let updater: SPUUpdater
+    @State private var canCheck = true
+
+    var body: some View {
+        Button("Check for Updates…") { updater.checkForUpdates() }
+            .disabled(!canCheck)
+            .onReceive(updater.publisher(for: \.canCheckForUpdates)) { canCheck = $0 }
     }
 }
 

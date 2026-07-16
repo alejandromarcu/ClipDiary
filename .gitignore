@@ -13,3 +13,7 @@ DerivedData/
 # Swift Package Manager
 .swiftpm/
 .build/
+
+# ClipDiary releases (zips live on GitHub Releases; Sparkle CLI tools are a download)
+/releases/
+Tools/sparkle/

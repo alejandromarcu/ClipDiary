@@ -7,6 +7,18 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.29.0] - 2026-07-15
+
+Groundwork for distributing ClipDiary outside the App Store, with automatic
+updates via [Sparkle](https://sparkle-project.org):
+
+- **Check for Updates…** in the ClipDiary menu; the app also checks
+  periodically in the background. (Nothing is live to update to yet — the
+  feed goes up with the first public release.)
+- `Tools/release.sh` scripts the release flow: archive → Developer ID
+  signing → notarization → zip → regenerate the update feed in `docs/`
+  (which GitHub Pages will serve).
+
 ## [1.28.1] - 2026-07-08
 
 - **Fixed**: the video Preview window's background was white, which looked

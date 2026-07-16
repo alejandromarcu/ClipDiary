@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Sparkle auto-update configuration. This file is merged into the
+	     Xcode-generated Info.plist (GENERATE_INFOPLIST_FILE stays YES). -->
+
+	<!-- Where the app looks for updates: the appcast served by GitHub Pages
+	     from this repo's docs/ folder (Tools/release.sh regenerates it). -->
+	<key>SUFeedURL</key>
+	<string>https://alejandromarcu.github.io/ClipDiary/appcast.xml</string>
+
+	<!-- EdDSA public key that verifies update signatures. PLACEHOLDER: run
+	     Sparkle's generate_keys once and paste the printed public key here
+	     (the private key stays in your Keychain — back it up; without it no
+	     future update can be signed for existing installs). -->
+	<key>SUPublicEDKey</key>
+	<string>REPLACE-WITH-PUBLIC-KEY-FROM-generate_keys</string>
+
+	<!-- Required because the app is sandboxed: installs run through
+	     Sparkle's Installer XPC service (paired with the mach-lookup
+	     entitlements in ClipDiary.entitlements). -->
+	<key>SUEnableInstallerLauncherService</key>
+	<true/>
+
+	<!-- The app deliberately has no outgoing-network entitlement; Sparkle's
+	     Downloader XPC service fetches the appcast/updates instead, so the
+	     app itself stays incapable of touching the network. -->
+	<key>SUEnableDownloaderService</key>
+	<true/>
+</dict>
+</plist>

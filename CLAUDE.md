@@ -15,7 +15,9 @@ Deliberate improvements over 1SE:
 ## Architecture (one file each)
 
 - `ClipDiaryApp.swift` — app entry, injects `LibraryStore` as environment
-  object. File-menu commands (replacing `.newItem`): New Project… (⌘N), Open
+  object. Owns the Sparkle updater (`SPUStandardUpdaterController`, started at
+  launch) and the app-menu "Check for Updates…" item — see "Distribution /
+  auto-updates" below. File-menu commands (replacing `.newItem`): New Project… (⌘N), Open
   Project… (⇧⌘O — plain O is the trim editor's Set Out key), Open Recent ▸ submenu
   + Clear Menu. Declares the windows: the main calendar, plus value-keyed
   WindowGroups for Preview (`PreviewRequest`), the day window (`ReviewRequest`),
@@ -394,7 +396,8 @@ Deliberate improvements over 1SE:
 
 ## Conventions & constraints
 
-- Swift / SwiftUI only, no third-party dependencies, no ffmpeg.
+- Swift / SwiftUI only, no third-party dependencies, no ffmpeg. **One
+  sanctioned exception**: the Sparkle framework (SPM) for auto-updates.
 - Minimum deployment: macOS 14. Use modern async AVFoundation APIs
   (`load(.duration)`, `loadTracks(withMediaType:)`, `generator.image(at:)`).
 - App Sandbox is ON; User Selected File = Read/Write. Use
@@ -486,6 +489,28 @@ they render from the card document under `Cards/<id>/`, so backing up the
 `sourceHash` either), so back up `Audio/` alongside `Clips/`. **`Thumbnails/`
 is a disposable cache** (not needed for backup) — it regenerates from the
 media/card data on demand if missing.
+
+## Distribution / auto-updates
+
+The app ships with **Sparkle 2** (the one third-party dependency, via SPM) for
+auto-updates when distributed outside the App Store. The updater lives in
+`ClipDiaryApp.swift` (`SPUStandardUpdaterController` + a "Check for Updates…"
+app-menu item). Because the app is sandboxed **with no outgoing-network
+entitlement**, Sparkle runs through its XPC services: `SUEnableInstallerLauncherService`
++ `SUEnableDownloaderService` in `ClipDiary/Info.plist` (a small plist merged
+into the Xcode-generated one; it also holds `SUFeedURL` + `SUPublicEDKey`), and
+the two mach-lookup exceptions in `ClipDiary/ClipDiary.entitlements` (merged
+with the `ENABLE_*` build-setting entitlements). `CURRENT_PROJECT_VERSION`
+tracks `MARKETING_VERSION`, so the per-PR version bump is what Sparkle compares.
+
+The update feed is `docs/appcast.xml`, served by GitHub Pages
+(`https://alejandromarcu.github.io/ClipDiary/appcast.xml`); update zips attach
+to GitHub Releases (tag `v<version>`). `Tools/release.sh` runs the whole flow
+(archive → Developer ID sign → notarize → zip → `generate_appcast`) and its
+header documents the **one-time setup still pending**: Apple Developer
+membership, notarytool credentials, downloading Sparkle's CLI tools, running
+`generate_keys` (replace the `SUPublicEDKey` placeholder; back up the private
+key), and enabling GitHub Pages (main + `/docs`).
 
 ## Roadmap ideas (not yet built)
 
