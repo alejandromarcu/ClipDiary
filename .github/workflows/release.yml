@@ -1,9 +1,13 @@
 ## Cuts a GitHub Release every time a PR lands on main.
 ##
 ## Every PR bumps MARKETING_VERSION (see CLAUDE.md), so each merge produces a
-## version that has no tag yet -> build, zip, publish as `vX.Y.Z`. A merge that
-## forgot to bump the version finds its tag already there and stops, so the
+## version that has no tag yet -> build, package, publish as `vX.Y.Z`. A merge
+## that forgot to bump the version finds its tag already there and stops, so the
 ## workflow is safe to re-run and never overwrites a published release.
+##
+## The asset is named ClipDiary.dmg with **no version in it** on purpose: that
+## is what makes /releases/latest/download/ClipDiary.dmg resolve, which is the
+## URL the landing page's download buttons use. Renaming it breaks those.
 ##
 ## The app is signed **ad-hoc** (no Developer ID / notarization), so downloaders
 ## have to clear the quarantine flag once -- the release notes say how.
@@ -81,14 +85,26 @@ jobs:
             CODE_SIGN_IDENTITY=- \
             DEVELOPMENT_TEAM=
 
-      - name: Zip the app
+      - name: Build the disk image
         if: steps.check.outputs.exists == 'false'
         run: |
           set -euo pipefail
           app="$RUNNER_TEMP/ClipDiary.xcarchive/Products/Applications/ClipDiary.app"
           codesign --verify --verbose "$app"
-          ditto -c -k --sequesterRsrc --keepParent \
-            "$app" "$RUNNER_TEMP/ClipDiary-${{ steps.meta.outputs.version }}.zip"
+
+          # A staging folder holding the app next to an /Applications alias, so
+          # mounting the image gives the usual drag-across-to-install window.
+          staging="$RUNNER_TEMP/dmg"
+          rm -rf "$staging"
+          mkdir -p "$staging"
+          ditto "$app" "$staging/ClipDiary.app"
+          ln -s /Applications "$staging/Applications"
+
+          hdiutil create \
+            -volname "ClipDiary ${{ steps.meta.outputs.version }}" \
+            -srcfolder "$staging" \
+            -fs HFS+ -format UDZO -ov \
+            "$RUNNER_TEMP/ClipDiary.dmg"
 
       - name: Build the release notes
         if: steps.check.outputs.exists == 'false'
@@ -112,8 +128,8 @@ jobs:
 
           ### Install
 
-          1. Download the zip below and unzip it.
-          2. Drag **ClipDiary.app** into your Applications folder.
+          1. Download `ClipDiary.dmg` below and open it.
+          2. Drag **ClipDiary** onto the Applications folder in the same window.
           3. ClipDiary is signed ad-hoc rather than notarized, so macOS blocks the
              first launch. Clear the download quarantine once:
 
@@ -135,7 +151,7 @@ jobs:
         run: |
           set -euo pipefail
           gh release create "${{ steps.meta.outputs.tag }}" \
-            "$RUNNER_TEMP/ClipDiary-${{ steps.meta.outputs.version }}.zip" \
+            "$RUNNER_TEMP/ClipDiary.dmg" \
             --target "$GITHUB_SHA" \
             --title "ClipDiary ${{ steps.meta.outputs.version }}" \
             --notes-file "$RUNNER_TEMP/notes.md"
