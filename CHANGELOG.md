@@ -7,16 +7,24 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.31.0] - 2026-07-29
+
+- **ClipDiary now downloads as a disk image.** Releases ship `ClipDiary.dmg`
+  instead of a zip: opening it gives the familiar window with ClipDiary beside
+  an Applications shortcut to drag it into, rather than a loose app in your
+  Downloads folder.
+- **The download button hands you the app directly.** It used to drop you on
+  the GitHub release page to find the file yourself; now the download starts
+  on click.
+
 ## [1.30.0] - 2026-07-28
 
 - **Downloads now build themselves.** Every merge to `main` publishes a new
-  GitHub Release automatically: the app is archived as a universal (Apple
-  silicon + Intel) build, packaged as a disk image, and attached to a `vX.Y.Z`
-  tag, with this changelog's entry as the release notes.
-- **The download button hands you the app directly** — `ClipDiary.dmg` starts
-  downloading on click, instead of dropping you on a GitHub page to hunt for
-  the file. Opening it gives the usual window with ClipDiary next to an
-  Applications shortcut to drag it into.
+  GitHub Release automatically: the app is archived, zipped as a universal
+  (Apple silicon + Intel) build, and attached to a `vX.Y.Z` tag, with this
+  changelog's entry as the release notes. That's what the landing page's
+  download buttons point at, so they always hand out the newest version
+  without anyone uploading anything by hand.
 - Until the app is notarized by Apple, the builds are signed ad-hoc and macOS
   blocks the first launch, so every release note carries the one-time fix
   (**Open Anyway** in Privacy & Security, or clearing the quarantine flag from
