@@ -7,6 +7,17 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.29.0] - 2026-07-28
+
+- **Added a landing page** for distributing ClipDiary publicly, in `docs/`,
+  ready to serve with GitHub Pages. It introduces the app, walks through the
+  three-step workflow (point it at your photo folders, pick the moments,
+  create the video), lists what it does, and compares it with 1 Second
+  Everyday for anyone thinking of switching. The download button points at
+  the latest GitHub Release, and the page shows a live download count pulled
+  from the Releases API once the first release exists.
+- No app changes in this release: the page is a website, not a feature.
+
 ## [1.28.1] - 2026-07-08
 
 - **Fixed**: the video Preview window's background was white, which looked
