@@ -133,37 +133,16 @@
     color: var(--accent-ink); box-shadow: var(--card-shadow);
   }
   .btn-primary:hover { transform: translateY(-1px); box-shadow: var(--shadow); }
-  .btn-ghost { background: var(--bg-elev); color: var(--ink); border-color: var(--line); }
-  .btn-ghost:hover { border-color: color-mix(in srgb, var(--ink-faint) 60%, transparent); }
   .btn svg { width: 18px; height: 18px; }
   .req { margin-top: 15px; font-size: 13.5px; color: var(--ink-faint); }
   #dlcount { display: none; margin-top: 8px; font-size: 13.5px; color: var(--ink-faint); }
   #dlcount b { color: var(--accent); }
 
   /* ---------- shot ---------- */
+  /* The screenshot is a window capture: it carries its own title bar and drop
+     shadow in the alpha channel, so it needs no frame drawn around it. */
   .shot-wrap { padding: 40px 0 30px; }
-  .window {
-    background: var(--bg-elev); border: 1px solid var(--line); border-radius: 14px;
-    box-shadow: var(--shadow); overflow: hidden;
-  }
-  .titlebar {
-    display: flex; align-items: center; gap: 8px; padding: 12px 15px;
-    border-bottom: 1px solid var(--line);
-    background: color-mix(in srgb, var(--bg-elev) 90%, var(--line));
-  }
-  .titlebar .dot { width: 11px; height: 11px; border-radius: 50%; }
-  .dot.r { background: #f45b52; }
-  .dot.y { background: #f6bf3e; }
-  .dot.g { background: #61c554; }
-  .titlebar .t { margin-left: 8px; font-size: 12.5px; color: var(--ink-faint); }
-  .shot-body {
-    aspect-ratio: 16 / 10; display: grid; place-items: center; text-align: center;
-    background:
-      linear-gradient(135deg, color-mix(in srgb, var(--accent) 12%, var(--bg-elev)), var(--bg-elev) 55%);
-    color: var(--ink-faint); padding: 24px;
-  }
-  .shot-body .ph-emoji { font-size: 44px; margin-bottom: 10px; }
-  .shot-body code { font-size: 12.5px; background: color-mix(in srgb, var(--ink) 8%, transparent); padding: 3px 8px; border-radius: 6px; }
+  .shot { display: block; width: 100%; height: auto; }
 
   /* ---------- section ---------- */
   section { padding: 56px 0; scroll-margin-top: 64px; }
@@ -242,8 +221,7 @@
     <div class="brand"><img src="icon.png" alt="ClipDiary icon"> ClipDiary</div>
     <nav class="nav-links">
       <a href="#features" class="hide-sm">Features</a>
-      <a href="#privacy" class="hide-sm">Privacy</a>
-      <a href="https://github.com/alejandromarcu/ClipDiary" class="hide-sm">GitHub</a>
+      <a href="https://github.com/alejandromarcu/ClipDiary">GitHub</a>
       <a href="#download">Download</a>
     </nav>
   </div>
@@ -260,35 +238,21 @@
         the “1 second a day” idea, rebuilt as a native Mac app for the big screen.
       </p>
       <div class="cta-row">
-        <a class="btn btn-primary" href="#download">
+        <a class="btn btn-primary" href="https://github.com/alejandromarcu/ClipDiary/releases/latest">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.6l3.3-3.3 1.4 1.4L12 17.4 6.3 11.7l1.4-1.4L11 13.6V3h1zM5 19h14v2H5z"/></svg>
           Download for macOS
         </a>
-        <a class="btn btn-ghost" href="https://github.com/alejandromarcu/ClipDiary">
-          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.85 9.73.5.1.68-.22.68-.49v-1.7c-2.79.62-3.38-1.22-3.38-1.22-.45-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.63.07-.63 1 .07 1.53 1.06 1.53 1.06.9 1.57 2.35 1.12 2.92.86.09-.67.35-1.12.63-1.38-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05a9.35 9.35 0 015 0c1.91-1.33 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9v2.82c0 .27.18.6.69.49A10.26 10.26 0 0022 12.25C22 6.58 17.52 2 12 2z"/></svg>
-          Build from source
-        </a>
       </div>
-      <p class="req" id="req">Requires macOS 26.5 or later · Free · Open source</p>
+      <p class="req" id="req">Free · Open source</p>
       <p id="dlcount"></p>
     </div>
   </section>
 
   <!-- SHOT -->
   <div class="wrap shot-wrap">
-    <div class="window">
-      <div class="titlebar">
-        <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-        <span class="t">ClipDiary · Family moments</span>
-      </div>
-      <div class="shot-body">
-        <div>
-          <div class="ph-emoji">🎞️</div>
-          <div>Drop a real screenshot here</div>
-          <div style="margin-top:8px"><code>docs/screenshot.png</code> → swap this placeholder</div>
-        </div>
-      </div>
-    </div>
+    <img class="shot" src="screenshot.webp" width="2000" height="1199"
+         alt="ClipDiary's day window: the day's clips listed down the left, one video open in the trim
+              editor with yellow in/out handles on its filmstrip, and the clip's details on the right.">
   </div>
 
   <!-- HOW IT WORKS -->
@@ -397,17 +361,13 @@
   <section id="download" class="final">
     <div class="wrap">
       <h2>Get ClipDiary</h2>
-      <p class="section-sub" style="margin-bottom:28px">Free and open source. Download the latest build, or grab the code and build it yourself.</p>
+      <p class="section-sub" style="margin-bottom:28px">Free and open source. Grab the latest build for your Mac.</p>
       <div class="cta-row">
         <a class="btn btn-primary" href="https://github.com/alejandromarcu/ClipDiary/releases/latest">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.6l3.3-3.3 1.4 1.4L12 17.4 6.3 11.7l1.4-1.4L11 13.6V3h1zM5 19h14v2H5z"/></svg>
-          Download latest release
-        </a>
-        <a class="btn btn-ghost" href="https://github.com/alejandromarcu/ClipDiary#building">
-          Build from source
+          Download for macOS
         </a>
       </div>
-      <p class="req">Requires macOS 26.5 or later</p>
       <p id="dlcount2" style="display:none;margin-top:8px;font-size:13.5px;color:var(--ink-faint)"></p>
     </div>
   </section>
@@ -451,7 +411,7 @@
       if (latestTag) {
         document.getElementById("ver").textContent = latestTag;
         document.getElementById("req").textContent =
-          "Requires macOS 26.5 or later · " + latestTag + " · Free · Open source";
+          latestTag + " · Free · Open source";
       }
     })
     .catch(function () { /* no releases yet, leave the page as-is */ });
