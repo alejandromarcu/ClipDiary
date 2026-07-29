@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ClipDiary — beautiful video journaling on your Mac</title>
-<meta name="description" content="A native macOS app for beautiful video journaling — turn everyday clips into monthly memory videos. Any-length clips, filmstrip trimming, soundtracks. Everything local, no accounts.">
+<title>ClipDiary: beautiful video journaling on your Mac</title>
+<meta name="description" content="A native macOS app for beautiful video journaling. Turn everyday clips into monthly memory videos. Any-length clips, filmstrip trimming, soundtracks. Everything local, no accounts.">
 <link rel="icon" type="image/png" href="icon.png">
 <link rel="apple-touch-icon" href="icon.png">
 <meta name="theme-color" content="#fbfaf8" media="(prefers-color-scheme: light)">
@@ -12,14 +12,14 @@
 
 <!-- Social link previews. Update these URLs if you move to a custom domain. -->
 <meta property="og:type" content="website">
-<meta property="og:title" content="ClipDiary — beautiful video journaling on your Mac">
+<meta property="og:title" content="ClipDiary: beautiful video journaling on your Mac">
 <meta property="og:description" content="Turn everyday clips into monthly memory videos. Any-length clips, filmstrip trimming, soundtracks. Everything local, no accounts.">
 <meta property="og:url" content="https://alejandromarcu.github.io/ClipDiary/">
 <meta property="og:image" content="https://alejandromarcu.github.io/ClipDiary/icon.png">
 <meta name="twitter:card" content="summary">
 
 <!-- ============================================================= -->
-<!-- Cloudflare Web Analytics — paste your beacon token to enable. -->
+<!-- Cloudflare Web Analytics: paste your beacon token to enable. -->
 <!-- Get it free at dash.cloudflare.com → Web Analytics.           -->
 <!-- <script defer src="https://static.cloudflareinsights.com/beacon.min.js"
      data-cf-beacon='{"token": "PASTE_YOUR_TOKEN_HERE"}'></script>       -->
@@ -188,27 +188,6 @@
   .card h3 { margin: 0 0 7px; font-size: 17.5px; letter-spacing: -.01em; }
   .card p { margin: 0; color: var(--ink-soft); font-size: 15px; }
 
-  /* ---------- keyboard strip ---------- */
-  .kbd-strip {
-    margin-top: 20px; display: flex; align-items: center; gap: 18px 34px; flex-wrap: wrap;
-    background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--radius);
-    padding: 24px 28px; box-shadow: var(--card-shadow);
-  }
-  .kbd-copy { flex: 1 1 320px; }
-  .kbd-copy h3 { margin: 0 0 6px; font-size: 17.5px; letter-spacing: -.01em; }
-  .kbd-copy p { margin: 0; color: var(--ink-soft); font-size: 15px; }
-  .kbd-keys { flex: 1 1 380px; display: flex; flex-wrap: wrap; gap: 12px 22px; justify-content: flex-end; }
-  @media (max-width: 900px) { .kbd-keys { justify-content: flex-start; } }
-  .combo { display: inline-flex; align-items: center; gap: 8px; font-size: 13.5px; color: var(--ink-soft); white-space: nowrap; }
-  .combo .keys { display: inline-flex; gap: 3px; }
-  kbd {
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    font-size: 12px; line-height: 1; padding: 5px 7px; border-radius: 6px;
-    color: var(--ink); background: color-mix(in srgb, var(--bg) 55%, var(--bg-elev));
-    border: 1px solid var(--line);
-    box-shadow: 0 1.5px 0 var(--line);
-  }
-
   /* ---------- how it works ---------- */
   .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 34px; margin-top: 40px; }
   @media (max-width: 720px) { .steps { grid-template-columns: 1fr; gap: 28px; } }
@@ -277,7 +256,7 @@
       <img class="appicon" src="icon.png" alt="ClipDiary app icon">
       <h1>Beautiful video journaling,<br><span class="grad">on your Mac.</span></h1>
       <p class="lede">
-        ClipDiary turns your everyday clips into a monthly memory video —
+        ClipDiary turns your everyday clips into a monthly memory video:
         the “1 second a day” idea, rebuilt as a native Mac app for the big screen.
       </p>
       <div class="cta-row">
@@ -300,7 +279,7 @@
     <div class="window">
       <div class="titlebar">
         <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
-        <span class="t">ClipDiary — Family moments</span>
+        <span class="t">ClipDiary · Family moments</span>
       </div>
       <div class="shot-body">
         <div>
@@ -321,17 +300,17 @@
         <div class="step">
           <div class="num">1</div>
           <h3>Point it at your photos</h3>
-          <p>Add the folders where your videos and photos pile up. ClipDiary indexes them by capture day — nothing is copied until you pick it.</p>
+          <p>Add the folders where your videos and photos pile up. ClipDiary indexes them by capture day. Nothing is copied until you pick it.</p>
         </div>
         <div class="step">
           <div class="num">2</div>
-          <h3>Pick one moment per day</h3>
-          <p>Open a day, flip through what you shot, trim the keeper, and jump to the next — a whole month takes minutes.</p>
+          <h3>Pick your moments</h3>
+          <p>Open a day, flip through what you shot, and trim what’s worth keeping (one clip or several), then move on to the next day.</p>
         </div>
         <div class="step">
           <div class="num">3</div>
           <h3>Create your video</h3>
-          <p>Render any range — a month, a year, everything — with music, title cards, fades and date stamps, then save the MP4.</p>
+          <p>Render any range (a month, a year, everything) with music, title cards, fades and date stamps, then save the MP4.</p>
         </div>
       </div>
     </div>
@@ -342,17 +321,12 @@
     <div class="wrap">
       <div class="eyebrow">What makes it nice</div>
       <h2 class="section-title">Built for making the video you actually want</h2>
-      <p class="section-sub">The one-second-a-day idea, minus the limits — designed for editing comfortably on a desktop.</p>
+      <p class="section-sub">The one-second-a-day idea, minus the limits, designed for editing comfortably on a desktop.</p>
       <div class="grid">
-        <div class="card">
-          <div class="ico">⏱️</div>
-          <h3>Clips of any length</h3>
-          <p>No 10-second cap. Keep a moment as long as it deserves, or trim it down to a beat.</p>
-        </div>
         <div class="card">
           <div class="ico">✂️</div>
           <h3>Filmstrip trimming</h3>
-          <p>Drag in- and out-points on a filmstrip — cut the start <em>and</em> the end, frame-accurate.</p>
+          <p>Drag in- and out-points on a filmstrip: cut the start <em>and</em> the end, frame-accurate.</p>
         </div>
         <div class="card">
           <div class="ico">🎵</div>
@@ -360,32 +334,24 @@
           <p>Lay music across a timeline, trim and fade each track, and hear it play as you edit.</p>
         </div>
         <div class="card">
+          <div class="ico">🖼️</div>
+          <h3>Photos, cards &amp; date stamps</h3>
+          <p>Mix in stills, designed title cards, and the classic burned-in date stamp, or turn it off.</p>
+        </div>
+        <div class="card">
           <div class="ico">📅</div>
           <h3>Calendar &amp; source folders</h3>
           <p>Point it at a photo dump; each day shows what you shot so picking the keeper is quick.</p>
         </div>
         <div class="card">
-          <div class="ico">🖼️</div>
-          <h3>Photos, cards &amp; date stamps</h3>
-          <p>Mix in stills, designed title cards, and the classic burned-in date stamp — or turn it off.</p>
+          <div class="ico">⌨️</div>
+          <h3>Ergonomic by design</h3>
+          <p>Every step works with the mouse and flies with the keyboard. Review a day, trim, add, and move on without breaking rhythm.</p>
         </div>
         <div class="card">
           <div class="ico">📥</div>
           <h3>Import from 1SE</h3>
           <p>Bring in an existing 1 Second Everyday library from a video export or a data export.</p>
-        </div>
-      </div>
-      <div class="kbd-strip">
-        <div class="kbd-copy">
-          <h3>⌨️ Ergonomic by design</h3>
-          <p>Every step works with the mouse and flies with the keyboard — review a day, trim, add, and move on without breaking rhythm. The full shortcut list is built into the app.</p>
-        </div>
-        <div class="kbd-keys">
-          <span class="combo"><span class="keys"><kbd>I</kbd><kbd>O</kbd></span> set in / out</span>
-          <span class="combo"><span class="keys"><kbd>⌥</kbd><kbd>→</kbd></span> nudge 0.1s</span>
-          <span class="combo"><span class="keys"><kbd>⌘</kbd><kbd>↩</kbd></span> add &amp; advance</span>
-          <span class="combo"><span class="keys"><kbd>↑</kbd><kbd>↓</kbd></span> next item</span>
-          <span class="combo"><span class="keys"><kbd>⌘</kbd><kbd>Z</kbd></span> undo</span>
         </div>
       </div>
     </div>
@@ -396,7 +362,7 @@
     <div class="wrap">
       <div class="eyebrow">Switching?</div>
       <h2 class="section-title">Coming from 1 Second Everyday?</h2>
-      <p class="section-sub">Import your existing library and keep going — ClipDiary just removes the limits.</p>
+      <p class="section-sub">Import your existing library and keep going. ClipDiary just removes the limits.</p>
       <div class="compare">
         <div class="row"><div>&nbsp;</div><div>ClipDiary</div><div>1SE</div></div>
         <div class="row"><div class="feat">Clip length</div><div class="yes">Any</div><div class="no">~10s cap</div></div>
@@ -416,7 +382,7 @@
     <div class="wrap">
       <div class="band">
         <h2>Everything stays on your Mac</h2>
-        <p>No accounts. No cloud. No telemetry. Your videos and photos are copied into a plain project folder you choose — nothing ever leaves your machine.</p>
+        <p>No accounts. No cloud. No telemetry. Your videos and photos are copied into a plain project folder you choose, and nothing ever leaves your machine.</p>
         <div class="pills">
           <span class="pill">🔒 No sign-in</span>
           <span class="pill">📁 Local project files</span>
@@ -488,7 +454,7 @@
           "Requires macOS 26.5 or later · " + latestTag + " · Free · Open source";
       }
     })
-    .catch(function () { /* no releases yet — leave the page as-is */ });
+    .catch(function () { /* no releases yet, leave the page as-is */ });
 </script>
 </body>
 </html>
