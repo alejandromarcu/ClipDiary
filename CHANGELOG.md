@@ -13,8 +13,8 @@ and versions follow [Semantic Versioning](https://semver.org/)
   GitHub Release automatically: the app is archived, zipped as a universal
   (Apple silicon + Intel) build, and attached to a `vX.Y.Z` tag, with this
   changelog's entry as the release notes. That's what the landing page's
-  "Download latest release" button points at, so it always hands out the
-  newest version without anyone uploading anything by hand.
+  download buttons point at, so they always hand out the newest version
+  without anyone uploading anything by hand.
 - Until the app is notarized by Apple, the builds are signed ad-hoc and macOS
   blocks the first launch, so every release note carries the one-time fix
   (**Open Anyway** in Privacy & Security, or clearing the quarantine flag from
@@ -24,9 +24,14 @@ and versions follow [Semantic Versioning](https://semver.org/)
   whatever macOS was current at the time. The download works on Macs that
   haven't been upgraded in a while, and the landing page no longer bothers
   mentioning a system requirement.
-- The landing page's two "Build from source" buttons are gone — they pointed
-  at a section of the README that doesn't exist, and anyone who wants the
-  source can follow the GitHub link in the header (now visible on phones too).
+- **The landing page shows a real screenshot** of the day window instead of a
+  placeholder — the capture brings its own title bar and shadow, so the fake
+  window frame around it is gone.
+- Landing page tidy-up: both "Build from source" buttons removed (they pointed
+  at a README section that doesn't exist — the header's GitHub link covers it,
+  and now shows on phones too), the Privacy link dropped from the header, and
+  both download buttons given the same label and the same destination instead
+  of one scrolling down to the other.
 - No app changes in this release.
 
 ## [1.29.0] - 2026-07-28
