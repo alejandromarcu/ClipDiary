@@ -395,8 +395,13 @@ Deliberate improvements over 1SE:
 ## Conventions & constraints
 
 - Swift / SwiftUI only, no third-party dependencies, no ffmpeg.
-- Minimum deployment: macOS 14. Use modern async AVFoundation APIs
-  (`load(.duration)`, `loadTracks(withMediaType:)`, `generator.image(at:)`).
+- Minimum deployment: **macOS 15** (`MACOSX_DEPLOYMENT_TARGET`). Keep it there —
+  releases are built on GitHub's runners, whose SDK trails Apple by weeks, and
+  the download should run on Macs that aren't freshly upgraded. The Soundtrack
+  timeline is what pins it at 15 (`ScrollPosition`, `scrollTo(x:)`,
+  `onScrollGeometryChange`); everything else still compiles against 14. Use
+  modern async AVFoundation APIs (`load(.duration)`,
+  `loadTracks(withMediaType:)`, `generator.image(at:)`).
 - App Sandbox is ON; User Selected File = Read/Write. Use
   `startAccessingSecurityScopedResource()` for imported URLs. Project folders
   live anywhere the user picks, so access is regained across launches via

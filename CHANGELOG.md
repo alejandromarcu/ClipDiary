@@ -7,6 +7,28 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.30.0] - 2026-07-28
+
+- **Downloads now build themselves.** Every merge to `main` publishes a new
+  GitHub Release automatically: the app is archived, zipped as a universal
+  (Apple silicon + Intel) build, and attached to a `vX.Y.Z` tag, with this
+  changelog's entry as the release notes. That's what the landing page's
+  "Download latest release" button points at, so it always hands out the
+  newest version without anyone uploading anything by hand.
+- Until the app is notarized by Apple, the builds are signed ad-hoc and macOS
+  blocks the first launch, so every release note carries the one-time fix
+  (**Open Anyway** in Privacy & Security, or clearing the quarantine flag from
+  the terminal).
+- **ClipDiary now runs on macOS 15 and later**, instead of demanding macOS 26.5.
+  Nothing in the app actually needed 26.5 — the project was just built against
+  whatever macOS was current at the time. The download works on Macs that
+  haven't been upgraded in a while, and the landing page no longer bothers
+  mentioning a system requirement.
+- The landing page's two "Build from source" buttons are gone — they pointed
+  at a section of the README that doesn't exist, and anyone who wants the
+  source can follow the GitHub link in the header (now visible on phones too).
+- No app changes in this release.
+
 ## [1.29.0] - 2026-07-28
 
 - **Added a landing page** for distributing ClipDiary publicly, in `docs/`,

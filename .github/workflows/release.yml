@@ -1,0 +1,141 @@
+## Cuts a GitHub Release every time a PR lands on main.
+##
+## Every PR bumps MARKETING_VERSION (see CLAUDE.md), so each merge produces a
+## version that has no tag yet -> build, zip, publish as `vX.Y.Z`. A merge that
+## forgot to bump the version finds its tag already there and stops, so the
+## workflow is safe to re-run and never overwrites a published release.
+##
+## The app is signed **ad-hoc** (no Developer ID / notarization), so downloaders
+## have to clear the quarantine flag once -- the release notes say how.
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select the newest Xcode on the runner
+        run: |
+          set -euo pipefail
+          latest="$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -n1 || true)"
+          if [ -n "$latest" ]; then
+            sudo xcode-select -s "$latest/Contents/Developer"
+          fi
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i macos
+
+      - name: Read version from the Xcode project
+        id: meta
+        run: |
+          set -euo pipefail
+          version="$(grep -m1 -E '^[[:space:]]*MARKETING_VERSION' \
+            ClipDiary.xcodeproj/project.pbxproj | sed -E 's/.*= *([^;]+);.*/\1/')"
+          target="$(grep -m1 -E '^[[:space:]]*MACOSX_DEPLOYMENT_TARGET' \
+            ClipDiary.xcodeproj/project.pbxproj | sed -E 's/.*= *([^;]+);.*/\1/')"
+          if [ -z "$version" ]; then
+            echo "::error::Could not read MARKETING_VERSION from project.pbxproj"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "min_macos=$target" >> "$GITHUB_OUTPUT"
+          echo "Version $version (requires macOS $target)"
+
+      - name: Has this version already been released?
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "${{ steps.meta.outputs.tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::${{ steps.meta.outputs.tag }} already released - nothing to do."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Archive (Release, ad-hoc signed)
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -project ClipDiary.xcodeproj \
+            -scheme ClipDiary \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -archivePath "$RUNNER_TEMP/ClipDiary.xcarchive" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY=- \
+            DEVELOPMENT_TEAM=
+
+      - name: Zip the app
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/ClipDiary.xcarchive/Products/Applications/ClipDiary.app"
+          codesign --verify --verbose "$app"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$app" "$RUNNER_TEMP/ClipDiary-${{ steps.meta.outputs.version }}.zip"
+
+      - name: Build the release notes
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          set -euo pipefail
+          # The CHANGELOG section for this version, if there is one.
+          awk -v ver="${{ steps.meta.outputs.version }}" '
+            $0 ~ "^## \\[" ver "\\]" { inside = 1; next }
+            inside && /^## \[/ { exit }
+            inside { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+
+          if [ ! -s "$RUNNER_TEMP/notes.md" ]; then
+            echo "See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)." \
+              > "$RUNNER_TEMP/notes.md"
+          fi
+
+          cat >> "$RUNNER_TEMP/notes.md" <<'NOTES'
+
+          ---
+
+          ### Install
+
+          1. Download the zip below and unzip it.
+          2. Drag **ClipDiary.app** into your Applications folder.
+          3. ClipDiary is signed ad-hoc rather than notarized, so macOS blocks the
+             first launch. Clear the download quarantine once:
+
+             ```
+             xattr -dr com.apple.quarantine /Applications/ClipDiary.app
+             ```
+
+             (Or launch it, then click **Open Anyway** in System Settings →
+             Privacy & Security.)
+          NOTES
+          echo "" >> "$RUNNER_TEMP/notes.md"
+          echo "Requires macOS ${{ steps.meta.outputs.min_macos }} or later." \
+            >> "$RUNNER_TEMP/notes.md"
+
+      - name: Publish the release
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${{ steps.meta.outputs.tag }}" \
+            "$RUNNER_TEMP/ClipDiary-${{ steps.meta.outputs.version }}.zip" \
+            --target "$GITHUB_SHA" \
+            --title "ClipDiary ${{ steps.meta.outputs.version }}" \
+            --notes-file "$RUNNER_TEMP/notes.md"
