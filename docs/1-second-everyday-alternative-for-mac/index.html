@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Move your 1 Second Everyday library to a Mac — ClipDiary</title>
+<meta name="description" content="1 Second Everyday has no desktop app. Here's how to bring an existing 1SE library onto your Mac with ClipDiary — from the official data export, or by splitting a finished mashup video back into per-day clips.">
+<link rel="canonical" href="https://clipdiary.app/1-second-everyday-alternative-for-mac/">
+<link rel="icon" type="image/png" href="../icon.png">
+<link rel="apple-touch-icon" href="../icon.png">
+<meta name="theme-color" content="#fbfaf8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#16130f" media="(prefers-color-scheme: dark)">
+
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="ClipDiary">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="Move your 1 Second Everyday library to a Mac">
+<meta property="og:description" content="1SE has no desktop app. Two ways to bring your existing library onto your Mac with ClipDiary: the official data export, or a finished mashup video.">
+<meta property="og:url" content="https://clipdiary.app/1-second-everyday-alternative-for-mac/">
+<meta property="og:image" content="https://clipdiary.app/og.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://clipdiary.app/og.jpg">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Article",
+      "headline": "Move your 1 Second Everyday library to a Mac",
+      "description": "Two ways to bring an existing 1SE library onto a Mac with ClipDiary: the official 1SE data export, or a finished mashup video split back into per-day clips.",
+      "inLanguage": "en",
+      "mainEntityOfPage": "https://clipdiary.app/1-second-everyday-alternative-for-mac/",
+      "image": "https://clipdiary.app/og.jpg",
+      "author": { "@type": "Person", "name": "Alejandro Marcu" },
+      "about": { "@id": "https://clipdiary.app/#app" }
+    },
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem", "position": 1, "name": "ClipDiary",
+          "item": "https://clipdiary.app/"
+        },
+        {
+          "@type": "ListItem", "position": 2, "name": "Coming from 1 Second Everyday",
+          "item": "https://clipdiary.app/1-second-everyday-alternative-for-mac/"
+        }
+      ]
+    }
+  ]
+}
+</script>
+
+<style>
+  /* Design tokens are kept in step with index.html by hand — this page is
+     deliberately self-contained so the home page keeps its single-file fast path. */
+  :root {
+    --bg: #fbfaf8; --bg-elev: #ffffff; --ink: #1c1a17; --ink-soft: #605a52;
+    --ink-faint: #938c82; --line: #ece7e0; --accent: #e8842a; --accent-2: #d8452f;
+    --accent-ink: #ffffff;
+    --shadow: 0 20px 50px -20px rgba(60, 45, 25, .35);
+    --card-shadow: 0 1px 2px rgba(40,30,15,.05), 0 12px 30px -18px rgba(60,45,25,.28);
+    --radius: 18px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16130f; --bg-elev: #201b16; --ink: #f4efe8; --ink-soft: #c3b9ab;
+      --ink-faint: #8b8175; --line: #2f2820; --accent: #f79a3e; --accent-2: #ef6a3c;
+      --accent-ink: #1a1206; --shadow: 0 24px 60px -24px rgba(0,0,0,.7);
+      --card-shadow: 0 1px 2px rgba(0,0,0,.3), 0 16px 40px -22px rgba(0,0,0,.6);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    color: var(--ink); background: var(--bg); line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 0 24px; }
+
+  header.nav {
+    position: sticky; top: 0; z-index: 20;
+    backdrop-filter: saturate(1.4) blur(14px);
+    -webkit-backdrop-filter: saturate(1.4) blur(14px);
+    background: color-mix(in srgb, var(--bg) 82%, transparent);
+    border-bottom: 1px solid var(--line);
+  }
+  .nav-inner { display: flex; align-items: center; justify-content: space-between;
+    height: 60px; max-width: 1040px; margin: 0 auto; padding: 0 24px; }
+  .brand { display: flex; align-items: center; gap: 11px; font-weight: 640;
+    letter-spacing: -.01em; text-decoration: none; }
+  .brand img { width: 30px; height: 30px; border-radius: 7px; }
+  .nav-links { display: flex; gap: 26px; align-items: center; font-size: 15px; color: var(--ink-soft); }
+  .nav-links a { text-decoration: none; }
+  .nav-links a:hover { color: var(--ink); }
+
+  article { padding: 40px 0 20px; }
+  .crumbs { font-size: 13.5px; color: var(--ink-faint); margin-bottom: 18px; }
+  .crumbs a { color: var(--ink-soft); text-decoration: none; }
+  .crumbs a:hover { color: var(--ink); }
+  h1 { font-size: clamp(30px, 5vw, 42px); line-height: 1.1; letter-spacing: -.025em;
+    margin: 0 0 14px; font-weight: 720; }
+  .standfirst { font-size: 18.5px; color: var(--ink-soft); margin: 0 0 34px; }
+  h2 { font-size: clamp(21px, 3vw, 26px); letter-spacing: -.02em; margin: 46px 0 12px; }
+  h3 { font-size: 17.5px; letter-spacing: -.01em; margin: 30px 0 8px; }
+  p, li { color: var(--ink-soft); }
+  p { margin: 0 0 16px; }
+  article a { color: var(--accent); text-decoration: none; }
+  article a:hover { text-decoration: underline; }
+  ol.steps { padding-left: 22px; margin: 0 0 18px; }
+  ol.steps > li { margin-bottom: 12px; }
+  ol.steps b, ul b { color: var(--ink); font-weight: 620; }
+  ul.plain { padding-left: 22px; margin: 0 0 18px; }
+  ul.plain > li { margin-bottom: 9px; }
+  kbd { font: inherit; font-size: .94em; background: var(--bg-elev); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; }
+  .note {
+    background: var(--bg-elev); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 18px 20px; margin: 26px 0; box-shadow: var(--card-shadow); font-size: 15px;
+  }
+  .note p:last-child { margin-bottom: 0; }
+  .note strong { color: var(--ink); }
+  table.cmp { width: 100%; border-collapse: collapse; margin: 22px 0 8px; font-size: 15px; }
+  table.cmp th, table.cmp td { text-align: left; padding: 11px 12px; border-top: 1px solid var(--line);
+    vertical-align: top; }
+  table.cmp thead th { border-top: none; font-size: 13px; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--ink-faint); font-weight: 680; }
+  table.cmp td:first-child { color: var(--ink); }
+  .table-scroll { overflow-x: auto; }
+
+  .cta-box { text-align: center; border: 1px solid var(--line); border-radius: 22px;
+    background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 14%, var(--bg-elev)), var(--bg-elev));
+    padding: 34px 28px; margin: 50px 0 10px; }
+  .cta-box h2 { margin: 0 0 10px; }
+  .cta-box p { max-width: 460px; margin: 0 auto 20px; }
+  .btn { display: inline-flex; align-items: center; gap: 9px; text-decoration: none;
+    padding: 13px 24px; border-radius: 13px; font-weight: 600; font-size: 16px;
+    background: linear-gradient(180deg, var(--accent), var(--accent-2));
+    color: var(--accent-ink); box-shadow: var(--card-shadow); }
+  .cta-box .btn:hover { text-decoration: none; }
+  .btn svg { width: 18px; height: 18px; }
+  .req { margin: 14px 0 0; font-size: 13.5px; color: var(--ink-faint); }
+
+  footer { border-top: 1px solid var(--line); margin-top: 46px; padding: 30px 0;
+    color: var(--ink-faint); font-size: 14px; }
+  .foot-inner { display: flex; justify-content: space-between; gap: 18px; flex-wrap: wrap;
+    max-width: 1040px; margin: 0 auto; padding: 0 24px; }
+  .foot-links { display: flex; gap: 20px; }
+  .foot-links a { text-decoration: none; color: var(--ink-soft); }
+  .foot-links a:hover { color: var(--ink); }
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="../"><img src="../icon.png" alt="ClipDiary icon"> ClipDiary</a>
+    <nav class="nav-links">
+      <a href="../#features">Features</a>
+      <a href="../#faq">FAQ</a>
+      <a href="../#download">Download</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<article>
+  <div class="wrap">
+    <nav class="crumbs"><a href="../">ClipDiary</a> › Coming from 1 Second Everyday</nav>
+
+    <h1>Move your 1 Second Everyday library to a Mac</h1>
+    <p class="standfirst">
+      1 Second Everyday is a phone app: there is no 1SE desktop version, and no way to
+      edit your video diary on a big screen. ClipDiary is a free, native Mac app built on
+      the same one-second-a-day idea, and it can adopt a library you have already spent
+      years filling. Here are the two ways in, and which one to pick.
+    </p>
+
+    <h2>Which import should you use?</h2>
+    <p>
+      It depends on what you can get out of 1SE. If you back up to 1SE Cloud you can
+      request an official data export, which is the better route by a wide margin: every
+      clip keeps its real date and caption, because they are read from the export rather
+      than guessed. If all you have is a finished mashup — the movie 1SE stitched for you —
+      ClipDiary can pull that apart instead.
+    </p>
+
+    <div class="table-scroll">
+    <table class="cmp">
+      <thead>
+        <tr><th>&nbsp;</th><th>Data export</th><th>Mashup video</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Dates</td><td>Read from the export, exact</td><td>Read off the burned-in date stamp</td></tr>
+        <tr><td>Captions</td><td>Carried over</td><td>Not available</td></tr>
+        <tr><td>Clip length</td><td>The full snippet you recorded</td><td>Only the second that made the cut</td></tr>
+        <tr><td>Quality</td><td>Original file, copied as-is</td><td>Re-encoded per day</td></tr>
+        <tr><td>Needs</td><td>1SE Cloud backup on your account</td><td>Any exported 1SE movie</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <h2>Option 1: from your 1SE data export</h2>
+    <p>
+      1SE's privacy tooling will hand you a zip of everything on your account, snippets
+      included. Asking for it happens on their website, not in the app:
+    </p>
+    <ol class="steps">
+      <li>Sign in to your 1SE account at <b>me.1se.co/account</b>.</li>
+      <li>Open the <b>Account</b> tab and scroll to <b>Request your personal data</b>.</li>
+      <li>Press <b>Request Download</b>. 1SE confirms the request and emails you a link
+          when the zip is ready — expect to wait, this is not instant.</li>
+      <li>Unzip it. Inside you should see a <b>files</b> folder holding
+          <b>snapshots</b> (the manifests listing every project and the date of every
+          snippet) and <b>snippets</b> (the actual videos).</li>
+      <li>In ClipDiary, create or open a project, then choose
+          <b>Import ▸ Import 1SE Data Export…</b> from the toolbar and point it at the
+          unzipped folder.</li>
+      <li>ClipDiary lists the 1SE projects it found, biggest first. Pick the one to import
+          and let it run.</li>
+    </ol>
+    <p>
+      What lands in your project: each snippet at its <b>full recorded length</b> — not the
+      one second 1SE played — on its correct day, in the same order you had within a day,
+      with its caption attached and the date stamp switched on. The files are copied
+      byte-for-byte, so nothing is re-compressed. From there you can retrim anything that
+      is now too long, or leave it and let the whole clip play.
+    </p>
+
+    <div class="note">
+      <p>
+        <strong>No 1SE Cloud backup?</strong> Then your snippets only ever existed on your
+        phone, and the export will not contain them. Use the mashup route below, or dig the
+        original videos out of your phone's camera roll and let ClipDiary index that folder
+        directly — it sorts anything you give it by capture date.
+      </p>
+    </div>
+
+    <h2>Option 2: from a finished 1SE mashup video</h2>
+    <p>
+      A mashup is one long video with a date stamp burned into the bottom-left corner of
+      every frame. That stamp is the only record of which day is which, so ClipDiary reads
+      it: it scans the movie, watches for the stamp to change, and cuts a separate clip for
+      each day.
+    </p>
+    <ol class="steps">
+      <li>Export or share your 1SE movie out of the app and get the file onto your Mac.</li>
+      <li>In ClipDiary choose <b>Import ▸ Import 1SE Video…</b> and select it.</li>
+      <li>Let it scan. It samples the video for date changes, then narrows each boundary
+          down to about a single frame, so days are cut where they actually change.</li>
+      <li>Check the review list. You get one frame per detected day with its date, and
+          anything questionable is called out for you to fix inline.</li>
+      <li>Import. Each day becomes its own clip on its own calendar day.</li>
+    </ol>
+    <p>
+      A busy background can make a stamp misread — a wrong day, sometimes a wrong year. A
+      mashup always plays its days in order, though, so ClipDiary uses that: it trusts the
+      longest run of dates that never goes backwards, then snaps the stragglers onto the day
+      they belong between. Most misreads are corrected before you ever see them, and the
+      review step exists for the rest. Because the frames already carry 1SE's own stamp,
+      these clips come in with ClipDiary's date stamp off.
+    </p>
+
+    <h2>What changes once it is on your Mac</h2>
+    <ul class="plain">
+      <li><b>Clips can be any length.</b> No ten-second ceiling, and one day can hold
+          several clips.</li>
+      <li><b>You trim both ends.</b> Drag in- and out-points along a filmstrip instead of
+          picking a start time and accepting a fixed duration.</li>
+      <li><b>Music is a timeline.</b> Lay tracks across your days, trim which part of a
+          song plays, set volume, fade in and out. A song keeps playing over silent
+          photos.</li>
+      <li><b>Title cards.</b> Design a cover, an ending, or a card that sits in the middle
+          of a month, and reuse it — edit the card and every video that uses it picks up
+          the change on the next render.</li>
+      <li><b>Render any range.</b> A month, a year, everything, or a custom span, saved as
+          an MP4 you own.</li>
+      <li><b>Nothing leaves your Mac.</b> No account, no cloud, no telemetry. Your clips
+          live in a plain project folder you chose, and your edits are metadata — the media
+          files are never modified.</li>
+    </ul>
+
+    <h2>What ClipDiary does not do</h2>
+    <p>
+      Worth knowing before you switch, because it is not a like-for-like replacement:
+    </p>
+    <ul class="plain">
+      <li>There is no phone app and no sync. You shoot with your camera app as usual, then
+          point ClipDiary at the folder your videos land in.</li>
+      <li>There are no reminders nudging you to film today.</li>
+      <li>It needs macOS 15 (Sequoia) or later.</li>
+      <li>It is a personal tool that grew into something worth sharing, not a company's
+          product. It is free, open source, and fixed when something is broken.</li>
+    </ul>
+
+    <div class="cta-box">
+      <h2>Try it with your own library</h2>
+      <p>Free and open source. Import your 1SE history, then keep going on the big screen.</p>
+      <a class="btn" href="https://github.com/alejandromarcu/ClipDiary/releases/latest/download/ClipDiary.dmg">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.6l3.3-3.3 1.4 1.4L12 17.4 6.3 11.7l1.4-1.4L11 13.6V3h1zM5 19h14v2H5z"/></svg>
+        Download for macOS
+      </a>
+      <p class="req">macOS 15 or later · Apple silicon &amp; Intel</p>
+    </div>
+  </div>
+</article>
+</main>
+
+<footer>
+  <div class="foot-inner">
+    <div>© <span id="year"></span> Alejandro Marcu · ClipDiary</div>
+    <div class="foot-links">
+      <a href="../">Home</a>
+      <a href="https://github.com/alejandromarcu/ClipDiary">GitHub</a>
+      <a href="https://github.com/alejandromarcu/ClipDiary/issues">Report an issue</a>
+    </div>
+  </div>
+</footer>
+
+<script>document.getElementById("year").textContent = new Date().getFullYear();</script>
+</body>
+</html>

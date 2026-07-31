@@ -3,20 +3,37 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ClipDiary: beautiful video journaling on your Mac</title>
-<meta name="description" content="A native macOS app for beautiful video journaling. Turn everyday clips into monthly memory videos. Any-length clips, filmstrip trimming, soundtracks. Everything local, no accounts.">
+<title>ClipDiary — Mac video journal app & 1 Second Everyday alternative</title>
+<meta name="description" content="ClipDiary is a free, native Mac app for video journaling: turn your everyday clips into a monthly memory video. A desktop 1 Second Everyday alternative with any-length clips, filmstrip trimming and soundtracks. No accounts, no cloud.">
+<link rel="canonical" href="https://clipdiary.app/">
 <link rel="icon" type="image/png" href="icon.png">
 <link rel="apple-touch-icon" href="icon.png">
 <meta name="theme-color" content="#fbfaf8" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#16130f" media="(prefers-color-scheme: dark)">
 
-<!-- Social link previews. Update these URLs if you move to a custom domain. -->
+<!-- Social link previews. Absolute URLs must match the domain in docs/CNAME.
+     og.jpg is the 1200x630 card link scrapers show: the screenshot itself is
+     the wrong shape for one, and WebP is unreliable for several of them. It is
+     screenshot.png scaled onto the page's dark background — regenerate it
+     whenever the screenshot changes, or the preview goes stale:
+       sips --resampleHeight 540 screenshot.png --out /tmp/s.png
+       sips --padToHeightWidth 630 1200 --padColor 16130F /tmp/s.png --out /tmp/og.png
+       sips -s format jpeg -s formatOptions 82 /tmp/og.png --out og.jpg
+-->
 <meta property="og:type" content="website">
-<meta property="og:title" content="ClipDiary: beautiful video journaling on your Mac">
-<meta property="og:description" content="Turn everyday clips into monthly memory videos. Any-length clips, filmstrip trimming, soundtracks. Everything local, no accounts.">
-<meta property="og:url" content="https://alejandromarcu.github.io/ClipDiary/">
-<meta property="og:image" content="https://alejandromarcu.github.io/ClipDiary/icon.png">
-<meta name="twitter:card" content="summary">
+<meta property="og:site_name" content="ClipDiary">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="ClipDiary — Mac video journal app & 1 Second Everyday alternative">
+<meta property="og:description" content="Turn your everyday clips into a monthly memory video on your Mac. Any-length clips, filmstrip trimming, soundtracks, title cards. Free, open source, everything local.">
+<meta property="og:url" content="https://clipdiary.app/">
+<meta property="og:image" content="https://clipdiary.app/og.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="ClipDiary's day window on macOS, with a video open in the filmstrip trim editor.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="ClipDiary — Mac video journal app & 1 Second Everyday alternative">
+<meta name="twitter:description" content="Turn your everyday clips into a monthly memory video on your Mac. Free, open source, everything local.">
+<meta name="twitter:image" content="https://clipdiary.app/og.jpg">
 
 <!-- ============================================================= -->
 <!-- Cloudflare Web Analytics: paste your beacon token to enable. -->
@@ -24,6 +41,116 @@
 <!-- <script defer src="https://static.cloudflareinsights.com/beacon.min.js"
      data-cf-beacon='{"token": "PASTE_YOUR_TOKEN_HERE"}'></script>       -->
 <!-- ============================================================= -->
+
+<!-- Structured data: what the app is, and the FAQ below. Keep the FAQ answers
+     here in sync with the visible #faq section — search engines treat a
+     mismatch between markup and page text as spam. -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "SoftwareApplication",
+      "@id": "https://clipdiary.app/#app",
+      "name": "ClipDiary",
+      "applicationCategory": "MultimediaApplication",
+      "applicationSubCategory": "Video journaling",
+      "operatingSystem": "macOS 15 or later",
+      "url": "https://clipdiary.app/",
+      "downloadUrl": "https://github.com/alejandromarcu/ClipDiary/releases/latest/download/ClipDiary.dmg",
+      "installUrl": "https://github.com/alejandromarcu/ClipDiary/releases/latest",
+      "softwareHelp": "https://github.com/alejandromarcu/ClipDiary",
+      "screenshot": "https://clipdiary.app/og.jpg",
+      "image": "https://clipdiary.app/icon.png",
+      "description": "A free, native macOS app for video journaling: pick a clip from each day and render it into a monthly memory video. Clips can be any length, trimming uses in/out points on a filmstrip, and everything stays on your Mac.",
+      "isAccessibleForFree": true,
+      "license": "https://github.com/alejandromarcu/ClipDiary",
+      "author": { "@type": "Person", "name": "Alejandro Marcu" },
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+      "featureList": [
+        "One second a day style monthly memory videos",
+        "Clips of any length, trimmed with in and out points on a filmstrip",
+        "Soundtrack timeline with per-track trims, fades and volume",
+        "Photos, designed title cards and a burned-in date stamp",
+        "Calendar view over your source photo and video folders",
+        "Import an existing 1 Second Everyday library",
+        "Export MP4 for any range: a month, a year or everything",
+        "No account, no cloud, no telemetry"
+      ]
+    },
+    {
+      "@type": "FAQPage",
+      "@id": "https://clipdiary.app/#faq",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "Is there a 1 Second Everyday app for Mac?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "1 Second Everyday itself is phone-only, with no desktop version. ClipDiary is a native Mac app built on the same one-second-a-day idea: it reads the folders where your videos and photos already pile up, lets you pick and trim a moment per day on a big screen, and renders the month as a single video. It can also import an existing 1SE library."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Can I import my existing 1 Second Everyday library?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes, two ways. If you request 1SE's \"Download Your Data\" export, ClipDiary reads every snippet with its real date and caption straight from the export. If all you have is a finished mashup video, ClipDiary splits it back into per-day clips by reading the date stamp burned into each frame."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Do my clips have to be one second long?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No. A clip can be any length, and a day can hold several. You set the start and the end by dragging in and out points on a filmstrip, so a two-second moment stays two seconds and a ten-second one is not cut off."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Does ClipDiary need an account or a subscription?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "No. ClipDiary is free and open source, with no sign-in, no cloud and no telemetry. There is nothing to subscribe to and no export locked behind a paywall."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Where do my videos and photos end up?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "In a plain project folder you choose, holding the clips you picked plus a small JSON file of your edits. Trims and crops are stored as metadata, so the media files themselves are never modified, and you can back the folder up or move it like any other folder."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Which Macs can run ClipDiary?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Any Mac on macOS 15 (Sequoia) or later. The download is a universal build, so it runs natively on both Apple silicon and Intel Macs."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Can I add music to my memory video?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes. A soundtrack timeline lays audio files across your days: drag a track to move it, trim which part of the song plays, set its volume, and fade it in or out. Music keeps playing over silent photos and mixes with the clips' own sound."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Can I export a whole year instead of a month?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes. Any range works: one month, one year, everything you have, or a custom start and end date. Each range remembers its own cover and ending card, and the result is saved as an MP4."
+          }
+        }
+      ]
+    }
+  ]
+}
+</script>
 
 <style>
   :root {
@@ -202,6 +329,18 @@
   .compare .no { color: var(--ink-soft); }
   @media (max-width: 560px) { .compare .row { grid-template-columns: 1.3fr .8fr .8fr; font-size: 13.5px; } }
 
+  .after-compare { text-align: center; margin: 22px 0 0; font-size: 15px; }
+  .after-compare a { color: var(--accent); text-decoration: none; font-weight: 560; }
+  .after-compare a:hover { text-decoration: underline; }
+
+  /* ---------- faq ---------- */
+  .faq { display: grid; grid-template-columns: repeat(2, 1fr); gap: 26px 40px; }
+  @media (max-width: 720px) { .faq { grid-template-columns: 1fr; gap: 22px; } }
+  .faq h3 { margin: 0 0 6px; font-size: 16.5px; letter-spacing: -.01em; }
+  .faq p { margin: 0; color: var(--ink-soft); font-size: 15px; }
+  .faq a { color: var(--accent); text-decoration: none; }
+  .faq a:hover { text-decoration: underline; }
+
   /* ---------- download CTA ---------- */
   .final { text-align: center; }
   .final h2 { font-size: clamp(28px, 4.5vw, 40px); letter-spacing: -.02em; margin: 0 0 18px; }
@@ -221,6 +360,8 @@
     <div class="brand"><img src="icon.png" alt="ClipDiary icon"> ClipDiary</div>
     <nav class="nav-links">
       <a href="#features" class="hide-sm">Features</a>
+      <a href="1-second-everyday-alternative-for-mac/" class="hide-sm">Coming from 1SE</a>
+      <a href="#faq" class="hide-sm">FAQ</a>
       <a href="https://github.com/alejandromarcu/ClipDiary">GitHub</a>
       <a href="#download">Download</a>
     </nav>
@@ -234,8 +375,9 @@
       <img class="appicon" src="icon.png" alt="ClipDiary app icon">
       <h1>Beautiful video journaling,<br><span class="grad">on your Mac.</span></h1>
       <p class="lede">
-        ClipDiary turns your everyday clips into a monthly memory video:
-        the “1 second a day” idea, rebuilt as a native Mac app for the big screen.
+        ClipDiary turns your everyday clips into a monthly memory video — the
+        “1 second a day” idea behind 1 Second Everyday, rebuilt as a native Mac
+        app for the big screen, with no cap on how long a moment gets to be.
       </p>
       <div class="cta-row">
         <a class="btn btn-primary" href="https://github.com/alejandromarcu/ClipDiary/releases/latest/download/ClipDiary.dmg">
@@ -250,7 +392,8 @@
 
   <!-- SHOT -->
   <div class="wrap shot-wrap">
-    <img class="shot" src="screenshot.webp" width="2000" height="1199"
+    <img class="shot" src="screenshot.webp" width="2000" height="1201"
+         decoding="async" fetchpriority="high"
          alt="ClipDiary's day window: the day's clips listed down the left, one video open in the trim
               editor with yellow in/out handles on its filmstrip, and the clip's details on the right.">
   </div>
@@ -338,6 +481,9 @@
         <div class="row"><div class="feat">Accounts / cloud</div><div class="yes">None</div><div class="no">Yes</div></div>
         <div class="row"><div class="feat">Price</div><div class="yes">Free &amp; open source</div><div class="no">Freemium</div></div>
       </div>
+      <p class="after-compare">
+        <a href="1-second-everyday-alternative-for-mac/">How to move your 1 Second Everyday library to your Mac →</a>
+      </p>
     </div>
   </section>
 
@@ -352,6 +498,67 @@
           <span class="pill">📁 Local project files</span>
           <span class="pill">🚫 No tracking</span>
           <span class="pill">🍎 Native SwiftUI</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <!-- Answers here are mirrored in the FAQPage JSON-LD in <head>: edit both. -->
+  <section id="faq">
+    <div class="wrap">
+      <div class="eyebrow">Questions</div>
+      <h2 class="section-title">Frequently asked</h2>
+      <div class="faq">
+        <div>
+          <h3>Is there a 1 Second Everyday app for Mac?</h3>
+          <p>1 Second Everyday itself is phone-only, with no desktop version. ClipDiary is a
+             native Mac app built on the same one-second-a-day idea: it reads the folders where
+             your videos and photos already pile up, lets you pick and trim a moment per day on
+             a big screen, and renders the month as a single video. It can also
+             <a href="1-second-everyday-alternative-for-mac/">import an existing 1SE library</a>.</p>
+        </div>
+        <div>
+          <h3>Can I import my existing 1 Second Everyday library?</h3>
+          <p>Yes, two ways. If you request 1SE’s “Download Your Data” export, ClipDiary reads
+             every snippet with its real date and caption straight from the export. If all you
+             have is a finished mashup video, ClipDiary splits it back into per-day clips by
+             reading the date stamp burned into each frame.</p>
+        </div>
+        <div>
+          <h3>Do my clips have to be one second long?</h3>
+          <p>No. A clip can be any length, and a day can hold several. You set the start and the
+             end by dragging in and out points on a filmstrip, so a two-second moment stays two
+             seconds and a ten-second one is not cut off.</p>
+        </div>
+        <div>
+          <h3>Does ClipDiary need an account or a subscription?</h3>
+          <p>No. ClipDiary is free and open source, with no sign-in, no cloud and no telemetry.
+             There is nothing to subscribe to and no export locked behind a paywall.</p>
+        </div>
+        <div>
+          <h3>Where do my videos and photos end up?</h3>
+          <p>In a plain project folder you choose, holding the clips you picked plus a small JSON
+             file of your edits. Trims and crops are stored as metadata, so the media files
+             themselves are never modified, and you can back the folder up or move it like any
+             other folder.</p>
+        </div>
+        <div>
+          <h3>Which Macs can run ClipDiary?</h3>
+          <p>Any Mac on macOS 15 (Sequoia) or later. The download is a universal build, so it
+             runs natively on both Apple silicon and Intel Macs.</p>
+        </div>
+        <div>
+          <h3>Can I add music to my memory video?</h3>
+          <p>Yes. A soundtrack timeline lays audio files across your days: drag a track to move
+             it, trim which part of the song plays, set its volume, and fade it in or out. Music
+             keeps playing over silent photos and mixes with the clips’ own sound.</p>
+        </div>
+        <div>
+          <h3>Can I export a whole year instead of a month?</h3>
+          <p>Yes. Any range works: one month, one year, everything you have, or a custom start
+             and end date. Each range remembers its own cover and ending card, and the result is
+             saved as an MP4.</p>
         </div>
       </div>
     </div>
@@ -377,8 +584,8 @@
   <div class="wrap foot-inner">
     <div>© <span id="year"></span> Alejandro Marcu · ClipDiary <span id="ver"></span></div>
     <div class="foot-links">
+      <a href="1-second-everyday-alternative-for-mac/">Coming from 1SE</a>
       <a href="https://github.com/alejandromarcu/ClipDiary">GitHub</a>
-      <a href="https://github.com/alejandromarcu/ClipDiary/releases">Releases</a>
       <a href="https://github.com/alejandromarcu/ClipDiary/issues">Report an issue</a>
     </div>
   </div>
@@ -390,6 +597,11 @@
   // ------------------------------------------------------------------------
 
   document.getElementById("year").textContent = new Date().getFullYear();
+
+  // The download total is for me, not for visitors: a small number reads as
+  // "nobody uses this". It stays hidden unless the page is opened as
+  // clipdiary.app/?stats, and is always logged to the browser console.
+  var SHOW_STATS = /(^|[?&])stats(=|&|$)/.test(location.search) || location.hash === "#stats";
 
   // Live download count + version, pulled from the GitHub Releases API.
   // Degrades silently to nothing if there are no releases yet / offline.
@@ -405,8 +617,11 @@
       if (!latestTag && releases[0]) latestTag = releases[0].tag_name;
       if (total > 0) {
         var msg = "🎉 Downloaded " + total.toLocaleString() + " times";
-        var el = document.getElementById("dlcount"); el.innerHTML = msg; el.style.display = "block";
-        var el2 = document.getElementById("dlcount2"); el2.textContent = msg; el2.style.display = "block";
+        console.log("ClipDiary: " + msg + " (open with ?stats to show it on the page)");
+        if (SHOW_STATS) {
+          var el = document.getElementById("dlcount"); el.innerHTML = msg; el.style.display = "block";
+          var el2 = document.getElementById("dlcount2"); el2.textContent = msg; el2.style.display = "block";
+        }
       }
       if (latestTag) {
         document.getElementById("ver").textContent = latestTag;
