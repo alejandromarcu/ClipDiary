@@ -11,7 +11,15 @@
 <meta name="theme-color" content="#fbfaf8" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#16130f" media="(prefers-color-scheme: dark)">
 
-<!-- Social link previews. Absolute URLs must match the domain in docs/CNAME. -->
+<!-- Social link previews. Absolute URLs must match the domain in docs/CNAME.
+     og.jpg is the 1200x630 card link scrapers show: the screenshot itself is
+     the wrong shape for one, and WebP is unreliable for several of them. It is
+     screenshot.png scaled onto the page's dark background — regenerate it
+     whenever the screenshot changes, or the preview goes stale:
+       sips --resampleHeight 540 screenshot.png --out /tmp/s.png
+       sips --padToHeightWidth 630 1200 --padColor 16130F /tmp/s.png --out /tmp/og.png
+       sips -s format jpeg -s formatOptions 82 /tmp/og.png --out og.jpg
+-->
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="ClipDiary">
 <meta property="og:locale" content="en_US">
