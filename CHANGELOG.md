@@ -7,6 +7,23 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.32.0] - 2026-07-31
+
+- **The website can now be found.** The landing page tells search engines what
+  ClipDiary actually is: a proper title and description, a link preview card
+  that shows the app instead of just the icon, machine-readable details about
+  the app and its answers, plus a `robots.txt` and a sitemap. Every address it
+  publishes now points at [clipdiary.app](https://clipdiary.app/).
+- **A frequently-asked section on the landing page**, answering the questions
+  people arrive with — whether clips have to be one second, whether an account
+  is needed, where your files live, and which Macs it runs on.
+- **A guide for people switching from 1 Second Everyday**, at
+  [clipdiary.app/1-second-everyday-alternative-for-mac](https://clipdiary.app/1-second-everyday-alternative-for-mac/):
+  how to request the 1SE data export, how the mashup-video import differs, what
+  each route preserves, and what ClipDiary deliberately doesn't do.
+- **The repository has a README**, so the project explains itself to anyone who
+  lands on GitHub first.
+
 ## [1.31.2] - 2026-07-31
 
 - **Fixed: the disk image itself wasn't actually signed.** 1.31.1 notarized
