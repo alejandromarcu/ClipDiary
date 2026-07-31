@@ -605,6 +605,11 @@
 
   document.getElementById("year").textContent = new Date().getFullYear();
 
+  // The download total is for me, not for visitors: a small number reads as
+  // "nobody uses this". It stays hidden unless the page is opened as
+  // clipdiary.app/?stats, and is always logged to the browser console.
+  var SHOW_STATS = /(^|[?&])stats(=|&|$)/.test(location.search) || location.hash === "#stats";
+
   // Live download count + version, pulled from the GitHub Releases API.
   // Degrades silently to nothing if there are no releases yet / offline.
   fetch("https://api.github.com/repos/" + REPO + "/releases")
@@ -619,8 +624,11 @@
       if (!latestTag && releases[0]) latestTag = releases[0].tag_name;
       if (total > 0) {
         var msg = "🎉 Downloaded " + total.toLocaleString() + " times";
-        var el = document.getElementById("dlcount"); el.innerHTML = msg; el.style.display = "block";
-        var el2 = document.getElementById("dlcount2"); el2.textContent = msg; el2.style.display = "block";
+        console.log("ClipDiary: " + msg + " (open with ?stats to show it on the page)");
+        if (SHOW_STATS) {
+          var el = document.getElementById("dlcount"); el.innerHTML = msg; el.style.display = "block";
+          var el2 = document.getElementById("dlcount2"); el2.textContent = msg; el2.style.display = "block";
+        }
       }
       if (latestTag) {
         document.getElementById("ver").textContent = latestTag;

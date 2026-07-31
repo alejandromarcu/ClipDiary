@@ -23,6 +23,9 @@ and versions follow [Semantic Versioning](https://semver.org/)
   each route preserves, and what ClipDiary deliberately doesn't do.
 - **The repository has a README**, so the project explains itself to anyone who
   lands on GitHub first.
+- **The download counter is off the landing page.** It's still counted — open
+  the site as `clipdiary.app/?stats` to see the total, or read it in the
+  browser console, where it's always logged.
 
 ## [1.31.2] - 2026-07-31
 
