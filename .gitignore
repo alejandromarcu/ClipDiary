@@ -14,6 +14,6 @@ DerivedData/
 .swiftpm/
 .build/
 
-# ClipDiary releases (zips live on GitHub Releases; Sparkle CLI tools are a download)
-/releases/
+# Sparkle CLI tools, if downloaded locally (only generate_keys is ever needed
+# by hand — the release workflow fetches its own copy)
 Tools/sparkle/

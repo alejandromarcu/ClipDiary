@@ -7,17 +7,98 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
-## [1.29.0] - 2026-07-15
+## [1.33.0] - 2026-07-31
 
-Groundwork for distributing ClipDiary outside the App Store, with automatic
-updates via [Sparkle](https://sparkle-project.org):
+ClipDiary can now keep itself up to date, via the
+[Sparkle](https://sparkle-project.org) auto-updater:
 
-- **Check for Updates…** in the ClipDiary menu; the app also checks
-  periodically in the background. (Nothing is live to update to yet — the
-  feed goes up with the first public release.)
-- `Tools/release.sh` scripts the release flow: archive → Developer ID
-  signing → notarization → zip → regenerate the update feed in `docs/`
-  (which GitHub Pages will serve).
+- **Check for Updates…** in the ClipDiary menu, plus periodic background
+  checks. Updates arrive as the same signed, notarized disk image the
+  website serves, and install in place.
+- Each release also refreshes an update feed at `clipdiary.app/appcast.xml`
+  (published by the release workflow; live once the update-signing key is
+  configured).
+
+## [1.32.0] - 2026-07-31
+
+- **The website can now be found.** The landing page tells search engines what
+  ClipDiary actually is: a proper title and description, a link preview card
+  that shows the app instead of just the icon, machine-readable details about
+  the app and its answers, plus a `robots.txt` and a sitemap. Every address it
+  publishes now points at [clipdiary.app](https://clipdiary.app/).
+- **A frequently-asked section on the landing page**, answering the questions
+  people arrive with — whether clips have to be one second, whether an account
+  is needed, where your files live, and which Macs it runs on.
+- **A guide for people switching from 1 Second Everyday**, at
+  [clipdiary.app/1-second-everyday-alternative-for-mac](https://clipdiary.app/1-second-everyday-alternative-for-mac/):
+  how to request the 1SE data export, how the mashup-video import differs, what
+  each route preserves, and what ClipDiary deliberately doesn't do.
+- **The repository has a README**, so the project explains itself to anyone who
+  lands on GitHub first.
+- **The download counter is off the landing page.** It's still counted — open
+  the site as `clipdiary.app/?stats` to see the total, or read it in the
+  browser console, where it's always logged.
+
+## [1.31.2] - 2026-07-31
+
+- **Fixed: the disk image itself wasn't actually signed.** 1.31.1 notarized
+  the app but not the `.dmg` container it ships in, so Gatekeeper still
+  rejected the download. The `.dmg` is now signed before notarizing, so it
+  opens cleanly.
+
+## [1.31.1] - 2026-07-30
+
+- **The download no longer triggers a Gatekeeper warning.** ClipDiary is now
+  signed with a Developer ID certificate and notarized by Apple, so the first
+  launch just works — no more clearing the quarantine flag by hand.
+
+## [1.31.0] - 2026-07-29
+
+- **ClipDiary now downloads as a disk image.** Releases ship `ClipDiary.dmg`
+  instead of a zip: opening it gives the familiar window with ClipDiary beside
+  an Applications shortcut to drag it into, rather than a loose app in your
+  Downloads folder.
+- **The download button hands you the app directly.** It used to drop you on
+  the GitHub release page to find the file yourself; now the download starts
+  on click.
+
+## [1.30.0] - 2026-07-28
+
+- **Downloads now build themselves.** Every merge to `main` publishes a new
+  GitHub Release automatically: the app is archived, zipped as a universal
+  (Apple silicon + Intel) build, and attached to a `vX.Y.Z` tag, with this
+  changelog's entry as the release notes. That's what the landing page's
+  download buttons point at, so they always hand out the newest version
+  without anyone uploading anything by hand.
+- Until the app is notarized by Apple, the builds are signed ad-hoc and macOS
+  blocks the first launch, so every release note carries the one-time fix
+  (**Open Anyway** in Privacy & Security, or clearing the quarantine flag from
+  the terminal).
+- **ClipDiary now runs on macOS 15 and later**, instead of demanding macOS 26.5.
+  Nothing in the app actually needed 26.5 — the project was just built against
+  whatever macOS was current at the time. The download works on Macs that
+  haven't been upgraded in a while, and the landing page no longer bothers
+  mentioning a system requirement.
+- **The landing page shows a real screenshot** of the day window instead of a
+  placeholder — the capture brings its own title bar and shadow, so the fake
+  window frame around it is gone.
+- Landing page tidy-up: both "Build from source" buttons removed (they pointed
+  at a README section that doesn't exist — the header's GitHub link covers it,
+  and now shows on phones too), the Privacy link dropped from the header, and
+  both download buttons given the same label and the same destination instead
+  of one scrolling down to the other.
+- No app changes in this release.
+
+## [1.29.0] - 2026-07-28
+
+- **Added a landing page** for distributing ClipDiary publicly, in `docs/`,
+  ready to serve with GitHub Pages. It introduces the app, walks through the
+  three-step workflow (point it at your photo folders, pick the moments,
+  create the video), lists what it does, and compares it with 1 Second
+  Everyday for anyone thinking of switching. The download button points at
+  the latest GitHub Release, and the page shows a live download count pulled
+  from the Releases API once the first release exists.
+- No app changes in this release: the page is a website, not a feature.
 
 ## [1.28.1] - 2026-07-08
 

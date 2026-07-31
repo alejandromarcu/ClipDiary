@@ -398,8 +398,13 @@ Deliberate improvements over 1SE:
 
 - Swift / SwiftUI only, no third-party dependencies, no ffmpeg. **One
   sanctioned exception**: the Sparkle framework (SPM) for auto-updates.
-- Minimum deployment: macOS 14. Use modern async AVFoundation APIs
-  (`load(.duration)`, `loadTracks(withMediaType:)`, `generator.image(at:)`).
+- Minimum deployment: **macOS 15** (`MACOSX_DEPLOYMENT_TARGET`). Keep it there —
+  releases are built on GitHub's runners, whose SDK trails Apple by weeks, and
+  the download should run on Macs that aren't freshly upgraded. The Soundtrack
+  timeline is what pins it at 15 (`ScrollPosition`, `scrollTo(x:)`,
+  `onScrollGeometryChange`); everything else still compiles against 14. Use
+  modern async AVFoundation APIs (`load(.duration)`,
+  `loadTracks(withMediaType:)`, `generator.image(at:)`).
 - App Sandbox is ON; User Selected File = Read/Write. Use
   `startAccessingSecurityScopedResource()` for imported URLs. Project folders
   live anywhere the user picks, so access is regained across launches via
@@ -492,25 +497,35 @@ media/card data on demand if missing.
 
 ## Distribution / auto-updates
 
-The app ships with **Sparkle 2** (the one third-party dependency, via SPM) for
-auto-updates when distributed outside the App Store. The updater lives in
-`ClipDiaryApp.swift` (`SPUStandardUpdaterController` + a "Check for Updates…"
-app-menu item). Because the app is sandboxed **with no outgoing-network
-entitlement**, Sparkle runs through its XPC services: `SUEnableInstallerLauncherService`
-+ `SUEnableDownloaderService` in `ClipDiary/Info.plist` (a small plist merged
+Releases are fully automated: every merge to main whose `MARKETING_VERSION`
+has no tag yet makes `.github/workflows/release.yml` build a Developer
+ID-signed, notarized `ClipDiary.dmg` and publish it as GitHub Release
+`v<version>` (the asset name carries no version on purpose —
+`/releases/latest/download/ClipDiary.dmg` is the landing page's download URL).
+The website in `docs/` is served by GitHub Pages at https://clipdiary.app/
+(`CNAME`).
+
+Auto-updates use **Sparkle 2** (the one third-party dependency, via SPM; the
+CLI tools the workflow downloads are pinned to the same version through
+`Package.resolved`). The updater lives in `ClipDiaryApp.swift`
+(`SPUStandardUpdaterController` + a "Check for Updates…" app-menu item).
+Because the app is sandboxed **with no outgoing-network entitlement**, Sparkle
+runs through its XPC services: `SUEnableInstallerLauncherService` +
+`SUEnableDownloaderService` in `ClipDiary/Info.plist` (a small plist merged
 into the Xcode-generated one; it also holds `SUFeedURL` + `SUPublicEDKey`), and
 the two mach-lookup exceptions in `ClipDiary/ClipDiary.entitlements` (merged
 with the `ENABLE_*` build-setting entitlements). `CURRENT_PROJECT_VERSION`
 tracks `MARKETING_VERSION`, so the per-PR version bump is what Sparkle compares.
 
-The update feed is `docs/appcast.xml`, served by GitHub Pages
-(`https://alejandromarcu.github.io/ClipDiary/appcast.xml`); update zips attach
-to GitHub Releases (tag `v<version>`). `Tools/release.sh` runs the whole flow
-(archive → Developer ID sign → notarize → zip → `generate_appcast`) and its
-header documents the **one-time setup still pending**: Apple Developer
-membership, notarytool credentials, downloading Sparkle's CLI tools, running
-`generate_keys` (replace the `SUPublicEDKey` placeholder; back up the private
-key), and enabling GitHub Pages (main + `/docs`).
+The update feed is `docs/appcast.xml` (`https://clipdiary.app/appcast.xml`).
+After publishing a release, the workflow EdDSA-signs the dmg with the
+`SPARKLE_PRIVATE_KEY` repository secret, regenerates the appcast, and commits
+it back to main — skipped with a notice while that secret doesn't exist.
+**One-time setup still pending** to switch updates on: run Sparkle's
+`generate_keys` once, put the printed public key in `ClipDiary/Info.plist`
+(`SUPublicEDKey`, replacing the placeholder), and store the exported private
+key (`generate_keys -x`) as the `SPARKLE_PRIVATE_KEY` secret — back that key
+up; losing it strands every existing install on its current version.
 
 ## Roadmap ideas (not yet built)
 

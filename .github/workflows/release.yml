@@ -1,0 +1,290 @@
+## Cuts a GitHub Release every time a PR lands on main.
+##
+## Every PR bumps MARKETING_VERSION (see CLAUDE.md), so each merge produces a
+## version that has no tag yet -> build, package, publish as `vX.Y.Z`. A merge
+## that forgot to bump the version finds its tag already there and stops, so the
+## workflow is safe to re-run and never overwrites a published release.
+##
+## The asset is named ClipDiary.dmg with **no version in it** on purpose: that
+## is what makes /releases/latest/download/ClipDiary.dmg resolve, which is the
+## URL the landing page's download buttons use. Renaming it breaks those.
+##
+## The app is signed with a Developer ID Application certificate and notarized
+## (both the .app and the .dmg get stapled tickets), so it launches with no
+## Gatekeeper warning. Signing/notarization secrets: DEVELOPER_ID_CERT_P12,
+## DEVELOPER_ID_CERT_PASSWORD, APPLE_ID, APPLE_TEAM_ID,
+## APPLE_APP_SPECIFIC_PASSWORD (all repository secrets).
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select the newest Xcode on the runner
+        run: |
+          set -euo pipefail
+          latest="$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -n1 || true)"
+          if [ -n "$latest" ]; then
+            sudo xcode-select -s "$latest/Contents/Developer"
+          fi
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i macos
+
+      - name: Read version from the Xcode project
+        id: meta
+        run: |
+          set -euo pipefail
+          version="$(grep -m1 -E '^[[:space:]]*MARKETING_VERSION' \
+            ClipDiary.xcodeproj/project.pbxproj | sed -E 's/.*= *([^;]+);.*/\1/')"
+          target="$(grep -m1 -E '^[[:space:]]*MACOSX_DEPLOYMENT_TARGET' \
+            ClipDiary.xcodeproj/project.pbxproj | sed -E 's/.*= *([^;]+);.*/\1/')"
+          if [ -z "$version" ]; then
+            echo "::error::Could not read MARKETING_VERSION from project.pbxproj"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "min_macos=$target" >> "$GITHUB_OUTPUT"
+          echo "Version $version (requires macOS $target)"
+
+      - name: Has this version already been released?
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "${{ steps.meta.outputs.tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::${{ steps.meta.outputs.tag }} already released - nothing to do."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Import Developer ID certificate
+        if: steps.check.outputs.exists == 'false'
+        env:
+          CERT_P12_BASE64: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password="$(uuidgen)"
+          cert_path="$RUNNER_TEMP/cert.p12"
+
+          echo "$CERT_P12_BASE64" | base64 --decode -o "$cert_path"
+
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$cert_path" -k "$keychain" -P "$CERT_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_password" "$keychain"
+
+          existing="$(security list-keychains -d user | sed 's/[[:space:]]*"\(.*\)"/\1/')"
+          security list-keychains -d user -s "$keychain" $existing
+
+          rm -f "$cert_path"
+
+      - name: Archive (Release, Developer ID signed)
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -project ClipDiary.xcodeproj \
+            -scheme ClipDiary \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -archivePath "$RUNNER_TEMP/ClipDiary.xcarchive" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Developer ID Application" \
+            DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
+            ENABLE_HARDENED_RUNTIME=YES
+
+      - name: Notarize the app
+        if: steps.check.outputs.exists == 'false'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/ClipDiary.xcarchive/Products/Applications/ClipDiary.app"
+          zip_path="$RUNNER_TEMP/ClipDiary-notarize.zip"
+
+          codesign --verify --verbose "$app"
+          ditto -c -k --keepParent "$app" "$zip_path"
+
+          xcrun notarytool submit "$zip_path" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --wait
+
+          xcrun stapler staple "$app"
+
+      - name: Build the disk image
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/ClipDiary.xcarchive/Products/Applications/ClipDiary.app"
+
+          # A staging folder holding the app next to an /Applications alias, so
+          # mounting the image gives the usual drag-across-to-install window.
+          staging="$RUNNER_TEMP/dmg"
+          rm -rf "$staging"
+          mkdir -p "$staging"
+          ditto "$app" "$staging/ClipDiary.app"
+          ln -s /Applications "$staging/Applications"
+
+          hdiutil create \
+            -volname "ClipDiary ${{ steps.meta.outputs.version }}" \
+            -srcfolder "$staging" \
+            -fs HFS+ -format UDZO -ov \
+            "$RUNNER_TEMP/ClipDiary.dmg"
+
+      - name: Notarize the disk image
+        if: steps.check.outputs.exists == 'false'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          set -euo pipefail
+          dmg="$RUNNER_TEMP/ClipDiary.dmg"
+
+          # hdiutil doesn't sign the image it creates. notarytool will accept
+          # (and staple) an unsigned dmg, but Gatekeeper then has no signature
+          # to bind the ticket to and rejects it locally -- so sign it first.
+          codesign --force --sign "Developer ID Application" --timestamp "$dmg"
+          codesign --verify --verbose "$dmg"
+
+          xcrun notarytool submit "$dmg" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --wait
+
+          xcrun stapler staple "$dmg"
+
+      - name: Build the release notes
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          set -euo pipefail
+          # The CHANGELOG section for this version, if there is one.
+          awk -v ver="${{ steps.meta.outputs.version }}" '
+            $0 ~ "^## \\[" ver "\\]" { inside = 1; next }
+            inside && /^## \[/ { exit }
+            inside { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+
+          if [ ! -s "$RUNNER_TEMP/notes.md" ]; then
+            echo "See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)." \
+              > "$RUNNER_TEMP/notes.md"
+          fi
+
+          cat >> "$RUNNER_TEMP/notes.md" <<'NOTES'
+
+          ---
+
+          ### Install
+
+          1. Download `ClipDiary.dmg` below and open it.
+          2. Drag **ClipDiary** onto the Applications folder in the same window.
+          NOTES
+          echo "" >> "$RUNNER_TEMP/notes.md"
+          echo "Requires macOS ${{ steps.meta.outputs.min_macos }} or later." \
+            >> "$RUNNER_TEMP/notes.md"
+
+      - name: Publish the release
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${{ steps.meta.outputs.tag }}" \
+            "$RUNNER_TEMP/ClipDiary.dmg" \
+            --target "$GITHUB_SHA" \
+            --title "ClipDiary ${{ steps.meta.outputs.version }}" \
+            --notes-file "$RUNNER_TEMP/notes.md"
+
+      ## After the release is out, refresh the Sparkle update feed
+      ## (docs/appcast.xml, served at clipdiary.app/appcast.xml) so existing
+      ## installs pick the new version up. The dmg is EdDSA-signed with the
+      ## project's update key; until that key exists as the SPARKLE_PRIVATE_KEY
+      ## repository secret this step skips with a notice — downloads still
+      ## work, auto-update just stays dormant. The push back to main uses the
+      ## workflow token, which never triggers another workflow run.
+      - name: Update the Sparkle appcast
+        if: steps.check.outputs.exists == 'false'
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SPARKLE_PRIVATE_KEY" ]; then
+            echo "::notice::SPARKLE_PRIVATE_KEY secret not set - skipping the appcast; auto-updates stay dormant."
+            exit 0
+          fi
+
+          # Sign with the same Sparkle release the app links against.
+          sparkle_version="$(jq -r '.pins[] | select(.identity == "sparkle") | .state.version' \
+            ClipDiary.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved)"
+          curl -fsSL -o "$RUNNER_TEMP/sparkle-tools.tar.xz" \
+            "https://github.com/sparkle-project/Sparkle/releases/download/$sparkle_version/Sparkle-$sparkle_version.tar.xz"
+          mkdir -p "$RUNNER_TEMP/sparkle-tools"
+          tar -xJf "$RUNNER_TEMP/sparkle-tools.tar.xz" -C "$RUNNER_TEMP/sparkle-tools"
+
+          key_file="$RUNNER_TEMP/sparkle_ed_key"
+          printf '%s\n' "$SPARKLE_PRIVATE_KEY" > "$key_file"
+          # Prints the enclosure attributes: sparkle:edSignature="..." length="..."
+          signature="$("$RUNNER_TEMP/sparkle-tools/bin/sign_update" \
+            --ed-key-file "$key_file" "$RUNNER_TEMP/ClipDiary.dmg")"
+          rm -f "$key_file"
+
+          version="${{ steps.meta.outputs.version }}"
+          cat > docs/appcast.xml <<APPCAST
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+            <channel>
+              <title>ClipDiary</title>
+              <link>https://clipdiary.app/</link>
+              <item>
+                <title>$version</title>
+                <pubDate>$(date -u "+%a, %d %b %Y %H:%M:%S +0000")</pubDate>
+                <sparkle:version>$version</sparkle:version>
+                <sparkle:shortVersionString>$version</sparkle:shortVersionString>
+                <sparkle:minimumSystemVersion>${{ steps.meta.outputs.min_macos }}</sparkle:minimumSystemVersion>
+                <sparkle:releaseNotesLink>https://github.com/${{ github.repository }}/releases/tag/v$version</sparkle:releaseNotesLink>
+                <enclosure
+                  url="https://github.com/${{ github.repository }}/releases/download/v$version/ClipDiary.dmg"
+                  $signature
+                  type="application/octet-stream"/>
+              </item>
+            </channel>
+          </rss>
+          APPCAST
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/appcast.xml
+          git commit -m "Update appcast for $version"
+          git pull --rebase origin main
+          git push origin HEAD:main
+
+      - name: Remove the signing keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
