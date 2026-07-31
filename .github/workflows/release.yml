@@ -165,13 +165,21 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
           set -euo pipefail
-          xcrun notarytool submit "$RUNNER_TEMP/ClipDiary.dmg" \
+          dmg="$RUNNER_TEMP/ClipDiary.dmg"
+
+          # hdiutil doesn't sign the image it creates. notarytool will accept
+          # (and staple) an unsigned dmg, but Gatekeeper then has no signature
+          # to bind the ticket to and rejects it locally -- so sign it first.
+          codesign --force --sign "Developer ID Application" --timestamp "$dmg"
+          codesign --verify --verbose "$dmg"
+
+          xcrun notarytool submit "$dmg" \
             --apple-id "$APPLE_ID" \
             --team-id "$APPLE_TEAM_ID" \
             --password "$APPLE_APP_SPECIFIC_PASSWORD" \
             --wait
 
-          xcrun stapler staple "$RUNNER_TEMP/ClipDiary.dmg"
+          xcrun stapler staple "$dmg"
 
       - name: Build the release notes
         if: steps.check.outputs.exists == 'false'

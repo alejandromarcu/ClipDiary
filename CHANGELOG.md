@@ -7,6 +7,13 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.31.2] - 2026-07-31
+
+- **Fixed: the disk image itself wasn't actually signed.** 1.31.1 notarized
+  the app but not the `.dmg` container it ships in, so Gatekeeper still
+  rejected the download. The `.dmg` is now signed before notarizing, so it
+  opens cleanly.
+
 ## [1.31.1] - 2026-07-30
 
 - **The download no longer triggers a Gatekeeper warning.** ClipDiary is now
