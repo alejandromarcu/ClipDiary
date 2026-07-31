@@ -9,8 +9,11 @@
 ## is what makes /releases/latest/download/ClipDiary.dmg resolve, which is the
 ## URL the landing page's download buttons use. Renaming it breaks those.
 ##
-## The app is signed **ad-hoc** (no Developer ID / notarization), so downloaders
-## have to clear the quarantine flag once -- the release notes say how.
+## The app is signed with a Developer ID Application certificate and notarized
+## (both the .app and the .dmg get stapled tickets), so it launches with no
+## Gatekeeper warning. Signing/notarization secrets: DEVELOPER_ID_CERT_P12,
+## DEVELOPER_ID_CERT_PASSWORD, APPLE_ID, APPLE_TEAM_ID,
+## APPLE_APP_SPECIFIC_PASSWORD (all repository secrets).
 name: Release
 
 on:
@@ -71,7 +74,33 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Archive (Release, ad-hoc signed)
+      - name: Import Developer ID certificate
+        if: steps.check.outputs.exists == 'false'
+        env:
+          CERT_P12_BASE64: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password="$(uuidgen)"
+          cert_path="$RUNNER_TEMP/cert.p12"
+
+          echo "$CERT_P12_BASE64" | base64 --decode -o "$cert_path"
+
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$cert_path" -k "$keychain" -P "$CERT_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_password" "$keychain"
+
+          existing="$(security list-keychains -d user | sed 's/[[:space:]]*"\(.*\)"/\1/')"
+          security list-keychains -d user -s "$keychain" $existing
+
+          rm -f "$cert_path"
+
+      - name: Archive (Release, Developer ID signed)
         if: steps.check.outputs.exists == 'false'
         run: |
           set -euo pipefail
@@ -82,15 +111,37 @@ jobs:
             -destination 'generic/platform=macOS' \
             -archivePath "$RUNNER_TEMP/ClipDiary.xcarchive" \
             CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY=- \
-            DEVELOPMENT_TEAM=
+            CODE_SIGN_IDENTITY="Developer ID Application" \
+            DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
+            ENABLE_HARDENED_RUNTIME=YES
+
+      - name: Notarize the app
+        if: steps.check.outputs.exists == 'false'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/ClipDiary.xcarchive/Products/Applications/ClipDiary.app"
+          zip_path="$RUNNER_TEMP/ClipDiary-notarize.zip"
+
+          codesign --verify --verbose "$app"
+          ditto -c -k --keepParent "$app" "$zip_path"
+
+          xcrun notarytool submit "$zip_path" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --wait
+
+          xcrun stapler staple "$app"
 
       - name: Build the disk image
         if: steps.check.outputs.exists == 'false'
         run: |
           set -euo pipefail
           app="$RUNNER_TEMP/ClipDiary.xcarchive/Products/Applications/ClipDiary.app"
-          codesign --verify --verbose "$app"
 
           # A staging folder holding the app next to an /Applications alias, so
           # mounting the image gives the usual drag-across-to-install window.
@@ -105,6 +156,22 @@ jobs:
             -srcfolder "$staging" \
             -fs HFS+ -format UDZO -ov \
             "$RUNNER_TEMP/ClipDiary.dmg"
+
+      - name: Notarize the disk image
+        if: steps.check.outputs.exists == 'false'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          set -euo pipefail
+          xcrun notarytool submit "$RUNNER_TEMP/ClipDiary.dmg" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --wait
+
+          xcrun stapler staple "$RUNNER_TEMP/ClipDiary.dmg"
 
       - name: Build the release notes
         if: steps.check.outputs.exists == 'false'
@@ -130,15 +197,6 @@ jobs:
 
           1. Download `ClipDiary.dmg` below and open it.
           2. Drag **ClipDiary** onto the Applications folder in the same window.
-          3. ClipDiary is signed ad-hoc rather than notarized, so macOS blocks the
-             first launch. Clear the download quarantine once:
-
-             ```
-             xattr -dr com.apple.quarantine /Applications/ClipDiary.app
-             ```
-
-             (Or launch it, then click **Open Anyway** in System Settings →
-             Privacy & Security.)
           NOTES
           echo "" >> "$RUNNER_TEMP/notes.md"
           echo "Requires macOS ${{ steps.meta.outputs.min_macos }} or later." \
@@ -155,3 +213,7 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "ClipDiary ${{ steps.meta.outputs.version }}" \
             --notes-file "$RUNNER_TEMP/notes.md"
+
+      - name: Remove the signing keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
