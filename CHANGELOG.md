@@ -7,6 +7,12 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.31.1] - 2026-07-30
+
+- **The download no longer triggers a Gatekeeper warning.** ClipDiary is now
+  signed with a Developer ID certificate and notarized by Apple, so the first
+  launch just works — no more clearing the quarantine flag by hand.
+
 ## [1.31.0] - 2026-07-29
 
 - **ClipDiary now downloads as a disk image.** Releases ship `ClipDiary.dmg`
