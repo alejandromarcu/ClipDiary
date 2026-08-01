@@ -696,7 +696,7 @@ struct ReviewWindow: View {
         // Flush the editor's unsaved edits first so the preview reflects them.
         if let edited = liveEdits.clip { store.update(edited) }
         openWindow(value: PreviewRequest(
-            range: .custom(start: currentDay, end: currentDay), tagFilter: nil,
+            range: .custom(start: currentDay, end: currentDay),
             includeBookends: false))
     }
 

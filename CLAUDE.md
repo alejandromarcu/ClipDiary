@@ -24,7 +24,7 @@ Deliberate improvements over 1SE:
   and the **Soundtrack** timeline (`SoundtrackRequest`), and id-keyed Cards /
   Keyboard Shortcuts windows.
 - `Models.swift` — `Clip` struct (id, fileName, date, inSeconds, outSeconds,
-  durationSeconds, createdAt, tags, kind, crop, cardID, sourcePath, sourceHash,
+  durationSeconds, createdAt, kind, crop, cardID, sourcePath, sourceHash,
   sourceBytes, audio) + date/time helpers. (`id` is a random `UUID`, not a content
   hash.) A clip is a video or a photo (`ClipKind`); either kind may carry an
   optional `CropRect` (unit coords, top-left origin, relative to the oriented
@@ -35,8 +35,7 @@ Deliberate improvements over 1SE:
   in `Clips/` — the card is rendered fresh from its current document for
   thumbnails/preview/export, so editing the card updates the placement (its
   display duration stays per-placement). Trim/crop are metadata only; media
-  files are never modified (non-destructive). Tags are free-form multi-word strings,
-  deduped case-insensitively. `sourcePath` records which source-folder file a
+  files are never modified (non-destructive). `sourcePath` records which source-folder file a
   clip was picked from: clips picked twice from one source (two segments of a
   long video) **share one copied media file**, so `delete` only removes the
   file when the last clip referencing it goes. A clip may also carry an optional
@@ -181,9 +180,9 @@ Deliberate improvements over 1SE:
   carries the same month-wide tally. A toolbar segmented switch (`MainViewMode`,
   remembered in `@AppStorage("mainViewMode")`) flips the body between this
   calendar and **`TimelineBody`** — a continuous scroll of every day that has
-  clips (`store.contentDays(taggedWith:)`), grouped under sticky month headers,
+  clips (`store.contentDays()`), grouped under sticky month headers,
   each day a horizontal strip of `TimelineClipThumb`s; it opens scrolled to the
-  calendar's current month and respects the tag filter. Clicking a timeline clip
+  calendar's current month. Clicking a timeline clip
   opens the day window with that clip pre-selected (`ReviewRequest(day:startClipID:)`).
   **Clicking a day cell opens the day window** on the day's picked clips
   (`ReviewRequest(day:)` via openWindow); the cell's **context menu** also offers
@@ -205,8 +204,7 @@ Deliberate improvements over 1SE:
   Settings (not surfaced in this window).
 - `TrimView.swift` — `TrimEditor` (the video editor), plus the shared pieces:
   `LiveEditBuffer` (lets the day window flush an editor's in-flight edit before
-  Preview Day, since editors only persist on disappear), `TagRow` (tag chips +
-  new-tag field + reuse menu), `ClipMusicLane` (the **music bar** both editors
+  Preview Day, since editors only persist on disappear), `ClipMusicLane` (the **music bar** both editors
   draw under the clip's own waveform / the photo: empty it's a dashed "＋ Add
   Track" button — pick a file and a this-clip-only track is laid over the clip,
   via the store for a picked clip or onto the draft's `audio` in review; filled
@@ -240,7 +238,7 @@ Deliberate improvements over 1SE:
   separate Reset Crop button). The day's reorder (drag clips) lives in the
   day window's rail, calling `LibraryStore.reorderClips`.
 - `PhotoView.swift` — `PhotoEditor` (crop, display-duration stepper, aspect
-  lock picker Free/16:9/9:16, tags, date, delete) and `PhotoCropView`
+  lock picker Free/16:9/9:16, date, delete) and `PhotoCropView`
   (aspect-fit photo, draggable yellow corner handles + move-inside gesture,
   min crop 5%; an aspect lock snaps the crop and constrains corner drags).
   Same library/review modes as `TrimEditor`. For a **card clip** (`isCard`) the
@@ -379,12 +377,12 @@ Deliberate improvements over 1SE:
   layout's resolved `tracks` (offset + end reference, stale references
   repaired, overlapping spans clamped). The rendered clips are grouped into
   globally-contiguous **runs** —
-  a plain range render is one run; a tag filter (or a failed insert) splits
+  a plain range render is one run; a failed clip insert splits
   them — and each run maps global→local time with its own constant, every
   fragment clamped inside its run's actual CMTime range (Double↔CMTime drift
   otherwise leaves the composition's tail uncovered → black picture). So **a
   track that started on an earlier day/month is picked up mid-file** (a
-  single-day "Preview Day" included), a track spanning a filtered-out gap cuts
+  single-day "Preview Day" included), a track spanning a skipped clip cuts
   and resumes mid-file like the picture does, and only songs whose span
   overlaps a run get their asset opened at all. A negative offset skips into
   the file; it plays once (silent tail if the file is shorter than the span).
@@ -454,8 +452,7 @@ card editor shows a **"Where it's used"** panel (cover/ending periods + days)
 via `LibraryStore.cardUsage(of:)`, so the blast radius of an edit is visible
 before changing it (period labels come from `RenderRange(periodKey:)`, the
 inverse of `periodKey`).
-The main screen has a tag filter (toolbar picker, single tag) that scopes the
-calendar thumbnails/counts and the rendered video. A single **Create Video…**
+A single **Create Video…**
 toolbar button opens `RenderSheet`, where a time range (a specific month, a
 specific year, everything, or a custom start–end) is chosen — defaulting to the
 current month and remembered per project — then previewed in a window or saved
@@ -476,7 +473,7 @@ only when picked. The old Import menu still works for one-off files.
 
 ## Backup / reconstruction
 
-A clip's edits (trim/crop/tags/date/caption) all live in `clips.json` — the
+A clip's edits (trim/crop/date/caption) all live in `clips.json` — the
 media files in `Clips/` are never modified. So backing up `clips.json` (plus
 `settings.json` / `sources.json`) captures everything except the raw media
 bytes. Each clip records `sourceHash` (SHA-256) + `sourceBytes` of its copied

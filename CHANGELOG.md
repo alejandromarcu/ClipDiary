@@ -7,6 +7,11 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.34.0] - 2026-08-01
+
+- **Tags are gone.** The per-clip tagging (the tag chips on a clip) and the
+  toolbar's tag filter have been removed — they weren't earning their keep.
+
 ## [1.33.0] - 2026-07-31
 
 ClipDiary can now keep itself up to date, via the
