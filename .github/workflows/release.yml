@@ -129,13 +129,7 @@ jobs:
           codesign --verify --verbose "$app"
           ditto -c -k --keepParent "$app" "$zip_path"
 
-          xcrun notarytool submit "$zip_path" \
-            --apple-id "$APPLE_ID" \
-            --team-id "$APPLE_TEAM_ID" \
-            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
-            --wait
-
-          xcrun stapler staple "$app"
+          .github/scripts/notarize.sh "$zip_path" "$app"
 
       - name: Build the disk image
         if: steps.check.outputs.exists == 'false'
@@ -173,13 +167,7 @@ jobs:
           codesign --force --sign "Developer ID Application" --timestamp "$dmg"
           codesign --verify --verbose "$dmg"
 
-          xcrun notarytool submit "$dmg" \
-            --apple-id "$APPLE_ID" \
-            --team-id "$APPLE_TEAM_ID" \
-            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
-            --wait
-
-          xcrun stapler staple "$dmg"
+          .github/scripts/notarize.sh "$dmg" "$dmg"
 
       - name: Build the release notes
         if: steps.check.outputs.exists == 'false'
