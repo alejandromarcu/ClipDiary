@@ -74,6 +74,22 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
+      ## A build that ships with the placeholder update key can never verify an
+      ## update, and the key is baked in at build time -- so every install of
+      ## such a build would be stuck on it forever, fixable only by downloading
+      ## the app again by hand. Refuse to release one.
+      - name: Check the update key is real
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          set -euo pipefail
+          key="$(plutil -extract SUPublicEDKey raw ClipDiary/Info.plist)"
+          case "$key" in
+            ""|REPLACE-WITH-*)
+              echo "::error::ClipDiary/Info.plist still carries a placeholder SUPublicEDKey. Releasing it would leave every install of this build unable to verify any future update."
+              exit 1 ;;
+          esac
+          echo "Update key present."
+
       - name: Import Developer ID certificate
         if: steps.check.outputs.exists == 'false'
         env:
@@ -114,6 +130,16 @@ jobs:
             CODE_SIGN_IDENTITY="Developer ID Application" \
             DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
             ENABLE_HARDENED_RUNTIME=YES
+
+      ## Xcode signs the app and the framework, but leaves the helper binaries
+      ## nested inside Sparkle.framework carrying the ad-hoc signatures they
+      ## ship with -- which notarization rejects. See the script for detail.
+      - name: Re-sign Sparkle's nested helpers
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          set -euo pipefail
+          .github/scripts/resign-sparkle.sh \
+            "$RUNNER_TEMP/ClipDiary.xcarchive/Products/Applications/ClipDiary.app"
 
       - name: Notarize the app
         if: steps.check.outputs.exists == 'false'
