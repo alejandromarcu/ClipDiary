@@ -15,7 +15,9 @@ Deliberate improvements over 1SE:
 ## Architecture (one file each)
 
 - `ClipDiaryApp.swift` — app entry, injects `LibraryStore` as environment
-  object. File-menu commands (replacing `.newItem`): New Project… (⌘N), Open
+  object. Owns the Sparkle updater (`SPUStandardUpdaterController`, started at
+  launch) and the app-menu "Check for Updates…" item — see "Distribution /
+  auto-updates" below. File-menu commands (replacing `.newItem`): New Project… (⌘N), Open
   Project… (⇧⌘O — plain O is the trim editor's Set Out key), Open Recent ▸ submenu
   + Clear Menu. Declares the windows: the main calendar, plus value-keyed
   WindowGroups for Preview (`PreviewRequest`), the day window (`ReviewRequest`),
@@ -394,7 +396,8 @@ Deliberate improvements over 1SE:
 
 ## Conventions & constraints
 
-- Swift / SwiftUI only, no third-party dependencies, no ffmpeg.
+- Swift / SwiftUI only, no third-party dependencies, no ffmpeg. **One
+  sanctioned exception**: the Sparkle framework (SPM) for auto-updates.
 - Minimum deployment: **macOS 15** (`MACOSX_DEPLOYMENT_TARGET`). Keep it there —
   releases are built on GitHub's runners, whose SDK trails Apple by weeks, and
   the download should run on Macs that aren't freshly upgraded. The Soundtrack
@@ -491,6 +494,38 @@ they render from the card document under `Cards/<id>/`, so backing up the
 `sourceHash` either), so back up `Audio/` alongside `Clips/`. **`Thumbnails/`
 is a disposable cache** (not needed for backup) — it regenerates from the
 media/card data on demand if missing.
+
+## Distribution / auto-updates
+
+Releases are fully automated: every merge to main whose `MARKETING_VERSION`
+has no tag yet makes `.github/workflows/release.yml` build a Developer
+ID-signed, notarized `ClipDiary.dmg` and publish it as GitHub Release
+`v<version>` (the asset name carries no version on purpose —
+`/releases/latest/download/ClipDiary.dmg` is the landing page's download URL).
+The website in `docs/` is served by GitHub Pages at https://clipdiary.app/
+(`CNAME`).
+
+Auto-updates use **Sparkle 2** (the one third-party dependency, via SPM; the
+CLI tools the workflow downloads are pinned to the same version through
+`Package.resolved`). The updater lives in `ClipDiaryApp.swift`
+(`SPUStandardUpdaterController` + a "Check for Updates…" app-menu item).
+Because the app is sandboxed **with no outgoing-network entitlement**, Sparkle
+runs through its XPC services: `SUEnableInstallerLauncherService` +
+`SUEnableDownloaderService` in `ClipDiary/Info.plist` (a small plist merged
+into the Xcode-generated one; it also holds `SUFeedURL` + `SUPublicEDKey`), and
+the two mach-lookup exceptions in `ClipDiary/ClipDiary.entitlements` (merged
+with the `ENABLE_*` build-setting entitlements). `CURRENT_PROJECT_VERSION`
+tracks `MARKETING_VERSION`, so the per-PR version bump is what Sparkle compares.
+
+The update feed is `docs/appcast.xml` (`https://clipdiary.app/appcast.xml`).
+After publishing a release, the workflow EdDSA-signs the dmg with the
+`SPARKLE_PRIVATE_KEY` repository secret, regenerates the appcast, and commits
+it back to main — skipped with a notice while that secret doesn't exist.
+**One-time setup still pending** to switch updates on: run Sparkle's
+`generate_keys` once, put the printed public key in `ClipDiary/Info.plist`
+(`SUPublicEDKey`, replacing the placeholder), and store the exported private
+key (`generate_keys -x`) as the `SPARKLE_PRIVATE_KEY` secret — back that key
+up; losing it strands every existing install on its current version.
 
 ## Roadmap ideas (not yet built)
 

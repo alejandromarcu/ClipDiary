@@ -13,3 +13,7 @@ DerivedData/
 # Swift Package Manager
 .swiftpm/
 .build/
+
+# Sparkle CLI tools, if downloaded locally (only generate_keys is ever needed
+# by hand — the release workflow fetches its own copy)
+Tools/sparkle/

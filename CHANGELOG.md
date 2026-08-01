@@ -7,6 +7,18 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.33.0] - 2026-07-31
+
+ClipDiary can now keep itself up to date, via the
+[Sparkle](https://sparkle-project.org) auto-updater:
+
+- **Check for Updates…** in the ClipDiary menu, plus periodic background
+  checks. Updates arrive as the same signed, notarized disk image the
+  website serves, and install in place.
+- Each release also refreshes an update feed at `clipdiary.app/appcast.xml`
+  (published by the release workflow; live once the update-signing key is
+  configured).
+
 ## [1.32.0] - 2026-07-31
 
 - **The website can now be found.** The landing page tells search engines what
