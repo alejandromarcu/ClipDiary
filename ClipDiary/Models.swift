@@ -445,8 +445,6 @@ struct Clip: Identifiable, Codable, Equatable, Hashable {
     /// (`LibraryStore.reorderClips`) when the user wants a non-chronological
     /// order for nicer transitions.
     var createdAt: Date = Date()
-    /// User-assigned tags, e.g. "beach" or "Isaac's best".
-    var tags: [String] = []
     /// Video file or still photo. For photos, durationSeconds/outSeconds hold
     /// the chosen display duration and inSeconds is 0.
     var kind: ClipKind = .video
@@ -506,22 +504,14 @@ struct Clip: Identifiable, Codable, Equatable, Hashable {
         return "\(id.uuidString)|\(inSeconds)|\(cropKey)"
     }
 
-    /// True when no tag filter is set, or the clip carries the tag
-    /// (case-insensitive, matching how tags are deduped).
-    func matches(tagFilter: String?) -> Bool {
-        guard let tagFilter else { return true }
-        return tags.contains { $0.caseInsensitiveCompare(tagFilter) == .orderedSame }
-    }
-
     enum CodingKeys: String, CodingKey {
         case id, fileName, date, inSeconds, outSeconds, durationSeconds, createdAt,
-             tags, kind, crop, cardID, showsDateOverlay, caption, sourcePath,
+             kind, crop, cardID, showsDateOverlay, caption, sourcePath,
              sourceHash, sourceBytes, transition, volume, audio
     }
 }
 
 extension Clip {
-    /// Libraries saved before tags existed have no `tags` key.
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
@@ -531,7 +521,6 @@ extension Clip {
         outSeconds = try container.decode(Double.self, forKey: .outSeconds)
         durationSeconds = try container.decode(Double.self, forKey: .durationSeconds)
         createdAt = try container.decode(Date.self, forKey: .createdAt)
-        tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? []
         kind = try container.decodeIfPresent(ClipKind.self, forKey: .kind) ?? .video
         crop = try container.decodeIfPresent(CropRect.self, forKey: .crop)
         cardID = try container.decodeIfPresent(UUID.self, forKey: .cardID)

@@ -13,80 +13,6 @@ final class LiveEditBuffer {
     var clip: Clip?
 }
 
-/// Editable row of tag chips with a field for new tags and a menu to reuse
-/// tags already in the library. Used by both the video and photo editors.
-struct TagRow: View {
-    @EnvironmentObject var store: LibraryStore
-    @Binding var tags: [String]
-    @State private var newTag = ""
-
-    /// Tags used elsewhere in the library but not yet on this clip.
-    private var reusableTags: [String] {
-        store.allTags.filter { tag in
-            !tags.contains { $0.caseInsensitiveCompare(tag) == .orderedSame }
-        }
-    }
-
-    var body: some View {
-        // Two rows so the chips and the new-tag field each get a full line —
-        // the single-row layout was cramped in the review window's narrow pane.
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Image(systemName: "tag")
-                    .foregroundStyle(.secondary)
-                if tags.isEmpty {
-                    Text("No tags")
-                        .foregroundStyle(.tertiary)
-                }
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(tags, id: \.self) { tag in
-                            HStack(spacing: 4) {
-                                Text(tag)
-                                Button {
-                                    tags.removeAll { $0 == tag }
-                                } label: {
-                                    Image(systemName: "xmark.circle.fill")
-                                        .foregroundStyle(.secondary)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                            .font(.callout)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(Capsule().fill(Color.accentColor.opacity(0.15)))
-                        }
-                    }
-                }
-            }
-            HStack(spacing: 8) {
-                TextField("New tag", text: $newTag)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit { addTag(newTag) }
-                Menu {
-                    ForEach(reusableTags, id: \.self) { tag in
-                        Button(tag) { addTag(tag) }
-                    }
-                } label: {
-                    Image(systemName: "plus")
-                }
-                .fixedSize()
-                .disabled(reusableTags.isEmpty)
-                .help("Add an existing tag")
-            }
-        }
-    }
-
-    private func addTag(_ raw: String) {
-        let tag = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !tag.isEmpty else { return }
-        if !tags.contains(where: { $0.caseInsensitiveCompare(tag) == .orderedSame }) {
-            tags.append(tag)
-        }
-        newTag = ""
-    }
-}
-
 /// A music bar shown directly under a clip's own audio in the editors, so laying
 /// a song over a clip looks like the rest of the editor. Empty, it reads "＋ Add
 /// Track" and a click picks a file, laid over this clip (starting at the clip's
@@ -636,7 +562,7 @@ struct TrimEditor: View {
     // MARK: - Layouts
 
     /// Two-column layout used in both modes: the media and trim controls take the
-    /// whole left side so the video is as big as possible; tags/caption/
+    /// whole left side so the video is as big as possible; caption/
     /// transition/day and the add (review) or delete (library) action live in a
     /// resizable pane on the right.
     private var editorBody: some View {
@@ -669,7 +595,6 @@ struct TrimEditor: View {
             }
             Divider()
             PaneSectionLabel(title: "Details")
-            TagRow(tags: $clip.tags)
             captionField
             PaneSectionLabel(title: "Playback")
                 .padding(.top, 6)
@@ -1076,7 +1001,7 @@ struct TrimEditor: View {
         }
 
         // Space toggles play/pause, like the player's old built-in controls did —
-        // but only when the user isn't typing in a text field (caption, tags…),
+        // but only when the user isn't typing in a text field (caption…),
         // so it doesn't swallow spaces.
         spaceKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             guard event.keyCode == 49, // Space

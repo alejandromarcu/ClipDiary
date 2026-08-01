@@ -666,20 +666,17 @@ final class LibraryStore: ObservableObject {
 
     // MARK: - Queries
 
-    func clips(on day: Date, taggedWith tag: String? = nil) -> [Clip] {
+    func clips(on day: Date) -> [Clip] {
         let key = Calendar.current.startOfDay(for: day)
         return (clipsByDay()[key] ?? [])
-            .filter { $0.matches(tagFilter: tag) }
             .sorted { $0.createdAt < $1.createdAt }
     }
 
-    /// Distinct days (startOfDay), oldest first, that have at least one clip
-    /// matching the tag — the Timeline view's row list. Built from the cached
-    /// `clipsByDay()` grouping, so it only scans the (small) set of distinct days.
-    func contentDays(taggedWith tag: String? = nil) -> [Date] {
-        clipsByDay()
-            .filter { _, clips in clips.contains { $0.matches(tagFilter: tag) } }
-            .keys.sorted()
+    /// Distinct days (startOfDay), oldest first, that have at least one clip —
+    /// the Timeline view's row list. Built from the cached `clipsByDay()`
+    /// grouping, so it only scans the (small) set of distinct days.
+    func contentDays() -> [Date] {
+        clipsByDay().keys.sorted()
     }
 
     /// Source items captured on a day, in capture order — the day window's
@@ -701,34 +698,25 @@ final class LibraryStore: ObservableObject {
                        : days.filter { $0 < key }.max()
     }
 
-    /// Whether any clip matches the tag filter — a cheap, short-circuiting test
+    /// Whether the library has any clips — a cheap, short-circuiting test
     /// for enabling Create Video, instead of building a filtered array of the
     /// whole (possibly multi-thousand-clip) library just to check emptiness.
-    func hasClips(taggedWith tag: String? = nil) -> Bool {
-        clips.contains { $0.matches(tagFilter: tag) }
+    func hasClips() -> Bool {
+        !clips.isEmpty
     }
 
-    /// Every distinct tag in the library, alphabetical, for quick reuse.
-    /// Case-insensitive: the alphabetically first spelling wins.
-    var allTags: [String] {
-        var seen = Set<String>()
-        return clips.flatMap(\.tags)
-            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
-            .filter { seen.insert($0.lowercased()).inserted }
-    }
-
-    func clips(inMonthOf month: Date, taggedWith tag: String? = nil) -> [Clip] {
-        clips.filter { $0.date.isSameMonth(as: month) && $0.matches(tagFilter: tag) }
+    func clips(inMonthOf month: Date) -> [Clip] {
+        clips.filter { $0.date.isSameMonth(as: month) }
             .sorted {
                 $0.date == $1.date ? $0.createdAt < $1.createdAt : $0.date < $1.date
             }
     }
 
     /// Clips whose day falls inside an arbitrary render range (month, year, all
-    /// or custom), tag-filtered, in the same date-then-createdAt order Preview
-    /// and Export stitch them.
-    func clips(in range: RenderRange, taggedWith tag: String? = nil) -> [Clip] {
-        clips.filter { range.contains($0.date) && $0.matches(tagFilter: tag) }
+    /// or custom), in the same date-then-createdAt order Preview and Export
+    /// stitch them.
+    func clips(in range: RenderRange) -> [Clip] {
+        clips.filter { range.contains($0.date) }
             .sorted {
                 $0.date == $1.date ? $0.createdAt < $1.createdAt : $0.date < $1.date
             }
@@ -992,7 +980,7 @@ final class LibraryStore: ObservableObject {
         }
     }
 
-    /// Registers `draft` (trimmed/cropped/tagged in the review window) as a
+    /// Registers `draft` (trimmed/cropped in the review window) as a
     /// clip picked from source `item`, copying the file into the library —
     /// or reusing the existing copy when this source was picked before, so
     /// several segments of one long video share one media file.

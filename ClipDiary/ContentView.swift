@@ -20,7 +20,6 @@ struct ContentView: View {
     @State private var showSourcesSheet = false
     @State private var showSettingsSheet = false
     @Environment(\.openWindow) private var openWindow
-    @State private var tagFilter: String?
     /// The timeline's topmost visible day, tracked while in timeline mode so the
     /// Soundtrack opens on the same stretch of time the timeline is scrolled to.
     /// Not persisted (unlike `displayedMonth`); nil until the timeline reports.
@@ -105,7 +104,7 @@ struct ContentView: View {
                         DispatchQueue.main.async { calendarFocused = true }
                     }
             case .timeline:
-                TimelineBody(displayedMonth: displayedMonth, tagFilter: tagFilter,
+                TimelineBody(displayedMonth: displayedMonth,
                              topVisibleDay: $timelineTopDay) { clip in
                     openWindow(value: ReviewRequest(day: clip.date, startClipID: clip.id))
                 }
@@ -123,19 +122,6 @@ struct ContentView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .help("Switch between the month calendar and the timeline")
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Picker(selection: $tagFilter) {
-                    Text("All Clips").tag(String?.none)
-                    ForEach(store.allTags, id: \.self) { tag in
-                        Text(tag).tag(String?.some(tag))
-                    }
-                } label: {
-                    Label("Filter by Tag",
-                          systemImage: tagFilter == nil ? "tag" : "tag.fill")
-                }
-                .pickerStyle(.menu)
-                .disabled(store.allTags.isEmpty)
             }
             ToolbarItem(placement: .primaryAction) {
                 let undated = store.sourceItems.filter(\.isUndated).count
@@ -191,7 +177,7 @@ struct ContentView: View {
                     Label("Create Video…", systemImage: "film.stack")
                 }
                 .help("Pick a time range, then preview it or save the video")
-                .disabled(!store.hasClips(taggedWith: tagFilter))
+                .disabled(!store.hasClips())
             }
         }
         .fileImporter(
@@ -221,16 +207,9 @@ struct ContentView: View {
         .sheet(item: $dataExportSource) { source in
             DataExportImportSheet(exportURL: source.url).environmentObject(store)
         }
-        .onChange(of: store.allTags) { _, tags in
-            if let tagFilter,
-               !tags.contains(where: { $0.caseInsensitiveCompare(tagFilter) == .orderedSame }) {
-                self.tagFilter = nil
-            }
-        }
         .sheet(isPresented: $showRenderSheet) {
             let initialRange = store.settings.renderRange ?? .month(Date())
             RenderSheet(initialRange: initialRange,
-                        tagFilter: tagFilter,
                         initialBookends: store.settings.bookends(for: initialRange))
                 .environmentObject(store)
         }
@@ -276,13 +255,7 @@ struct ContentView: View {
                 .keyboardShortcut(.rightArrow, modifiers: .command)
                 .help("Next month (⌘→)")
             Spacer()
-            if let tagFilter {
-                Text("Tag: \(tagFilter)")
-                    .font(.callout.bold())
-                    .padding(.horizontal, 8).padding(.vertical, 3)
-                    .background(Capsule().fill(.yellow.opacity(0.25)))
-            }
-            let monthClips = store.clips(inMonthOf: displayedMonth, taggedWith: tagFilter)
+            let monthClips = store.clips(inMonthOf: displayedMonth)
             if !monthClips.isEmpty {
                 let total = monthClips.reduce(0) { $0 + $1.trimmedDuration }
                 statChip("Picked") {
@@ -400,7 +373,6 @@ struct ContentView: View {
                             if let day {
                                 DayCell(
                                     day: day,
-                                    tagFilter: tagFilter,
                                     isSelected: selectedDay.map { day.isSameDay(as: $0) } ?? false,
                                     onReview: { openWindow(value: ReviewRequest(day: day, focusSources: true)) },
                                     onEdit: {
@@ -572,7 +544,6 @@ struct DayCell: View {
     @EnvironmentObject var store: LibraryStore
     @Environment(\.openWindow) private var openWindow
     let day: Date
-    var tagFilter: String?
     /// Keyboard selection: the calendar grid's arrow keys land here.
     var isSelected = false
     /// Context-menu "Review Sources…": open the day window focused on its source
@@ -586,7 +557,7 @@ struct DayCell: View {
     @State private var hovering = false
     @State private var showClipsPopover = false
 
-    private var dayClips: [Clip] { store.clips(on: day, taggedWith: tagFilter) }
+    private var dayClips: [Clip] { store.clips(on: day) }
     private var hasThumbnail: Bool { thumbnail != nil }
 
     // A tap gesture rather than a whole-cell Button, so the badge and the
@@ -628,7 +599,7 @@ struct DayCell: View {
             if hovering, !dayClips.isEmpty {
                 Button {
                     openWindow(value: PreviewRequest(
-                        range: .custom(start: day, end: day), tagFilter: tagFilter,
+                        range: .custom(start: day, end: day),
                         includeBookends: false))
                 } label: {
                     Image(systemName: "play.circle.fill")
@@ -790,7 +761,7 @@ private enum TimelineRow: Identifiable {
 
 /// The Timeline: the calendar's sibling browsing view (toggled in the toolbar).
 /// One continuous scroll across the whole project — every day that has clips is
-/// a row of that day's clip thumbnails plus its captions and tags, grouped
+/// a row of that day's clip thumbnails plus its captions, grouped
 /// under sticky month headers, with gap rows marking days that still have
 /// unreviewed footage. Clicking a clip opens the day editor on it; arrow keys
 /// move a selection like the calendar grid's (Return opens, Space previews).
@@ -799,7 +770,6 @@ struct TimelineBody: View {
     @Environment(\.openWindow) private var openWindow
     /// The month the calendar is on, so the timeline opens scrolled there.
     let displayedMonth: Date
-    var tagFilter: String?
     /// Reports the topmost day currently scrolled into view (so the Soundtrack
     /// can open on the same stretch of time). Updated only when the day changes.
     @Binding var topVisibleDay: Date?
@@ -840,7 +810,7 @@ struct TimelineBody: View {
     /// Days with content (oldest first) grouped into consecutive month
     /// sections, each month's clip-less-but-reviewable days folded in as gaps.
     private var months: [Month] {
-        let contentDays = store.contentDays(taggedWith: tagFilter)
+        let contentDays = store.contentDays()
         guard !contentDays.isEmpty else { return [] }
         let today = Date().dayKey
         var grouped: [(start: Date, days: [Date])] = []
@@ -861,10 +831,9 @@ struct TimelineBody: View {
 
     /// One month's row list: its content days in order, with runs of
     /// consecutive clip-less days that have source footage folded in as gap
-    /// rows — the "still to review" prompts. Gaps are suppressed under a tag
-    /// filter (those days aren't missing, just filtered out) and never reach
-    /// past today; a day with neither clips nor sources splits a run and
-    /// simply doesn't appear.
+    /// rows — the "still to review" prompts. Gaps never reach past today; a
+    /// day with neither clips nor sources splits a run and simply doesn't
+    /// appear.
     private func rows(inMonthStarting monthStart: Date, contentDays: Set<Date>,
                       today: Date) -> [TimelineRow] {
         guard let interval = calendar.dateInterval(of: .month, for: monthStart) else {
@@ -887,7 +856,7 @@ struct TimelineBody: View {
             if contentDays.contains(day) {
                 flushRun()
                 rows.append(.day(day))
-            } else if tagFilter == nil, day <= today {
+            } else if day <= today {
                 let avail = store.availability(on: day)
                 if avail.isEmpty {
                     flushRun()
@@ -923,7 +892,7 @@ struct TimelineBody: View {
                                     rowView(row)
                                 }
                             } header: {
-                                TimelineMonthHeader(month: section.start, tagFilter: tagFilter,
+                                TimelineMonthHeader(month: section.start,
                                                     jumpTargets: months.map { (id: $0.id, start: $0.start) },
                                                     onJump: { id in withAnimation { proxy.scrollTo(id, anchor: .top) } })
                             }
@@ -969,7 +938,7 @@ struct TimelineBody: View {
     private func rowView(_ row: TimelineRow) -> some View {
         switch row {
         case .day(let day):
-            TimelineDayRow(day: day, tagFilter: tagFilter,
+            TimelineDayRow(day: day,
                            thumbScale: thumbScale,
                            selectedClipID: selectedClipID(on: day)) { clip in
                 select(clip, on: day)
@@ -999,7 +968,7 @@ struct TimelineBody: View {
     /// The first press only anchors the selection at the day scrolled to the
     /// top (or the first), without moving it — the calendar grid's behavior.
     private func moveSelection(_ direction: MoveCommandDirection) {
-        let days = store.contentDays(taggedWith: tagFilter)
+        let days = store.contentDays()
         guard !days.isEmpty else { return }
         guard let current = selectedDay, let index = days.firstIndex(of: current) else {
             selectedDay = topVisibleDay.flatMap { top in days.first { $0 >= top } } ?? days.first
@@ -1018,14 +987,14 @@ struct TimelineBody: View {
 
     private func clampClipIndex() {
         guard let selectedDay else { return }
-        let count = store.clips(on: selectedDay, taggedWith: tagFilter).count
+        let count = store.clips(on: selectedDay).count
         selectedClipIndex = min(max(0, selectedClipIndex), max(0, count - 1))
     }
 
     /// The keyboard-selected clip if it sits on this day (drives the ring).
     private func selectedClipID(on day: Date) -> UUID? {
         guard selectedDay == day else { return nil }
-        let clips = store.clips(on: day, taggedWith: tagFilter)
+        let clips = store.clips(on: day)
         guard clips.indices.contains(selectedClipIndex) else { return nil }
         return clips[selectedClipIndex].id
     }
@@ -1033,13 +1002,13 @@ struct TimelineBody: View {
     /// A clicked clip also anchors the keyboard selection on it.
     private func select(_ clip: Clip, on day: Date) {
         selectedDay = day
-        selectedClipIndex = store.clips(on: day, taggedWith: tagFilter)
+        selectedClipIndex = store.clips(on: day)
             .firstIndex { $0.id == clip.id } ?? 0
     }
 
     private func openSelectedClip() -> KeyPress.Result {
         guard let selectedDay else { return .ignored }
-        let clips = store.clips(on: selectedDay, taggedWith: tagFilter)
+        let clips = store.clips(on: selectedDay)
         guard !clips.isEmpty else { return .ignored }
         onOpenClip(clips[min(selectedClipIndex, clips.count - 1)])
         return .handled
@@ -1048,7 +1017,7 @@ struct TimelineBody: View {
     private func previewSelectedDay() -> KeyPress.Result {
         guard let selectedDay else { return .ignored }
         openWindow(value: PreviewRequest(range: .custom(start: selectedDay, end: selectedDay),
-                                         tagFilter: tagFilter, includeBookends: false))
+                                         includeBookends: false))
         return .handled
     }
 
@@ -1102,7 +1071,7 @@ struct TimelineBody: View {
             Image(systemName: "film.stack")
                 .font(.system(size: 40))
                 .foregroundStyle(.secondary)
-            Text(tagFilter.map { "No clips tagged “\($0)”" } ?? "No clips yet")
+            Text("No clips yet")
                 .font(.title3)
                 .foregroundStyle(.secondary)
         }
@@ -1117,14 +1086,13 @@ private struct TimelineMonthHeader: View {
     @EnvironmentObject var store: LibraryStore
     @Environment(\.openWindow) private var openWindow
     let month: Date
-    var tagFilter: String?
     /// Every month section in the timeline (id + start), oldest first — the
     /// jump menu's entries; `onJump` scrolls to the chosen section id.
     var jumpTargets: [(id: String, start: Date)] = []
     var onJump: (String) -> Void = { _ in }
 
     var body: some View {
-        let clips = store.clips(inMonthOf: month, taggedWith: tagFilter)
+        let clips = store.clips(inMonthOf: month)
         let total = clips.reduce(0) { $0 + $1.trimmedDuration }
         HStack(spacing: 12) {
             Menu {
@@ -1153,7 +1121,7 @@ private struct TimelineMonthHeader: View {
             .help("Jump to another month")
 
             Button {
-                openWindow(value: PreviewRequest(range: .month(month), tagFilter: tagFilter))
+                openWindow(value: PreviewRequest(range: .month(month)))
             } label: {
                 Label("Preview", systemImage: "play.fill")
             }
@@ -1181,13 +1149,12 @@ private struct TimelineMonthHeader: View {
 
 /// One day in the Timeline: a date column (weekday + day number + a picked
 /// tally), a horizontally scrolling strip of the day's clip thumbnails, and
-/// the day's captions/tags filling the space beside it. Hovering offers the
+/// the day's captions filling the space beside it. Hovering offers the
 /// calendar cell's ▶ day preview; right-click gets its context menu.
 private struct TimelineDayRow: View {
     @EnvironmentObject var store: LibraryStore
     @Environment(\.openWindow) private var openWindow
     let day: Date
-    var tagFilter: String?
     var thumbScale: Double = 1
     /// The keyboard-selected clip on this day (accent ring), if any.
     var selectedClipID: UUID?
@@ -1208,11 +1175,10 @@ private struct TimelineDayRow: View {
     private static let fixedLeading: CGFloat = 32 + 56 + 14
 
     var body: some View {
-        let clips = store.clips(on: day, taggedWith: tagFilter)
+        let clips = store.clips(on: day)
         let isToday = day.isSameDay(as: Date())
         let captions = clips.map(\.caption).filter { !$0.isEmpty }
-        let tags = dayTags(of: clips)
-        let hasText = !captions.isEmpty || !tags.isEmpty
+        let hasText = !captions.isEmpty
         let layout = stripLayout(clipCount: clips.count, hasText: hasText)
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: 14) {
@@ -1222,7 +1188,7 @@ private struct TimelineDayRow: View {
                     moreChip(layout.hidden)
                 }
                 if hasText {
-                    dayText(captions: captions, tags: tags)
+                    dayText(captions: captions)
                 }
                 Spacer(minLength: 0)
             }
@@ -1337,9 +1303,9 @@ private struct TimelineDayRow: View {
         .help("\(hidden) more clip\(hidden == 1 ? "" : "s") — open the day to see them all")
     }
 
-    /// The day's captions and tags, laid beside the filmstrip — so the
-    /// timeline reads like a diary instead of leaving the row's right empty.
-    private func dayText(captions: [String], tags: [String]) -> some View {
+    /// The day's captions, laid beside the filmstrip — so the timeline reads
+    /// like a diary instead of leaving the row's right empty.
+    private func dayText(captions: [String]) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             ForEach(Array(captions.prefix(3).enumerated()), id: \.offset) { _, caption in
                 Text(caption)
@@ -1347,26 +1313,8 @@ private struct TimelineDayRow: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
-            if !tags.isEmpty {
-                HStack(spacing: 5) {
-                    ForEach(tags.prefix(6), id: \.self) { tag in
-                        Text(tag)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 1.5)
-                            .background(Capsule().fill(.quaternary.opacity(0.5)))
-                    }
-                }
-            }
         }
         .frame(maxWidth: 520, alignment: .leading)
-    }
-
-    /// The day's distinct tags (case-insensitive, first spelling wins).
-    private func dayTags(of clips: [Clip]) -> [String] {
-        var seen = Set<String>()
-        return clips.flatMap(\.tags).filter { seen.insert($0.lowercased()).inserted }
     }
 
     private var previewButton: some View {
@@ -1381,7 +1329,7 @@ private struct TimelineDayRow: View {
 
     private func previewDay() {
         openWindow(value: PreviewRequest(range: .custom(start: day, end: day),
-                                         tagFilter: tagFilter, includeBookends: false))
+                                         includeBookends: false))
     }
 }
 
@@ -1502,7 +1450,6 @@ private struct TimelineClipThumb: View {
     private var tooltip: String {
         var parts: [String] = []
         if !clip.caption.isEmpty { parts.append(clip.caption) }
-        if !clip.tags.isEmpty { parts.append("#" + clip.tags.joined(separator: " #")) }
         parts.append("Click to edit")
         return parts.joined(separator: "\n")
     }
@@ -1560,7 +1507,6 @@ struct RenderSheet: View {
     @EnvironmentObject var store: LibraryStore
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openWindow) private var openWindow
-    var tagFilter: String?
 
     /// The active range, edited locally and persisted back to the project in
     /// `onChange` (below). The controls deliberately touch only this `@State`:
@@ -1590,18 +1536,17 @@ struct RenderSheet: View {
     /// was never changed). Seeding in `init` rather than a `@State` default
     /// means `onChange` fires only on real edits, so an untouched window leaves
     /// `settings.renderRange` nil and keeps defaulting to the current month.
-    init(initialRange: RenderRange, tagFilter: String?,
+    init(initialRange: RenderRange,
          initialBookends: BookendSettings = BookendSettings()) {
         _range = State(initialValue: initialRange)
         _bookends = State(initialValue: initialBookends)
-        self.tagFilter = tagFilter
     }
 
     private var calendar: Calendar { Calendar.current }
 
-    /// The clips the current range/tag would render, in play order — also what
+    /// The clips the current range would render, in play order — also what
     /// the bookend fades cap themselves to (first/last clip length).
-    private var clips: [Clip] { store.clips(in: range, taggedWith: tagFilter) }
+    private var clips: [Clip] { store.clips(in: range) }
 
     private func setRange(_ new: RenderRange) {
         range = new
@@ -1622,11 +1567,6 @@ struct RenderSheet: View {
             Divider()
 
             bookendPicker
-
-            if let tagFilter {
-                Text("Only clips tagged “\(tagFilter)”.")
-                    .font(.callout.bold())
-            }
 
             Divider()
 
@@ -1673,7 +1613,7 @@ struct RenderSheet: View {
             }
 
             // Pin the buttons to the bottom of the fixed-height sheet; the
-            // occasional rows above (tag note, progress, error) eat into this
+            // occasional rows above (progress, error) eat into this
             // gap instead of resizing the window.
             Spacer(minLength: 0)
 
@@ -1687,7 +1627,7 @@ struct RenderSheet: View {
                 }
                 Spacer()
                 Button {
-                    openWindow(value: PreviewRequest(range: range, tagFilter: tagFilter))
+                    openWindow(value: PreviewRequest(range: range))
                 } label: {
                     Label("Preview", systemImage: "play.rectangle")
                 }
@@ -1933,13 +1873,12 @@ struct RenderSheet: View {
         return years.sorted()
     }
 
-    /// Clip counts per month of the selected year (index 0 = January),
-    /// respecting the tag filter like the render does — months with nothing to
-    /// render are grayed out (unselectable) in the menu.
+    /// Clip counts per month of the selected year (index 0 = January) —
+    /// months with nothing to render are grayed out (unselectable) in the menu.
     private var monthClipCounts: [Int] {
         let year = calendar.component(.year, from: range.anchorDate)
         var counts = [Int](repeating: 0, count: 12)
-        for clip in store.clips where clip.matches(tagFilter: tagFilter) {
+        for clip in store.clips {
             let comps = calendar.dateComponents([.year, .month], from: clip.date)
             if comps.year == year, let month = comps.month { counts[month - 1] += 1 }
         }
@@ -1949,7 +1888,7 @@ struct RenderSheet: View {
     /// Clip counts per year, same idea as `monthClipCounts`.
     private var yearClipCounts: [Int: Int] {
         var counts: [Int: Int] = [:]
-        for clip in store.clips where clip.matches(tagFilter: tagFilter) {
+        for clip in store.clips {
             counts[calendar.component(.year, from: clip.date), default: 0] += 1
         }
         return counts
@@ -1973,7 +1912,7 @@ struct RenderSheet: View {
         case .custom: scope = "this range"
         default: scope = range.label
         }
-        return tagFilter == nil ? "No clips in \(scope)" : "No matching clips in \(scope)"
+        return "No clips in \(scope)"
     }
 
     // MARK: Bindings into the range (writes persist via setRange)
@@ -2024,8 +1963,7 @@ struct RenderSheet: View {
     private func chooseDestinationAndExport(clips: [Clip]) {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.mpeg4Movie]
-        let suffix = tagFilter.map { " – \($0)" } ?? ""
-        panel.nameFieldStringValue = "ClipDiary \(range.fileNameLabel)\(suffix).mp4"
+        panel.nameFieldStringValue = "ClipDiary \(range.fileNameLabel).mp4"
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
         isExporting = true
@@ -2149,10 +2087,9 @@ struct ProjectSettingsSheet: View {
 
 // MARK: - Preview window
 
-/// Identifies which time range (and tag filter) a preview window shows.
+/// Identifies which time range a preview window shows.
 struct PreviewRequest: Codable, Hashable {
     var range: RenderRange
-    var tagFilter: String?
     /// Whether to splice in the period's Cover/Ending cards and their fades (the
     /// first-clip fade-in / last-clip fade-out included). Off for the day
     /// editor's single-day preview — those bookend a whole video, not one day.
@@ -2172,7 +2109,6 @@ struct PreviewWindow: View {
     @EnvironmentObject var store: LibraryStore
     @Environment(\.dismiss) private var dismiss
     let range: RenderRange
-    var tagFilter: String?
     var includeBookends: Bool = true
 
     @State private var built: MonthComposition?
@@ -2189,16 +2125,6 @@ struct PreviewWindow: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            if let tagFilter {
-                HStack {
-                    Text("Tag: \(tagFilter)")
-                        .font(.callout.bold())
-                        .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(Capsule().fill(.yellow.opacity(0.25)))
-                    Spacer()
-                }
-            }
-
             ZStack {
                 RoundedRectangle(cornerRadius: 8).fill(.black)
                 if let player {
@@ -2276,7 +2202,7 @@ struct PreviewWindow: View {
         // so edits made (and saved) while a preview window stays open, e.g. via
         // the day editor's "Preview Day", are reflected on the next preview.
         .task(id: PreviewBuildKey(settings: store.settings,
-                                  clips: store.clips(in: range, taggedWith: tagFilter))) {
+                                  clips: store.clips(in: range))) {
             await rebuild()
         }
         .onDisappear {
@@ -2293,7 +2219,7 @@ struct PreviewWindow: View {
         errorMessage = nil
         buildProgress = 0
 
-        let clips = store.clips(in: range, taggedWith: tagFilter)
+        let clips = store.clips(in: range)
         let renderSize = store.settings.orientation.size
         let bookends = store.settings.bookends(for: range)
         let (fadeIn, fadeOut) = includeBookends ? bookendClipFades(bookends) : (nil, nil)

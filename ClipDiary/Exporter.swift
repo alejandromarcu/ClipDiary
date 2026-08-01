@@ -491,13 +491,13 @@ struct Exporter {
         // keeps playing over silent photo segments. Positions come from the
         // project-wide global timeline (the placements above): the rendered
         // clips are grouped into globally-contiguous **runs** — a plain range
-        // render is one run; a tag filter (or a clip that failed to insert)
-        // leaves gaps that split it — and each run maps global→local time with
-        // its own constant `k`. A song is inserted once per overlapping run, so
-        // a track that started before the window is picked up mid-file, and one
-        // spanning a filtered-out gap cuts out and resumes mid-file, exactly
-        // like the picture skips those clips. Played once — a file shorter than
-        // its span leaves a silent tail.
+        // render is one run; a clip that failed to insert leaves a gap that
+        // splits it — and each run maps global→local time with its own
+        // constant `k`. A song is inserted once per overlapping run, so a
+        // track that started before the window is picked up mid-file, and one
+        // spanning a skipped clip cuts out and resumes mid-file, exactly like
+        // the picture skips it. Played once — a file shorter than its span
+        // leaves a silent tail.
         struct MusicRun {
             var g0: Double      // global seconds spanned by the run's clips
             var g1: Double

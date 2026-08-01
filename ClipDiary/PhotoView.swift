@@ -2,7 +2,7 @@ import SwiftUI
 import ImageIO
 
 /// Editor for a photo clip: crop by dragging the yellow corners, choose how
-/// long the photo is shown, change its date, tag it, or delete it. Like
+/// long the photo is shown, change its date, or delete it. Like
 /// `TrimEditor` it has a review mode: with `onAdd` set, the clip is a draft
 /// for the source photo at `sourceURL` and "Add to Clips" hands it back.
 struct PhotoEditor: View {
@@ -175,7 +175,7 @@ struct PhotoEditor: View {
     // MARK: - Layouts
 
     /// Two-column layout used in both modes: the photo and crop controls take the
-    /// whole left side so the image is as big as possible; tags/caption/
+    /// whole left side so the image is as big as possible; caption/
     /// transition/day and the add (review) or delete (library) action live in a
     /// resizable pane on the right.
     private var editorBody: some View {
@@ -210,7 +210,6 @@ struct PhotoEditor: View {
                 Divider()
             }
             PaneSectionLabel(title: "Details")
-            TagRow(tags: $clip.tags)
             // A card carries its own composed text, so the caption overlay and
             // date stamp don't apply to it.
             if !isCard { captionField }
