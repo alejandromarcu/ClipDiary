@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>ClipDiary</title>
+    <link>https://clipdiary.app/</link>
+    <item>
+      <title>1.33.0</title>
+      <pubDate>Sat, 01 Aug 2026 18:57:24 +0000</pubDate>
+      <sparkle:version>1.33.0</sparkle:version>
+      <sparkle:shortVersionString>1.33.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <sparkle:releaseNotesLink>https://github.com/alejandromarcu/ClipDiary/releases/tag/v1.33.0</sparkle:releaseNotesLink>
+      <enclosure
+        url="https://github.com/alejandromarcu/ClipDiary/releases/download/v1.33.0/ClipDiary.dmg"
+        sparkle:edSignature="645/3v390xbAFEI7uIhH+IC71Fn3EPb8q5zMflI8lrwp2oZASdBbubEZ+WpznAd0mqPOOOcdaZsVSwqUzuLVAw==" length="4944710"
+        type="application/octet-stream"/>
+    </item>
+  </channel>
+</rss>
