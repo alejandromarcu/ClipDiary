@@ -1,6 +1,7 @@
 import SwiftUI
 import Combine
 import Sparkle
+import AppKit
 
 @main
 struct ClipDiaryApp: App {
@@ -17,7 +18,8 @@ struct ClipDiaryApp: App {
                 .environmentObject(store)
         }
         .commands {
-            CommandGroup(after: .appInfo) {
+            CommandGroup(replacing: .appInfo) {
+                AboutButton()
                 CheckForUpdatesButton(updater: updaterController.updater)
             }
             CommandGroup(replacing: .newItem) {
@@ -91,6 +93,22 @@ struct ClipDiaryApp: App {
             ShortcutsView()
         }
         .windowResizability(.contentMinSize)
+    }
+}
+
+/// App-menu "About ClipDiary…", replacing the standard one so the redundant
+/// build-number parenthetical (identical to the marketing version) is hidden
+/// and a contact line is shown as credits.
+private struct AboutButton: View {
+    var body: some View {
+        Button("About ClipDiary") {
+            NSApplication.shared.orderFrontStandardAboutPanel(options: [
+                .credits: NSAttributedString(
+                    string: "contact@clipdiary.app",
+                    attributes: [.font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)]),
+                .version: "",
+            ])
+        }
     }
 }
 
