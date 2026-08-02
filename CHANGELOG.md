@@ -7,6 +7,11 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.34.1] - 2026-08-02
+
+- The About panel no longer shows a redundant build number in parentheses
+  next to the version, and now includes a contact email.
+
 ## [1.34.0] - 2026-08-01
 
 - **Tags are gone.** The per-clip tagging (the tag chips on a clip) and the
