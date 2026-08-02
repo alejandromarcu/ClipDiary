@@ -426,6 +426,12 @@ that PR:
 - **MAJOR** — breaking changes, e.g. a project/data format change that isn't
   backward compatible, or a significant rework of how the app is used.
 
+**Exception: website-only changes** (anything under `docs/`, e.g. copy edits,
+layout tweaks, the `1-second-everyday-alternative-for-mac/` page) don't bump
+the version or need a CHANGELOG.md entry — there's no app change for the
+user to update to. If a PR touches both the app and the website, it still
+bumps for the app change as usual.
+
 `CHANGELOG.md` entries are written for a human reading what's new, not as a
 commit log: a short, plain-language summary of what changed, under a new
 `## [x.y.z] - YYYY-MM-DD` heading at the top (after the intro).
