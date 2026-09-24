@@ -12,7 +12,7 @@ struct PhotoEditor: View {
     @State var clip: Clip
     @State private var image: NSImage?
     @State private var editedDate: Date
-    @State private var aspectLock: AspectLock = .free
+    @State private var aspectLock: CropAspect = .free
     @State private var showTransition = false
     /// Card clips only: presents the card editor for the referenced card.
     @State private var editingCard = false
@@ -59,20 +59,10 @@ struct PhotoEditor: View {
         clip != original || editedDate.dayKey != original.date
     }
 
-    /// Optional crop aspect lock matching the export formats.
-    private enum AspectLock: String, CaseIterable, Identifiable {
-        case free = "Free"
-        case landscape = "16:9"
-        case portrait = "9:16"
-        var id: String { rawValue }
-        /// Desired pixel width/height ratio of the crop, nil = unconstrained.
-        var ratio: Double? {
-            switch self {
-            case .free: nil
-            case .landscape: 16.0 / 9.0
-            case .portrait: 9.0 / 16.0
-            }
-        }
+    /// The shape lock matching `crop` (Free when uncropped), so the editor
+    /// opens — and reverts — on the shape the saved crop was made with.
+    private func aspectLock(matching crop: CropRect?) -> CropAspect {
+        .matching(crop, contentSize: image?.size ?? .zero, uncropped: .free)
     }
 
     init(clip: Clip, sourceURL: URL? = nil, onAdd: ((Clip) -> Void)? = nil,
@@ -269,7 +259,8 @@ struct PhotoEditor: View {
                     .scaledToFit()
                     .frame(minHeight: 300, maxHeight: .infinity)
             } else {
-                PhotoCropView(image: image, crop: cropBinding, aspect: aspectLock.ratio)
+                PhotoCropView(image: image, crop: cropBinding,
+                              aspect: aspectLock.ratio(for: image.size))
                     .frame(minHeight: 300, maxHeight: .infinity)
             }
         } else {
@@ -309,13 +300,9 @@ struct PhotoEditor: View {
             // Crop controls don't apply to a card (it's already a full-frame
             // composition) — only its display duration is editable here.
             if !isCard {
-                Picker("", selection: $aspectLock) {
-                    ForEach(AspectLock.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
-                .help("Lock the crop to an export aspect ratio (16:9 landscape, 9:16 portrait)")
+                CropAspectPicker(aspect: $aspectLock, crop: cropBinding,
+                                 contentSize: image?.size ?? .zero)
+                    .disabled(image == nil)
                 Button("Reset Crop") {
                     clip.crop = nil
                     aspectLock = .free
@@ -348,7 +335,7 @@ struct PhotoEditor: View {
             if isReview { store.discardDraftAudio(of: clip) }
             clip = original
             editedDate = original.date
-            aspectLock = .free
+            aspectLock = aspectLock(matching: original.crop)
         } label: {
             Label("Revert", systemImage: "arrow.uturn.backward")
         }
@@ -413,7 +400,11 @@ struct PhotoEditor: View {
         Task.detached {
             let cg = loadOrientedCGImage(from: url, maxPixel: 2048)
             await MainActor.run {
-                if let cg { image = NSImage(cgImage: cg, size: .zero) }
+                guard let cg else { return }
+                image = NSImage(cgImage: cg, size: .zero)
+                // The shape lock needs the image's size; the picker stays
+                // disabled until now, so this can't override a user's pick.
+                aspectLock = aspectLock(matching: clip.crop)
             }
         }
     }
@@ -434,6 +425,96 @@ struct PhotoEditor: View {
             let o = props[kCGImagePropertyOrientation] as? UInt32 ?? 1
             pixelSize = o >= 5 ? CGSize(width: h, height: w)
                                : CGSize(width: w, height: h)
+        }
+    }
+}
+
+/// The crop box's shape lock, offered by both editors via `CropAspectPicker`.
+/// Original keeps the media's own shape (the crop only zooms and pans); the
+/// fixed ratios match the two render formats, so a crop in the project's own
+/// shape fills the frame with no letterbox bars.
+enum CropAspect: String, CaseIterable, Identifiable {
+    case original = "Original"
+    case free = "Free"
+    case landscape = "16:9"
+    case portrait = "9:16"
+
+    var id: String { rawValue }
+
+    /// Pixel width/height ratio the crop is held to on content of
+    /// `contentSize`; nil = unconstrained (or the size isn't known yet).
+    func ratio(for contentSize: CGSize) -> Double? {
+        switch self {
+        case .free: nil
+        case .original:
+            contentSize.width > 0 && contentSize.height > 0
+                ? Double(contentSize.width / contentSize.height) : nil
+        case .landscape: 16.0 / 9.0
+        case .portrait: 9.0 / 16.0
+        }
+    }
+
+    /// The lock an editor opens (and reverts) with: `uncropped` when there's
+    /// no crop, else the lock the crop's shape already matches — so a corner
+    /// drag keeps the shape the crop was made with rather than snapping it to
+    /// another ratio — falling back to Free.
+    static func matching(_ crop: CropRect?, contentSize: CGSize,
+                         uncropped: CropAspect) -> CropAspect {
+        guard let crop, !crop.isFull else { return uncropped }
+        guard crop.height > 0, contentSize.height > 0 else { return .free }
+        let shape = crop.width * contentSize.width / (crop.height * contentSize.height)
+        return [CropAspect.original, .landscape, .portrait].first { lock in
+            guard let ratio = lock.ratio(for: contentSize) else { return false }
+            return abs(shape / ratio - 1) < 0.01
+        } ?? .free
+    }
+}
+
+extension CropRect {
+    /// This crop re-fit to `aspect` (pixel width/height) on content of
+    /// `contentSize`, keeping its center and width — shrinking to fit when
+    /// the new shape would overflow the content.
+    func fitted(toAspect aspect: Double, contentSize: CGSize) -> CropRect {
+        guard contentSize.width > 0, contentSize.height > 0 else { return self }
+        // Crop coords are fractions of the content, so its own ratio factors in.
+        let ratio = aspect * Double(contentSize.height / contentSize.width)
+        var w = width
+        var h = w / ratio
+        if h > 1 { h = 1; w = h * ratio }
+        if w > 1 { w = 1; h = w / ratio }
+        return CropRect(x: min(max(0, x + width / 2 - w / 2), 1 - w),
+                        y: min(max(0, y + height / 2 - h / 2), 1 - h),
+                        width: w, height: h)
+    }
+}
+
+/// Segmented crop-shape picker shared by the photo and video editors. Picking
+/// a shape re-fits the current crop to it (keeping its center); from then on
+/// it's the ratio the crop box's corner drags hold.
+struct CropAspectPicker: View {
+    @Binding var aspect: CropAspect
+    @Binding var crop: CropRect
+    /// The media's oriented pixel size — what Original means, and what the
+    /// crop's unit coords are fractions of.
+    let contentSize: CGSize
+
+    var body: some View {
+        Picker("", selection: Binding(get: { aspect }, set: { pick($0) })) {
+            ForEach(CropAspect.allCases) { Text($0.rawValue).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+        .help("Crop shape: Original zooms without reshaping, Free is any shape, and 16:9 / 9:16 fill a landscape / portrait video with no black bars")
+    }
+
+    private func pick(_ newValue: CropAspect) {
+        // Re-clicking the current shape must not nudge a crop that only
+        // matches it approximately (one reopened from disk).
+        guard newValue != aspect else { return }
+        aspect = newValue
+        if let ratio = newValue.ratio(for: contentSize) {
+            crop = crop.fitted(toAspect: ratio, contentSize: contentSize)
         }
     }
 }
@@ -467,7 +548,9 @@ struct PhotoCropView: View {
 struct CropOverlay<Base: View>: View {
     let contentSize: CGSize
     @Binding var crop: CropRect
-    /// Desired pixel width/height ratio of the crop, nil = unconstrained.
+    /// Pixel width/height ratio the corner drags hold, nil = unconstrained.
+    /// Changing it doesn't touch the crop — `CropAspectPicker` re-fits it on
+    /// a pick, so an editor setting its opening lock never alters a crop.
     var aspect: Double?
     /// Video editor: keep the box/handle chrome faint until the pointer is
     /// over the media or a crop exists — always-on yellow otherwise competes
@@ -554,24 +637,6 @@ struct CropOverlay<Base: View>: View {
             .coordinateSpace(name: "crop")
         }
         .onHover { hovering = $0 }
-        .onChange(of: aspect) { _, _ in snapToAspect() }
-    }
-
-    /// Re-fits the current crop to the locked ratio, keeping its center.
-    private func snapToAspect() {
-        guard let ratio = unitRatio else { return }
-        var c = crop
-        let centerX = c.x + c.width / 2
-        let centerY = c.y + c.height / 2
-        var w = c.width
-        var h = w / ratio
-        if h > 1 { h = 1; w = h * ratio }
-        if w > 1 { w = 1; h = w / ratio }
-        c.width = w
-        c.height = h
-        c.x = min(max(0, centerX - w / 2), 1 - w)
-        c.y = min(max(0, centerY - h / 2), 1 - h)
-        crop = c
     }
 
     // MARK: - Gestures
