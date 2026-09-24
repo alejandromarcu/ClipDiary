@@ -345,6 +345,16 @@ struct Exporter {
 
             let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: videoTrack)
             layer.setTransform(transform, at: cursor)
+            // The transform only zooms the crop to fit the frame. Where the
+            // crop's shape differs from the render's, the rest of the video
+            // would show in the letterbox bars — so mask the layer to it too.
+            if clip.kind == .video, let crop = clip.crop, !crop.isFull {
+                layer.setCropRectangle(
+                    Self.sourceCropRectangle(naturalSize: naturalSize,
+                                             preferred: preferred, crop: crop),
+                    at: cursor
+                )
+            }
 
             // Per-clip fade in/out: opacity on the picture, volume on its audio.
             let (fadeIn, fadeOut) = Self.applyOpacityFades(
@@ -884,6 +894,26 @@ struct Exporter {
         transform = transform.concatenating(CGAffineTransform(scaleX: scale, y: scale))
         transform = transform.concatenating(CGAffineTransform(translationX: tx, y: ty))
         return transform
+    }
+
+    /// A video crop in the space `setCropRectangle` takes: the source track's
+    /// own untransformed (before `preferredTransform`), top-left pixel grid.
+    /// The crop's unit coords are relative to the *oriented* frame, so its
+    /// rect there maps back through the inverse transform. Snapped outward to
+    /// whole pixels — the compositor truncates a fractional rect, which leaves
+    /// a black sliver along the edge the crop fills — and kept in the frame.
+    static func sourceCropRectangle(
+        naturalSize: CGSize, preferred: CGAffineTransform, crop: CropRect
+    ) -> CGRect {
+        let orientedRect = CGRect(origin: .zero, size: naturalSize).applying(preferred)
+        let oriented = CGRect(
+            x: orientedRect.minX + crop.x * orientedRect.width,
+            y: orientedRect.minY + crop.y * orientedRect.height,
+            width: crop.width * orientedRect.width,
+            height: crop.height * orientedRect.height
+        )
+        return oriented.applying(preferred.inverted()).integral
+            .intersection(CGRect(origin: .zero, size: naturalSize))
     }
 
     // MARK: - Fades

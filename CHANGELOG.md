@@ -7,6 +7,22 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.35.0] - 2026-09-24
+
+- **Crop videos to any shape.** The video editor has a new **Crop shape**
+  picker under the video, like the photo editor's. **Original** keeps the
+  video's own shape, so the crop only zooms and pans; that's still the
+  default. **Free** lets you drag the box to any shape, and **16:9** /
+  **9:16** lock it to a landscape or portrait frame. For example, a portrait
+  video can be cropped to fill a landscape project with no black bars. The
+  photo editor's picker gains the Original option too.
+- Reopening a cropped clip or photo now selects the shape its crop was made
+  with, so adjusting the crop keeps that shape.
+- **Fixed:** a cropped video in a project of the other orientation (e.g. a
+  zoomed-in landscape clip in a portrait video) showed the parts of the frame
+  outside the crop in the black bars around it. Now only the cropped area
+  shows, in both the preview and the exported video.
+
 ## [1.34.1] - 2026-08-02
 
 - The About panel no longer shows a redundant build number in parentheses

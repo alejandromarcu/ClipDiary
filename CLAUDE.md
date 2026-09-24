@@ -235,12 +235,21 @@ Deliberate improvements over 1SE:
   editors). The video's crop chrome stays faint until hovered
   (`CropOverlay.subdueUntilHover`), and a cropped video wears a "Cropped ✕"
   badge over the player that clears the crop when clicked (there is no
-  separate Reset Crop button). The day's reorder (drag clips) lives in the
+  separate Reset Crop button). A **Crop shape** row under the player
+  (`CropAspectPicker`, shared with the photo editor) locks the box to
+  Original — the video's own shape, zoom/pan only, the default — Free, 16:9
+  or 9:16. The day's reorder (drag clips) lives in the
   day window's rail, calling `LibraryStore.reorderClips`.
-- `PhotoView.swift` — `PhotoEditor` (crop, display-duration stepper, aspect
-  lock picker Free/16:9/9:16, date, delete) and `PhotoCropView`
+- `PhotoView.swift` — `PhotoEditor` (crop, display-duration stepper, crop
+  shape picker, date, delete) and `PhotoCropView`
   (aspect-fit photo, draggable yellow corner handles + move-inside gesture,
-  min crop 5%; an aspect lock snaps the crop and constrains corner drags).
+  min crop 5%). Also the crop pieces both editors share: `CropOverlay` (the
+  box + gestures, drawn over the still or the live player), `CropAspect`
+  (Original/Free/16:9/9:16 shape lock) and `CropAspectPicker` — picking a
+  shape re-fits the crop (`CropRect.fitted`), then corner drags hold it. An
+  editor opens (and reverts) on the lock the saved crop already matches
+  (`CropAspect.matching`; uncropped = Original for video, Free for photos),
+  so a corner drag never snaps an existing crop to another shape.
   Same library/review modes as `TrimEditor`. For a **card clip** (`isCard`) the
   editor renders the card document instead of a file, hides the crop/date-stamp
   controls (only the display duration is editable), and offers an **"Edit Card…"**
@@ -357,7 +366,11 @@ Deliberate improvements over 1SE:
   segment `AVMutableVideoCompositionInstruction` aspect-fits each clip into
   the render size (handles preferredTransform / rotated iPhone video,
   letterboxes mixed orientations); a video's `crop` folds into the same
-  transform — only the crop sub-rectangle is fit — while photos bake theirs
+  transform — only the crop sub-rectangle is fit — and the layer is masked
+  to it (`setCropRectangle` with `sourceCropRectangle`: the crop in the
+  source's untransformed pixel grid, snapped outward to whole pixels), so a
+  crop whose shape differs from the render's letterboxes instead of showing
+  the rest of the frame in the bars. Photos bake theirs
   in when rendered to a segment. Exports MP4 via `AVAssetExportSession`,
   highest quality, 30fps frameDuration. `buildComposition` also takes an
   optional `fadeInSeconds`/`fadeOutSeconds` (the per-period bookend fades, when

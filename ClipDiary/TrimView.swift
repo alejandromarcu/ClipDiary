@@ -451,9 +451,12 @@ struct TrimEditor: View {
     @State private var editedDate: Date
     @State private var showTransition = false
     @State private var showDeleteConfirm = false
-    /// The video's oriented display size, loaded once — the crop box is fit and
-    /// aspect-locked to it. Nil until known (the plain player shows meanwhile).
+    /// The video's oriented display size, loaded once — the crop box is fit to
+    /// it. Nil until known (the plain player shows meanwhile).
     @State private var videoDisplaySize: CGSize?
+    /// The crop box's shape lock: Original (zoom without reshaping) for an
+    /// uncropped video, else whichever shape the saved crop matches.
+    @State private var cropAspect: CropAspect = .original
     /// The clip's recorded capture timestamp, for the library-mode info header
     /// (review mode shows the source item's time instead).
     @State private var captureDate: Date?
@@ -570,6 +573,7 @@ struct TrimEditor: View {
             VStack(spacing: 14) {
                 mediaAccessory
                 mediaView
+                cropRow
                 // The video (above) takes the slack, so the trim row sits at the
                 // bottom — level with the side pane's Revert/Delete and the rail
                 // footer. No trailing Spacer (it would fight the video for space
@@ -662,8 +666,8 @@ struct TrimEditor: View {
                     // same fitted rect as the box, so the two stay aligned.
                     // Subdued until hovered so the uncropped box's chrome
                     // doesn't compete with the trim handles below.
-                    CropOverlay(contentSize: videoDisplaySize,
-                                crop: cropBinding, aspect: nativeAspect,
+                    CropOverlay(contentSize: videoDisplaySize, crop: cropBinding,
+                                aspect: cropAspect.ratio(for: videoDisplaySize),
                                 subdueUntilHover: true) { fit in
                         PlayerView(player: player, controlsStyle: .none)
                             .frame(width: fit.width, height: fit.height)
@@ -688,7 +692,10 @@ struct TrimEditor: View {
     /// click — hand-dragging the box back to the exact frame edges is nearly
     /// impossible, so this replaces the old side-pane "Reset Crop" button.
     private var cropBadge: some View {
-        Button { clip.crop = nil } label: {
+        Button {
+            clip.crop = nil
+            cropAspect = .original
+        } label: {
             HStack(spacing: 4) {
                 Image(systemName: "crop")
                     .foregroundStyle(.yellow)
@@ -714,11 +721,23 @@ struct TrimEditor: View {
         )
     }
 
-    /// The video's display width/height, once known — the ratio the crop is
-    /// locked to, so it only zooms/pans and never reshapes the video.
-    private var nativeAspect: Double? {
-        guard let size = videoDisplaySize, size.width > 0, size.height > 0 else { return nil }
-        return Double(size.width / size.height)
+    /// Slim row under the player choosing the crop box's shape — the photo
+    /// editor's picker. Disabled until the video's size is known.
+    private var cropRow: some View {
+        HStack(spacing: 8) {
+            Label("Crop shape", systemImage: "crop")
+                .foregroundStyle(.secondary)
+            Spacer()
+            CropAspectPicker(aspect: $cropAspect, crop: cropBinding,
+                             contentSize: videoDisplaySize ?? .zero)
+                .disabled(videoDisplaySize == nil)
+        }
+        .font(.callout)
+    }
+
+    /// The shape lock matching `crop` — Original for an uncropped video.
+    private func cropAspect(matching crop: CropRect?) -> CropAspect {
+        .matching(crop, contentSize: videoDisplaySize ?? .zero, uncropped: .original)
     }
 
     private var trimControls: some View {
@@ -885,6 +904,7 @@ struct TrimEditor: View {
             if isReview { store.discardDraftAudio(of: clip) }
             clip = original
             editedDate = original.date
+            cropAspect = cropAspect(matching: original.crop)
         } label: {
             Label("Revert", systemImage: "arrow.uturn.backward")
         }
@@ -1133,8 +1153,8 @@ struct TrimEditor: View {
     }
 
     /// Loads the video's oriented display size (natural size with its
-    /// preferred transform applied), so the crop box can fit and lock to the
-    /// video's real on-screen shape.
+    /// preferred transform applied), so the crop box can fit the video's real
+    /// on-screen shape — and opens the shape lock on the saved crop's shape.
     private func loadVideoDisplaySize() async {
         let url = sourceURL ?? store.fileURL(for: clip)
         let asset = AVURLAsset(url: url)
@@ -1143,6 +1163,8 @@ struct TrimEditor: View {
               let preferred = try? await track.load(.preferredTransform) else { return }
         let oriented = CGRect(origin: .zero, size: naturalSize).applying(preferred)
         videoDisplaySize = CGSize(width: abs(oriented.width), height: abs(oriented.height))
+        // The crop box and picker only appear now, so this can't override a pick.
+        cropAspect = cropAspect(matching: clip.crop)
     }
 }
 
