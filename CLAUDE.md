@@ -182,7 +182,18 @@ Deliberate improvements over 1SE:
   calendar and **`TimelineBody`** — a continuous scroll of every day that has
   clips (`store.contentDays()`), grouped under sticky month headers,
   each day a horizontal strip of `TimelineClipThumb`s; it opens scrolled to the
-  calendar's current month. Clicking a timeline clip
+  calendar's current month. It is **not** a `LazyVStack`: every element (month
+  header, day row, gap row) has a fixed height, so `TimelineGeometry` computes
+  each one's y up front and the scroll content is exactly that tall; only the
+  elements near the viewport are rendered (offset into a `ZStack`), the month
+  header is pinned by hand (an overlay, pushed up by the next one), and the
+  top visible day comes from the scroll offset — no preferences or row
+  self-measurement. (A lazy stack of thousands of mixed-height rows kept
+  re-estimating near the end of the content and never settled — a hard hang
+  when scrolling into the last weeks of a big project, fixed in 1.35.1.) When
+  the layout changes under the viewport (source scan finishing, a gap turning
+  into a day, the thumbnail zoom) it re-scrolls to keep the top element in
+  place. Clicking a timeline clip
   opens the day window with that clip pre-selected (`ReviewRequest(day:startClipID:)`).
   **Clicking a day cell opens the day window** on the day's picked clips
   (`ReviewRequest(day:)` via openWindow); the cell's **context menu** also offers
