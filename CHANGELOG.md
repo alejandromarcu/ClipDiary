@@ -7,6 +7,17 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.35.1] - 2026-09-25
+
+- **Fixed:** the Timeline view could freeze (spinning beach ball, never
+  recovering) when scrolling into the last weeks of a large project. The
+  timeline is now laid out in a way that can't get stuck, and it scrolls to
+  the end normally.
+- Changing the Timeline's thumbnail size keeps the same day at the top
+  instead of jumping elsewhere.
+- The "+N more clips" badge at the end of a busy day's filmstrip no longer
+  gets squeezed onto two lines.
+
 ## [1.35.0] - 2026-09-24
 
 - **Crop videos to any shape.** The video editor has a new **Crop shape**

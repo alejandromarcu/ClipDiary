@@ -726,16 +726,6 @@ struct DayCell: View {
 
 // MARK: - Timeline
 
-/// Collects each rendered timeline day row's top edge (in the scroll view's
-/// coordinate space) so `TimelineBody` can tell which day is scrolled to the top.
-/// Only rows currently in the lazy stack contribute, so there are no stale entries.
-private struct TimelineDayTopKey: PreferenceKey {
-    static let defaultValue: [Date: CGFloat] = [:]
-    static func reduce(value: inout [Date: CGFloat], nextValue: () -> [Date: CGFloat]) {
-        value.merge(nextValue(), uniquingKeysWith: { $1 })
-    }
-}
-
 /// A run of consecutive clip-less days that still have source footage waiting —
 /// the timeline's "to-do" rows. `availability` is the whole run's tally.
 private struct GapRun {
@@ -747,16 +737,159 @@ private struct GapRun {
 
 /// One row of a timeline month section: a day that has clips, or the gap run
 /// between them.
-private enum TimelineRow: Identifiable {
+private enum TimelineRow {
     case day(Date)
     case gap(GapRun)
+}
 
-    var id: String {
-        switch self {
-        case .day(let day): return TimelineBody.dayRowID(day)
-        case .gap(let run): return "gap-\(run.start.timeIntervalSinceReferenceDate)"
-        }
+/// One month's section in the Timeline: its first moment + its rows (ascending
+/// day rows with gap runs folded in).
+private struct TimelineMonth {
+    let start: Date
+    let rows: [TimelineRow]
+}
+
+/// Where everything in the Timeline sits, in scroll-content points. Every
+/// element has a fixed height (month header, day row, gap row), so this is
+/// computed from the data alone — nothing is measured at runtime and the
+/// content height is exact.
+///
+/// This replaced a `LazyVStack` (pinned month headers, rows reporting their
+/// positions through a preference). With thousands of rows of very different
+/// heights, the lazy stack's size *estimates* kept changing as it realized
+/// rows near the end of the content, which moved the clamped scroll offset,
+/// which realized other rows… — its placement/prefetch pass never settled and
+/// the app hung (beach ball) when scrolling into the last weeks of a large
+/// project. Here the scroll view only ever renders the handful of elements
+/// that intersect the viewport, at positions known up front.
+private struct TimelineGeometry {
+    enum Kind {
+        case header(month: Int)
+        case day(Date)
+        case gap(GapRun)
     }
+    struct Item: Identifiable {
+        let id: String
+        let kind: Kind
+        let month: Int
+        let y: CGFloat
+        let height: CGFloat
+        var maxY: CGFloat { y + height }
+    }
+
+    let items: [Item]
+    /// Index into `items` of each month's header.
+    let headerIndex: [Int]
+    let totalHeight: CGFloat
+    /// Changes whenever the layout does (rows added/removed/resized).
+    var signature: [CGFloat] { [totalHeight, CGFloat(items.count)] }
+
+    init(months: [TimelineMonth], dayHeight: CGFloat) {
+        var items: [Item] = []
+        var headerIndex: [Int] = []
+        var y: CGFloat = 0
+        for (m, month) in months.enumerated() {
+            headerIndex.append(items.count)
+            items.append(Item(id: TimelineBody.monthID(month.start), kind: .header(month: m),
+                              month: m, y: y, height: TimelineBody.headerHeight))
+            y += TimelineBody.headerHeight
+            for row in month.rows {
+                switch row {
+                case .day(let day):
+                    items.append(Item(id: TimelineBody.dayRowID(day), kind: .day(day),
+                                      month: m, y: y, height: dayHeight))
+                    y += dayHeight
+                case .gap(let run):
+                    items.append(Item(id: "gap-\(run.start.timeIntervalSinceReferenceDate)",
+                                      kind: .gap(run), month: m, y: y,
+                                      height: TimelineBody.gapHeight))
+                    y += TimelineBody.gapHeight
+                }
+            }
+        }
+        self.items = items
+        self.headerIndex = headerIndex
+        self.totalHeight = y
+    }
+
+    /// Index of the first item whose bottom edge is below `y` (the item at `y`),
+    /// clamped to the last item.
+    func index(at y: CGFloat) -> Int {
+        var lo = 0, hi = items.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if items[mid].maxY <= y { lo = mid + 1 } else { hi = mid }
+        }
+        return min(lo, items.count - 1)
+    }
+
+    /// The day row sitting at `y` (the line just under the sticky month
+    /// header): the last day whose top is at or above it, else the next one.
+    func day(at y: CGFloat) -> Date? {
+        guard !items.isEmpty else { return nil }
+        let start = index(at: y)
+        for i in stride(from: start, through: 0, by: -1) {
+            if case .day(let day) = items[i].kind, items[i].y <= y + 0.5 { return day }
+        }
+        for i in start..<items.count {
+            if case .day(let day) = items[i].kind { return day }
+        }
+        return nil
+    }
+
+    func item(forDay day: Date) -> Item? {
+        let id = TimelineBody.dayRowID(day)
+        return items.first { $0.id == id }
+    }
+}
+
+/// What the timeline needs from the scroll position, kept in a class so a
+/// frame of scrolling doesn't re-render anything unless one of the *derived*
+/// values changes (which rows to render, the sticky header). Only `rendered`
+/// and `sticky` are observed.
+@Observable @MainActor
+private final class TimelineViewport {
+    /// Content y at the top of the visible area (below any toolbar inset), the
+    /// visible height, and the top content inset (for converting a content y
+    /// into a `ScrollPosition` offset).
+    @ObservationIgnored var top: CGFloat = 0
+    @ObservationIgnored var height: CGFloat = 0
+    /// The element at the top of the view and how far into it the top edge
+    /// is. When the content changes above the viewport (the source scan
+    /// finishing adds gap rows, a picked clip turns a gap into a day, the
+    /// zoom changes), the view is re-scrolled to keep this in place. `layout`
+    /// is the `TimelineGeometry.signature` it was taken against.
+    @ObservationIgnored var anchor: (id: String, delta: CGFloat, layout: [CGFloat])?
+    /// Where a scroll this view issued (to restore the anchor) should land.
+    /// Until it does, position reports are from before it applied and must
+    /// not re-anchor (a few reports at most — a user scroll wins after that).
+    @ObservationIgnored var expectedTop: (y: CGFloat, reports: Int)?
+    /// Indices of the items to render (those near the viewport).
+    var rendered: Range<Int> = 0..<0
+    /// The month pinned at the top, and how far the next month's header has
+    /// pushed it up (≤ 0).
+    var sticky = Sticky()
+
+    struct Sticky: Equatable {
+        var month: Int?
+        var push: CGFloat = 0
+    }
+}
+
+/// Recomputes the Timeline's month sections (and their geometry) only when the
+/// library's clips or sources change, the day rolls over, or the thumbnail
+/// zoom changes — not on every render (scrolling re-renders as rows come and
+/// go).
+@MainActor
+private final class TimelineLayoutCache {
+    struct MonthsKey: Equatable {
+        let revision: Int
+        let today: Date
+    }
+    var monthsKey: MonthsKey?
+    var months: [TimelineMonth] = []
+    var geometryKey: (months: MonthsKey, dayHeight: CGFloat)?
+    var geometry: TimelineGeometry?
 }
 
 /// The Timeline: the calendar's sibling browsing view (toggled in the toolbar).
@@ -765,6 +898,9 @@ private enum TimelineRow: Identifiable {
 /// under sticky month headers, with gap rows marking days that still have
 /// unreviewed footage. Clicking a clip opens the day editor on it; arrow keys
 /// move a selection like the calendar grid's (Return opens, Space previews).
+///
+/// The scroll content is laid out by hand (`TimelineGeometry`): fixed-height
+/// rows at precomputed positions, only the ones near the viewport rendered.
 struct TimelineBody: View {
     @EnvironmentObject var store: LibraryStore
     @Environment(\.openWindow) private var openWindow
@@ -784,35 +920,65 @@ struct TimelineBody: View {
     @State private var selectedDay: Date?
     @State private var selectedClipIndex = 0
     @FocusState private var focused: Bool
+    @State private var position = ScrollPosition(edge: .top)
+    @State private var viewport = TimelineViewport()
+    @State private var layoutCache = TimelineLayoutCache()
+    /// The width the rows are laid out in: measured from a full-width spacer
+    /// in the scroll content (so it excludes a legacy scroller), which doesn't
+    /// depend on the rows — rows never measure themselves.
+    @State private var rowWidth: CGFloat = 0
 
     private var calendar: Calendar { Calendar.current }
 
-    /// Coordinate space the day rows measure themselves against, so their
-    /// scroll-relative position (used to find the topmost visible one) is
-    /// independent of window insets.
-    private static let scrollSpace = "timeline-scroll"
+    /// Fixed element heights (see `TimelineGeometry`). A day row's height
+    /// follows the thumbnail zoom: the filmstrip (thumb + 4) + 20 padding + 1
+    /// divider — its date column and up-to-3 caption lines fit within that
+    /// even at the smallest zoom.
+    static let headerHeight: CGFloat = 40
+    static let gapHeight: CGFloat = 38
+    private var dayRowHeight: CGFloat {
+        (TimelineClipThumb.baseSize.height * thumbScale).rounded(.up) + 25
+    }
+    /// How far beyond the viewport rows are rendered, so thumbnails are
+    /// already loading when they scroll in.
+    private static let renderMargin: CGFloat = 500
 
-    /// The ForEach/scrollTo identity of a day's row.
+    /// The identity of a day's row.
     static func dayRowID(_ day: Date) -> String {
         "day-\(day.timeIntervalSinceReferenceDate)"
     }
 
-    /// One month's section in the Timeline. A `String` id keeps a section's
-    /// identity from colliding with a day row's id — a month's first day's
-    /// startOfDay equals the month-start instant, which otherwise makes the
-    /// pinned `LazyVStack` see one id on two child views.
-    private struct Month: Identifiable {
-        let start: Date          // first moment of the month
-        let rows: [TimelineRow]  // ascending day rows with gap runs folded in
-        var id: String { "\(start.timeIntervalSinceReferenceDate)" }
+    /// The identity of a month section (its header). A distinct prefix keeps it
+    /// from colliding with the section's first day row, whose startOfDay is
+    /// the same instant.
+    static func monthID(_ start: Date) -> String {
+        "month-\(start.timeIntervalSinceReferenceDate)"
     }
 
     /// Days with content (oldest first) grouped into consecutive month
-    /// sections, each month's clip-less-but-reviewable days folded in as gaps.
-    private var months: [Month] {
+    /// sections, each month's clip-less-but-reviewable days folded in as gaps,
+    /// plus where each element sits. Cached (see `TimelineLayoutCache`).
+    private func layout() -> (months: [TimelineMonth], geometry: TimelineGeometry) {
+        let key = TimelineLayoutCache.MonthsKey(revision: store.contentRevision,
+                                                today: Date().dayKey)
+        if layoutCache.monthsKey != key {
+            layoutCache.months = computeMonths(today: key.today)
+            layoutCache.monthsKey = key
+        }
+        let dayHeight = dayRowHeight
+        if let cached = layoutCache.geometry, let gk = layoutCache.geometryKey,
+           gk.months == key, gk.dayHeight == dayHeight {
+            return (layoutCache.months, cached)
+        }
+        let geometry = TimelineGeometry(months: layoutCache.months, dayHeight: dayHeight)
+        layoutCache.geometry = geometry
+        layoutCache.geometryKey = (key, dayHeight)
+        return (layoutCache.months, geometry)
+    }
+
+    private func computeMonths(today: Date) -> [TimelineMonth] {
         let contentDays = store.contentDays()
         guard !contentDays.isEmpty else { return [] }
-        let today = Date().dayKey
         var grouped: [(start: Date, days: [Date])] = []
         for day in contentDays {
             let month = calendar.dateInterval(of: .month, for: day)?.start ?? day
@@ -823,9 +989,9 @@ struct TimelineBody: View {
             }
         }
         return grouped.map { group in
-            Month(start: group.start,
-                  rows: rows(inMonthStarting: group.start,
-                             contentDays: Set(group.days), today: today))
+            TimelineMonth(start: group.start,
+                          rows: rows(inMonthStarting: group.start,
+                                     contentDays: Set(group.days), today: today))
         }
     }
 
@@ -878,88 +1044,226 @@ struct TimelineBody: View {
         return rows
     }
 
+    /// The scroll position, as the content y at the top of the visible area
+    /// (below the toolbar) and the visible height.
+    private struct ScrollSnapshot: Equatable {
+        var top: CGFloat
+        var height: CGFloat
+    }
+
     var body: some View {
-        let months = self.months
+        let layout = self.layout()
+        let months = layout.months
+        let geometry = layout.geometry
         if months.isEmpty {
             emptyState
         } else {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
-                        ForEach(months) { section in
-                            Section {
-                                ForEach(section.rows) { row in
-                                    rowView(row)
-                                }
-                            } header: {
-                                TimelineMonthHeader(month: section.start,
-                                                    jumpTargets: months.map { (id: $0.id, start: $0.start) },
-                                                    onJump: { id in withAnimation { proxy.scrollTo(id, anchor: .top) } })
-                            }
+            let jumpTargets = months.map { (id: Self.monthID($0.start), start: $0.start) }
+            ScrollView {
+                ZStack(alignment: .topLeading) {
+                    // Sizes the content (exact height) and measures the row
+                    // width — independent of the rows themselves.
+                    Color.clear
+                        .frame(minWidth: 0, maxWidth: .infinity)
+                        .frame(height: geometry.totalHeight)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                            rowWidth = width
                         }
+                    ForEach(renderedItems(geometry)) { item in
+                        itemView(item, months: months, geometry: geometry,
+                                 jumpTargets: jumpTargets)
+                            // Exactly the offered width: min 0 so a row sized
+                            // from `rowWidth` never props the scroll view
+                            // wider than its window (a legacy scroller would
+                            // otherwise be added on top of it).
+                            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                            .frame(height: item.height)
+                            .offset(y: item.y)
                     }
                 }
-                .coordinateSpace(name: Self.scrollSpace)
-                .onPreferenceChange(TimelineDayTopKey.self) { tops in
-                    updateTopVisibleDay(from: tops)
-                }
-                .focusable()
-                .focusEffectDisabled()
-                .focused($focused)
-                .onMoveCommand(perform: moveSelection)
-                .onKeyPress(.return) { openSelectedClip() }
-                .onKeyPress(.space) { previewSelectedDay() }
-                .onKeyPress(.escape) {
-                    guard selectedDay != nil else { return .ignored }
-                    selectedDay = nil
-                    return .handled
-                }
-                .onChange(of: selectedDay) { _, day in
-                    if let day { proxy.scrollTo(Self.dayRowID(day)) }
-                }
-                .overlay(alignment: .bottomTrailing) { zoomControl }
-                .onAppear {
-                    // Land near the month the calendar was on. Pinned headers can
-                    // make an immediate scrollTo a no-op, so defer a tick. The
-                    // scroll target is the section's id (its ForEach identity).
-                    // Focus so arrow keys work right away, like the calendar grid.
-                    let target = targetMonthID(in: months)
-                    DispatchQueue.main.async {
-                        proxy.scrollTo(target, anchor: .top)
-                        focused = true
+            }
+            .scrollPosition($position)
+            .onScrollGeometryChange(for: ScrollSnapshot.self) { geo in
+                ScrollSnapshot(top: geo.contentOffset.y + geo.contentInsets.top,
+                               height: geo.containerSize.height
+                                   - geo.contentInsets.top - geo.contentInsets.bottom)
+            } action: { _, snapshot in
+                viewport.height = snapshot.height
+                if let expected = viewport.expectedTop {
+                    if abs(snapshot.top - expected.y) <= 1 || expected.reports >= 3 {
+                        viewport.expectedTop = nil
+                    } else {
+                        viewport.expectedTop = (expected.y, expected.reports + 1)
+                        return
                     }
+                }
+                viewport.top = snapshot.top
+                if let anchor = viewport.anchor, anchor.layout != geometry.signature {
+                    // The layout changed under the scroll position: keep the
+                    // anchor in view rather than re-anchoring on whatever
+                    // moved into its place.
+                    restoreAnchor(geometry)
+                } else {
+                    updateViewport(geometry)
+                    viewport.anchor = anchor(at: snapshot.top, geometry)
+                }
+            }
+            // New rows, a zoom change…: everything below the change moves, so
+            // keep what was at the top of the view there.
+            .onChange(of: geometry.signature) { _, _ in
+                restoreAnchor(geometry)
+            }
+            .overlay(alignment: .top) {
+                if let m = viewport.sticky.month, months.indices.contains(m) {
+                    TimelineMonthHeader(month: months[m].start,
+                                        jumpTargets: jumpTargets,
+                                        onJump: { jump(to: $0, geometry) })
+                        .frame(height: Self.headerHeight)
+                        .offset(y: viewport.sticky.push)
+                        .clipped()
+                }
+            }
+            .focusable()
+            .focusEffectDisabled()
+            .focused($focused)
+            .onMoveCommand(perform: moveSelection)
+            .onKeyPress(.return) { openSelectedClip() }
+            .onKeyPress(.space) { previewSelectedDay() }
+            .onKeyPress(.escape) {
+                guard selectedDay != nil else { return .ignored }
+                selectedDay = nil
+                return .handled
+            }
+            .onChange(of: selectedDay) { _, day in
+                if let day { reveal(day, geometry) }
+            }
+            .overlay(alignment: .bottomTrailing) { zoomControl }
+            .onAppear {
+                // Land on the month the calendar was on. Seed what's rendered
+                // from there right away; the scroll geometry refines it. Focus
+                // so arrow keys work right away, like the calendar grid.
+                let target = targetMonthIndex(in: months)
+                let y = geometry.items[geometry.headerIndex[target]].y
+                viewport.top = y
+                if viewport.height == 0 { viewport.height = 1200 }
+                viewport.anchor = (Self.monthID(months[target].start), 0, geometry.signature)
+                updateViewport(geometry)
+                scroll(toContentY: y)
+                DispatchQueue.main.async {
+                    focused = true
+                    scroll(toContentY: y)
                 }
             }
         }
     }
 
-    /// One timeline row: a day's strip or a gap run.
+    /// The items to render: those within `renderMargin` of the viewport.
+    private func renderedItems(_ geometry: TimelineGeometry) -> [TimelineGeometry.Item] {
+        let range = viewport.rendered.clamped(to: geometry.items.indices)
+        return Array(geometry.items[range])
+    }
+
+    /// Re-derives, from the current scroll position, which items to render,
+    /// the sticky month header (and its push-up as the next header arrives),
+    /// and the topmost visible day. Each is written only when it changes.
+    private func updateViewport(_ geometry: TimelineGeometry) {
+        guard !geometry.items.isEmpty else { return }
+        let top = viewport.top
+        let first = geometry.index(at: max(0, top - Self.renderMargin))
+        let last = geometry.index(at: top + viewport.height + Self.renderMargin)
+        let rendered = first..<(last + 1)
+        if viewport.rendered != rendered { viewport.rendered = rendered }
+
+        // The sticky header: the month whose section spans the top edge, pushed
+        // up by the next month's header as it arrives.
+        let month = geometry.items[geometry.index(at: max(0, top))].month
+        var push: CGFloat = 0
+        if month + 1 < geometry.headerIndex.count {
+            let nextHeaderY = geometry.items[geometry.headerIndex[month + 1]].y
+            push = min(0, (nextHeaderY - top - Self.headerHeight).rounded())
+        }
+        let sticky = TimelineViewport.Sticky(month: month, push: push)
+        if viewport.sticky != sticky { viewport.sticky = sticky }
+
+        // The day under the sticky header (for the Soundtrack's anchor and
+        // the keyboard selection's starting point).
+        if let day = geometry.day(at: top + Self.headerHeight), day != topVisibleDay {
+            topVisibleDay = day
+        }
+    }
+
+    /// Scrolls so content y `y` sits at the top of the visible area (below
+    /// the toolbar — `ScrollPosition` already accounts for the inset).
+    private func scroll(toContentY y: CGFloat) {
+        position.scrollTo(y: max(0, y))
+    }
+
+    /// The element at content y `top`, and how far into it `top` is.
+    private func anchor(at top: CGFloat, _ geometry: TimelineGeometry)
+        -> (id: String, delta: CGFloat, layout: [CGFloat])? {
+        guard !geometry.items.isEmpty else { return nil }
+        let item = geometry.items[geometry.index(at: max(0, top))]
+        return (item.id, top - item.y, geometry.signature)
+    }
+
+    /// After the layout changed, scrolls so the element that was at the top
+    /// of the view is again (see `TimelineViewport.anchor`).
+    private func restoreAnchor(_ geometry: TimelineGeometry) {
+        if let anchor = viewport.anchor,
+           let item = geometry.items.first(where: { $0.id == anchor.id }) {
+            viewport.anchor = (anchor.id, anchor.delta, geometry.signature)
+            let top = item.y + anchor.delta
+            if abs(top - viewport.top) > 0.5 {
+                viewport.top = top
+                viewport.expectedTop = (top, 0)
+                scroll(toContentY: top)
+            }
+        } else {
+            viewport.anchor = anchor(at: viewport.top, geometry)
+        }
+        updateViewport(geometry)
+    }
+
+    private func jump(to monthID: String, _ geometry: TimelineGeometry) {
+        guard let index = geometry.headerIndex.first(where: { geometry.items[$0].id == monthID })
+        else { return }
+        withAnimation { scroll(toContentY: geometry.items[index].y) }
+    }
+
+    /// Scrolls just enough to bring a day's row fully into view (below the
+    /// sticky header) — what `ScrollViewReader.scrollTo` did with no anchor.
+    private func reveal(_ day: Date, _ geometry: TimelineGeometry) {
+        guard let item = geometry.item(forDay: day) else { return }
+        let visibleTop = viewport.top + Self.headerHeight
+        let visibleBottom = viewport.top + viewport.height
+        if item.y < visibleTop {
+            scroll(toContentY: item.y - Self.headerHeight)
+        } else if item.maxY > visibleBottom {
+            scroll(toContentY: item.maxY - viewport.height)
+        }
+    }
+
+    /// One timeline element: a month header, a day's strip or a gap run.
     @ViewBuilder
-    private func rowView(_ row: TimelineRow) -> some View {
-        switch row {
+    private func itemView(_ item: TimelineGeometry.Item, months: [TimelineMonth],
+                          geometry: TimelineGeometry,
+                          jumpTargets: [(id: String, start: Date)]) -> some View {
+        switch item.kind {
+        case .header(let m):
+            TimelineMonthHeader(month: months[m].start,
+                                jumpTargets: jumpTargets,
+                                onJump: { jump(to: $0, geometry) })
         case .day(let day):
             TimelineDayRow(day: day,
+                           rowWidth: rowWidth,
                            thumbScale: thumbScale,
                            selectedClipID: selectedClipID(on: day)) { clip in
                 select(clip, on: day)
                 onOpenClip(clip)
             }
-            // Each row near the pinned header reports its top edge relative
-            // to the scroll view; the reducer below picks the one sitting at
-            // the top. Rows far from the header report nothing, so the
-            // per-frame preference merge handles a couple of entries, not
-            // every rendered row.
-            .background(GeometryReader { geo in
-                dayTopReporter(day: day, y: geo.frame(in: .named(Self.scrollSpace)).minY)
-            })
         case .gap(let run):
             TimelineGapRow(run: run)
         }
-    }
-
-    private func dayTopReporter(day: Date, y: CGFloat) -> some View {
-        let tops: [Date: CGFloat] = abs(y - Self.headerLine) < 600 ? [day: y] : [:]
-        return Color.clear.preference(key: TimelineDayTopKey.self, value: tops)
     }
 
     // MARK: Keyboard selection
@@ -1040,30 +1344,13 @@ struct TimelineBody: View {
         .help("Thumbnail size")
     }
 
-    /// ~ pinned month-header height: the y the "top" day row sits under.
-    private static let headerLine: CGFloat = 44
-
-    /// Picks the topmost visible day from the near-header rows' scroll-relative
-    /// top edges and reports it up (only on change). The day sitting under the
-    /// pinned month header is the one whose top is the largest value still
-    /// at/above the header line; if none has reached it yet, the nearest
-    /// upcoming row. An empty report (nothing near the header mid-fling) keeps
-    /// the last known day.
-    private func updateTopVisibleDay(from tops: [Date: CGFloat]) {
-        guard !tops.isEmpty else { return }
-        let reached = tops.filter { $0.value <= Self.headerLine }
-        let day = (reached.max(by: { $0.value < $1.value })
-                   ?? tops.min(by: { $0.value < $1.value }))?.key
-        if let day, day != topVisibleDay { topVisibleDay = day }
-    }
-
-    /// The id of the month section to open on: the one containing
-    /// `displayedMonth`, else the nearest earlier month with content, else the
-    /// first. (`months` is non-empty here — the empty case returns early.)
-    private func targetMonthID(in months: [Month]) -> String {
+    /// The month section to open on: the one containing `displayedMonth`, else
+    /// the nearest earlier month with content, else the first. (`months` is
+    /// non-empty here — the empty case returns early.)
+    private func targetMonthIndex(in months: [TimelineMonth]) -> Int {
         let wanted = calendar.dateInterval(of: .month, for: displayedMonth)?.start ?? displayedMonth
-        if let exact = months.first(where: { $0.start == wanted }) { return exact.id }
-        return (months.last(where: { $0.start <= wanted }) ?? months[0]).id
+        if let exact = months.firstIndex(where: { $0.start == wanted }) { return exact }
+        return months.lastIndex(where: { $0.start <= wanted }) ?? 0
     }
 
     private var emptyState: some View {
@@ -1079,7 +1366,8 @@ struct TimelineBody: View {
     }
 }
 
-/// Sticky section header for a month in the Timeline: the month + year (a menu
+/// Section header for a month in the Timeline (also drawn pinned at the top
+/// while scrolling through that month): the month + year (a menu
 /// jumping to any other month, or today's), a Preview button rendering the
 /// month, and the month's picked-clip tally (count + total length).
 private struct TimelineMonthHeader: View {
@@ -1134,8 +1422,8 @@ private struct TimelineMonthHeader: View {
                 .font(.callout.monospacedDigit())
         }
         .padding(.horizontal)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // Fills the fixed height the timeline lays it out in.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .background(.bar)
     }
 
@@ -1155,16 +1443,18 @@ private struct TimelineDayRow: View {
     @EnvironmentObject var store: LibraryStore
     @Environment(\.openWindow) private var openWindow
     let day: Date
+    /// The width the row is laid out in (the timeline's content width), used
+    /// to split space between the filmstrip and the caption block
+    /// deterministically (a greedy ScrollView would otherwise squeeze the text
+    /// out entirely). Passed in rather than measured here: a row measuring its
+    /// own width would feed that width back into its own layout.
+    let rowWidth: CGFloat
     var thumbScale: Double = 1
     /// The keyboard-selected clip on this day (accent ring), if any.
     var selectedClipID: UUID?
     var onOpenClip: (Clip) -> Void
 
     @State private var hovering = false
-    /// The row's laid-out width, measured to split space between the filmstrip
-    /// and the caption block deterministically (a greedy ScrollView would
-    /// otherwise squeeze the text out entirely).
-    @State private var rowWidth: CGFloat = 0
 
     private var calendar: Calendar { Calendar.current }
     private var thumbWidth: CGFloat { TimelineClipThumb.baseSize.width * thumbScale }
@@ -1173,6 +1463,9 @@ private struct TimelineDayRow: View {
     /// The row's fixed leading chrome: horizontal padding + date column + one
     /// HStack spacing. Mirrors the layout constants below.
     private static let fixedLeading: CGFloat = 32 + 56 + 14
+    /// The "+n" chip's fixed width (fits "+999"), so the space reserved for it
+    /// is exactly what it takes — it's never squeezed into wrapping.
+    private static let chipWidth: CGFloat = 44
 
     var body: some View {
         let clips = store.clips(on: day)
@@ -1180,28 +1473,24 @@ private struct TimelineDayRow: View {
         let captions = clips.map(\.caption).filter { !$0.isEmpty }
         let hasText = !captions.isEmpty
         let layout = stripLayout(clipCount: clips.count, hasText: hasText)
-        VStack(spacing: 0) {
-            HStack(alignment: .center, spacing: 14) {
-                dateColumn(clips: clips, isToday: isToday)
-                strip(clips: clips, layout: layout)
-                if layout.hidden > 0 {
-                    moreChip(layout.hidden)
-                }
-                if hasText {
-                    dayText(captions: captions)
-                }
-                Spacer(minLength: 0)
+        HStack(alignment: .center, spacing: 14) {
+            dateColumn(clips: clips, isToday: isToday)
+            strip(clips: clips, layout: layout)
+            if layout.hidden > 0 {
+                moreChip(layout.hidden)
             }
-            .padding(.horizontal)
-            .padding(.vertical, 10)
-            Divider()
+            if hasText {
+                dayText(captions: captions)
+            }
         }
+        // Leading-aligned in the full row width (instead of a trailing Spacer,
+        // whose stack spacing the width budget below would also have to
+        // account for), vertically centered in the fixed row height the
+        // timeline lays it out in.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        .padding(.horizontal)
+        .overlay(alignment: .bottom) { Divider() }
         .background(Color.accentColor.opacity((isToday ? 0.06 : 0) + (hovering ? 0.04 : 0)))
-        .background(GeometryReader { geo in
-            Color.clear
-                .onAppear { rowWidth = geo.size.width }
-                .onChange(of: geo.size.width) { _, width in rowWidth = width }
-        })
         .overlay(alignment: .trailing) {
             if hovering, !clips.isEmpty {
                 previewButton.padding(.trailing, 10)
@@ -1240,7 +1529,7 @@ private struct TimelineDayRow: View {
     private func strip(clips: [Clip],
                        layout: (width: CGFloat?, hidden: Int, contentWidth: CGFloat)) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            LazyHStack(spacing: Self.thumbSpacing) {
+            HStack(spacing: Self.thumbSpacing) {
                 ForEach(clips) { clip in
                     Button { onOpenClip(clip) } label: {
                         TimelineClipThumb(clip: clip, width: thumbWidth, height: thumbHeight,
@@ -1282,7 +1571,7 @@ private struct TimelineDayRow: View {
         let available = rowWidth - Self.fixedLeading
         let textMinimum: CGFloat = hasText ? min(320, max(200, available * 0.35)) + 14 : 0
         var cap = available - textMinimum
-        if contentWidth > cap { cap -= 46 + 14 }  // the "+n" chip + its spacing
+        if contentWidth > cap { cap -= Self.chipWidth + 14 }  // the "+n" chip + its spacing
         let width = max(thumbWidth, min(contentWidth, cap))
         let perThumb = thumbWidth + Self.thumbSpacing
         let visible = max(1, Int(((width + Self.thumbSpacing) / perThumb).rounded(.down)))
@@ -1295,9 +1584,12 @@ private struct TimelineDayRow: View {
             Text("+\(hidden)")
                 .font(.caption.bold().monospacedDigit())
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .fixedSize()
                 .padding(.horizontal, 7)
                 .padding(.vertical, 3)
                 .background(Capsule().fill(.quaternary.opacity(0.6)))
+                .frame(width: Self.chipWidth)
         }
         .buttonStyle(.plain)
         .help("\(hidden) more clip\(hidden == 1 ? "" : "s") — open the day to see them all")
@@ -1343,38 +1635,37 @@ private struct TimelineGapRow: View {
     private var calendar: Calendar { Calendar.current }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .center, spacing: 14) {
-                VStack(spacing: 0) {
-                    if run.dayCount == 1 {
-                        Text(run.start.formatted(.dateTime.weekday(.abbreviated)))
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                    Text(dayLabel)
-                        .font(.callout.bold().monospacedDigit())
-                        .foregroundStyle(.orange)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
+        HStack(alignment: .center, spacing: 14) {
+            VStack(spacing: 0) {
+                if run.dayCount == 1 {
+                    Text(run.start.formatted(.dateTime.weekday(.abbreviated)))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
-                .frame(width: 56)
-
-                Text(message)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Spacer(minLength: 8)
-
-                Button("Review Sources…") {
-                    openWindow(value: ReviewRequest(day: run.start, focusSources: true))
-                }
-                .controlSize(.small)
-                .help("Open the day window on this footage")
+                Text(dayLabel)
+                    .font(.callout.bold().monospacedDigit())
+                    .foregroundStyle(.orange)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
-            .padding(.horizontal)
-            .padding(.vertical, 5)
-            Divider()
+            .frame(width: 56)
+
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Spacer(minLength: 8)
+
+            Button("Review Sources…") {
+                openWindow(value: ReviewRequest(day: run.start, focusSources: true))
+            }
+            .controlSize(.small)
+            .help("Open the day window on this footage")
         }
+        .padding(.horizontal)
+        // Fills the fixed height the timeline lays it out in.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .bottom) { Divider() }
         .background(Color.orange.opacity(0.05))
     }
 

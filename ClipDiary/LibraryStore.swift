@@ -14,8 +14,15 @@ import UniformTypeIdentifiers
 @MainActor
 final class LibraryStore: ObservableObject {
     @Published private(set) var clips: [Clip] = [] {
-        didSet { clipsByDayCache = nil; timelineLayoutCache = nil; timelineGridCache = nil; clipByIDCache = nil }
+        didSet {
+            clipsByDayCache = nil; timelineLayoutCache = nil; timelineGridCache = nil; clipByIDCache = nil
+            contentRevision &+= 1
+        }
     }
+    /// Bumped whenever `clips` or `sourceItems` change, so views can cache
+    /// what they derive from them (the Timeline's month sections) and
+    /// recompute only when this moves.
+    private(set) var contentRevision = 0
     @Published var lastError: String?
 
     /// The open project's root directory, or nil when none is open.
@@ -27,7 +34,7 @@ final class LibraryStore: ObservableObject {
     /// found inside them, sorted by capture time.
     @Published private(set) var sourceFolders: [SourceFolder] = []
     @Published private(set) var sourceItems: [SourceItem] = [] {
-        didSet { sourceItemsByDayCache = nil }
+        didSet { sourceItemsByDayCache = nil; contentRevision &+= 1 }
     }
     @Published private(set) var isScanningSources = false
 
