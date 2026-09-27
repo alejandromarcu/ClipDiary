@@ -4,15 +4,15 @@
     <title>ClipDiary</title>
     <link>https://clipdiary.app/</link>
     <item>
-      <title>1.35.0</title>
-      <pubDate>Thu, 24 Sep 2026 17:32:42 +0000</pubDate>
-      <sparkle:version>1.35.0</sparkle:version>
-      <sparkle:shortVersionString>1.35.0</sparkle:shortVersionString>
+      <title>1.35.1</title>
+      <pubDate>Sun, 27 Sep 2026 00:21:02 +0000</pubDate>
+      <sparkle:version>1.35.1</sparkle:version>
+      <sparkle:shortVersionString>1.35.1</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-      <sparkle:releaseNotesLink>https://github.com/alejandromarcu/ClipDiary/releases/tag/v1.35.0</sparkle:releaseNotesLink>
+      <sparkle:releaseNotesLink>https://github.com/alejandromarcu/ClipDiary/releases/tag/v1.35.1</sparkle:releaseNotesLink>
       <enclosure
-        url="https://github.com/alejandromarcu/ClipDiary/releases/download/v1.35.0/ClipDiary.dmg"
-        sparkle:edSignature="1AwVgJkeshqGOMU8gZHE+pxZu37mMXFexNiHch2YQ+aBUKM5iGPDZUUfYi3+tuLMRQt5s9qvIONreUdTdvnnDg==" length="4898910"
+        url="https://github.com/alejandromarcu/ClipDiary/releases/download/v1.35.1/ClipDiary.dmg"
+        sparkle:edSignature="cSSvMtLeCLPhb7iBSfUV6Lz1CtkFi3S9N6t0kDaq/LkmmMZw/lGEXHZkdgdLlVuAvVF76yQrLs+tvgSEPxqzCQ==" length="4920431"
         type="application/octet-stream"/>
     </item>
   </channel>
