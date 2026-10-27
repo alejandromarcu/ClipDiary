@@ -24,6 +24,7 @@ final class LiveEditBuffer {
 /// no Soundtrack window to defer to yet. A picked clip reads live from the store,
 /// so Soundtrack-window edits show immediately; a review draft reads/writes the
 /// draft's `audio` through `draftAudio` and never touches the store's clips.
+/// The clip's music level shows as a badge on the block when it ducks the song.
 struct ClipMusicLane: View {
     @EnvironmentObject var store: LibraryStore
     @Environment(\.openWindow) private var openWindow
@@ -34,6 +35,8 @@ struct ClipMusicLane: View {
     /// Review mode only: the draft's audio track, written directly (the draft
     /// isn't in the store). Unused for picked clips, which read/write the store.
     @Binding var draftAudio: AudioTrack?
+    /// Review mode only: the draft's music level (picked clips use the store's).
+    @Binding var draftLevel: MusicLevel
 
     @State private var showImporter = false
     @State private var waveform: [Float] = []
@@ -52,6 +55,11 @@ struct ClipMusicLane: View {
     /// only (a review draft isn't on the timeline).
     private var spanning: [ActiveAudioRef] {
         isReview ? [] : store.activeAudio(over: clip)
+    }
+
+    /// How loud the music plays over this clip — live from the store once picked.
+    private var level: MusicLevel {
+        isReview ? draftLevel : store.clip(withID: clip.id)?.musicLevel ?? draftLevel
     }
 
     var body: some View {
@@ -133,7 +141,7 @@ struct ClipMusicLane: View {
     private func filledBar(_ track: AudioTrack) -> some View {
         ZStack {
             blockBackground
-            WaveformView(samples: waveform, color: accent.opacity(0.7))
+            WaveformView(samples: waveform, color: accent.opacity(level == .off ? 0.25 : 0.7))
                 .padding(.top, 18).padding(.bottom, 6).padding(.horizontal, 8)
                 .allowsHitTesting(false)
             VStack {
@@ -142,6 +150,7 @@ struct ClipMusicLane: View {
                         .font(.caption2.weight(.medium)).foregroundStyle(accent)
                         .lineLimit(1).truncationMode(.middle)
                     Spacer(minLength: 4)
+                    levelBadge
                     if isReview {
                         Button { remove() } label: {
                             Image(systemName: "xmark.circle.fill")
@@ -166,14 +175,17 @@ struct ClipMusicLane: View {
         ZStack {
             blockBackground
             VStack {
-                VStack(alignment: .leading, spacing: 1) {
-                    Label(entry.track.label, systemImage: "music.note")
-                        .font(.caption2.weight(.medium)).lineLimit(1).truncationMode(.middle)
-                    Text("Plays from \(entry.startClip.date.formatted(date: .abbreviated, time: .omitted))")
-                        .font(.caption2).foregroundStyle(.secondary)
+                HStack(alignment: .top, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Label(entry.track.label, systemImage: "music.note")
+                            .font(.caption2.weight(.medium)).lineLimit(1).truncationMode(.middle)
+                        Text("Plays from \(entry.startClip.date.formatted(date: .abbreviated, time: .omitted))")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                    .foregroundStyle(accent)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    levelBadge
                 }
-                .foregroundStyle(accent)
-                .frame(maxWidth: .infinity, alignment: .leading)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 8).padding(.vertical, 4)
@@ -181,6 +193,17 @@ struct ClipMusicLane: View {
         .contentShape(Rectangle())
         .onTapGesture { openSoundtrack(entry.track.id) }
         .help("Music playing over this clip from an earlier day — click to adjust it in the Soundtrack window.")
+    }
+
+    /// "🔈 Low" when the clip's music level ducks the song (nothing at Full).
+    @ViewBuilder
+    private var levelBadge: some View {
+        if level != .full {
+            Label(level == .off ? "Music off" : level.label, systemImage: level.symbol)
+                .font(.caption2).foregroundStyle(.secondary)
+                .lineLimit(1).fixedSize()
+                .help("This clip's music level — change it under Playback")
+        }
     }
 
     private var blockBackground: some View {
@@ -195,7 +218,9 @@ struct ClipMusicLane: View {
     /// Copy the picked file and lay a this-clip-only track over the clip. A
     /// picked clip goes through the store (persisted + pruned on replace); a
     /// review draft is written to `draftAudio` and carried into the library by
-    /// `pick` when the clip is added.
+    /// `pick` when the clip is added. Adding music *to this clip* means it should
+    /// be heard here, so a clip whose music level is Off (a new video's default)
+    /// is raised to Full.
     private func add(_ url: URL) {
         guard let name = store.copyAudioFile(from: url) else { return }
         let track = AudioTrack(fileName: name, displayName: url.deletingPathExtension().lastPathComponent,
@@ -203,8 +228,10 @@ struct ClipMusicLane: View {
                                fileDurationSeconds: store.measuredAudioDuration(ofFileNamed: name))
         if isReview {
             draftAudio = track
+            if draftLevel == .off { draftLevel = .full }
         } else {
             store.setAudioTrack(track, onClip: clip.id)
+            if level == .off { store.setMusicLevel(.full, onClip: clip.id) }
         }
     }
 
@@ -382,6 +409,40 @@ struct PaneSectionLabel: View {
     }
 }
 
+/// The editors' music-level row: how loud the soundtrack plays over this clip
+/// (`Clip.musicLevel`), as four steps. A picked clip reads and writes the store
+/// live (like the music bar), so the Soundtrack lane and an open preview follow
+/// at once; a review draft writes the draft through `draftLevel`.
+struct MusicLevelRow: View {
+    @EnvironmentObject var store: LibraryStore
+    var clipID: UUID
+    var isReview: Bool
+    @Binding var draftLevel: MusicLevel
+
+    private var level: Binding<MusicLevel> {
+        Binding(
+            get: { isReview ? draftLevel : store.clip(withID: clipID)?.musicLevel ?? draftLevel },
+            set: { newValue in
+                if isReview { draftLevel = newValue } else { store.setMusicLevel(newValue, onClip: clipID) }
+            }
+        )
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "music.note")
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+            Picker("Music", selection: level) {
+                ForEach(MusicLevel.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+        }
+        .help("How loud the soundtrack plays over this clip. Off lets the clip's own sound through alone; Low and Medium keep the music underneath it. New videos start at Off, photos at Full.")
+    }
+}
+
 /// A thin vertical divider that resizes the column to its right by dragging.
 /// Used between the media and the metadata pane in the review editors; the
 /// width it drives is stored in `@AppStorage` so it sticks across items and
@@ -504,6 +565,18 @@ struct TrimEditor: View {
         isReview ? clip.audio : store.clip(withID: clip.id)?.audio
     }
 
+    /// This clip's music level, read the same way (set live by `MusicLevelRow`).
+    private var currentMusicLevel: MusicLevel {
+        isReview ? clip.musicLevel : store.clip(withID: clip.id)?.musicLevel ?? clip.musicLevel
+    }
+
+    /// The preview song's volume: the track's level ducked by the clip's music
+    /// level — capped at 100%, like the video player.
+    private var musicPreviewVolume: Float {
+        guard let track = currentAudioTrack else { return 0 }
+        return Float(min(1, max(0, track.volume * currentMusicLevel.gain)))
+    }
+
     /// The working copy with the picked date applied — what would be saved.
     private var editedClip: Clip {
         var updated = clip
@@ -545,6 +618,7 @@ struct TrimEditor: View {
             player?.volume = Float(min(1, max(0, newValue)))
         }
         .onChange(of: currentAudioTrack?.fileName) { _, _ in loadMusicPlayer() }
+        .onChange(of: musicPreviewVolume) { _, newValue in musicPlayer?.volume = newValue }
         .sheet(isPresented: $showTransition) {
             TransitionEditorSheet(transition: $clip.transition, maxSeconds: clip.trimmedDuration)
         }
@@ -604,6 +678,7 @@ struct TrimEditor: View {
                 .padding(.top, 6)
             TransitionRow(transition: clip.transition) { showTransition = true }
             volumeRow
+            MusicLevelRow(clipID: clip.id, isReview: isReview, draftLevel: $clip.musicLevel)
             dateStampToggle
             PaneSectionLabel(title: "Placement")
                 .padding(.top, 6)
@@ -767,7 +842,8 @@ struct TrimEditor: View {
             // A music bar sits right under the clip's own audio waveform: lay a
             // song over the clip here, or (picked clips) jump to the Soundtrack
             // window to fine-tune it.
-            ClipMusicLane(clip: clip, isReview: isReview, draftAudio: $clip.audio)
+            ClipMusicLane(clip: clip, isReview: isReview, draftAudio: $clip.audio,
+                          draftLevel: $clip.musicLevel)
 
             HStack {
                 Button {
@@ -1105,7 +1181,7 @@ struct TrimEditor: View {
         let loaded = try? AVAudioPlayer(contentsOf: store.audioURL(for: track))
         // Like the video player, the preview tops out at 100%; a >100% boost
         // still applies in the rendered file.
-        loaded?.volume = Float(min(1, max(0, track.volume)))
+        loaded?.volume = musicPreviewVolume
         loaded?.prepareToPlay()
         musicPlayer = loaded
     }

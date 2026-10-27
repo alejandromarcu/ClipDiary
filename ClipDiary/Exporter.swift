@@ -535,6 +535,17 @@ struct Exporter {
             }
         }
 
+        // Each rendered clip's music level over its placed (local) range,
+        // ascending — every song fragment is shaped by the clips it covers.
+        let levelByID = Dictionary(clips.map { ($0.id, $0.musicLevel.gain) },
+                                   uniquingKeysWith: { a, _ in a })
+        let levelSegments = segmentByClipID
+            .compactMap { id, seg in
+                levelByID[id].map { MusicLevelCurve.Segment(start: seg.start.seconds,
+                                                             end: seg.end.seconds, value: $0) }
+            }
+            .sorted { $0.start < $1.start }
+
         var musicParams: [AVMutableAudioMixInputParameters] = []
         func cm(_ s: Double) -> CMTime { CMTime(seconds: s, preferredTimescale: 600) }
         for p in audioPlacements {
@@ -599,7 +610,8 @@ struct Exporter {
                 // Volume envelope per fragment. The track's own fades apply
                 // only at its true start/end (never at a mid-song cut), and the
                 // render's edge fades — recorded above — ramp any fragment they
-                // overlap so the music follows the picture in and out.
+                // overlap so the music follows the picture in and out. On top,
+                // each covered clip's music level ducks it.
                 var fadeIn = p.track.transition.hasFadeIn && abs(oStart - p.audibleStartGlobal) < 0.001
                     ? p.track.transition.fadeInSeconds : 0
                 var fadeOut = p.track.transition.hasFadeOut && abs(oEnd - audibleGlobalEnd) < 0.001
@@ -608,9 +620,12 @@ struct Exporter {
                 let fragEnd = (startCM + durationCM).seconds
                 if let r = musicRampIn, fragStart < r.end { fadeIn = max(fadeIn, r.end - fragStart) }
                 if let r = musicRampOut, fragEnd > r.start { fadeOut = max(fadeOut, fragEnd - r.start) }
-                Self.applyVolumeEnvelope(
+                let levels = MusicLevelCurve(segments: levelSegments.filter {
+                    $0.start < fragEnd && $0.end > fragStart
+                })
+                Self.applyMusicEnvelope(
                     volume: Float(max(0, p.track.volume)), fadeIn: fadeIn, fadeOut: fadeOut,
-                    to: params, start: startCM, duration: durationCM
+                    levels: levels, to: params, start: startCM, duration: durationCM
                 )
             }
             if let params { musicParams.append(params) }
@@ -979,6 +994,47 @@ struct Exporter {
         if fo > 0 {
             params.setVolumeRamp(fromStartVolume: volume, toEndVolume: 0,
                                  timeRange: CMTimeRange(start: at(plateauEnd), end: at(dur)))
+        }
+    }
+
+    /// A song fragment's envelope: `applyVolumeEnvelope`'s volume and fades,
+    /// times the clips' music levels (`levels`, in the same local seconds).
+    /// Written as contiguous ramps between every corner of the fades and the
+    /// level curve (linear in between — close enough where a fade overlaps a
+    /// level change), so the whole fragment is covered and no level
+    /// interpolates across a gap.
+    static func applyMusicEnvelope(
+        volume: Float, fadeIn: Double, fadeOut: Double, levels: MusicLevelCurve,
+        to params: AVMutableAudioMixInputParameters,
+        start: CMTime, duration: CMTime
+    ) {
+        let s0 = start.seconds
+        let dur = duration.seconds
+        guard dur > 0 else { return }
+        let fi = max(0, min(fadeIn, dur))
+        let fo = max(0, min(fadeOut, dur - fi))
+        func fade(_ x: Double) -> Double {
+            if fi > 0, x < fi { return x / fi }
+            if fo > 0, x > dur - fo { return (dur - x) / fo }
+            return 1
+        }
+        func gain(_ x: Double) -> Float {
+            volume * Float(fade(x) * levels.value(at: s0 + x))
+        }
+        func at(_ x: Double) -> CMTime {
+            x >= dur ? start + duration : start + CMTime(seconds: x, preferredTimescale: 600)
+        }
+        // Corners in seconds from the fragment start, bracketed by its ends;
+        // ones closer than ~a sample block apart collapse into one.
+        let interior = ([fi, dur - fo] + levels.points.map { $0.t - s0 })
+            .filter { $0 > 0.002 && $0 < dur - 0.002 }
+            .sorted()
+        var times = [0.0]
+        for t in interior where t - times[times.count - 1] > 0.002 { times.append(t) }
+        times.append(dur)
+        for (a, b) in zip(times, times.dropFirst()) {
+            params.setVolumeRamp(fromStartVolume: gain(a), toEndVolume: gain(b),
+                                 timeRange: CMTimeRange(start: at(a), end: at(b)))
         }
     }
 

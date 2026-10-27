@@ -427,6 +427,125 @@ extension AudioTrack {
     }
 }
 
+/// How loud the soundtrack (any `AudioTrack` playing over it) is while a clip
+/// is on screen — so one song can run across many clips yet duck under a video
+/// whose own sound matters. Applied on top of the track's own volume. New
+/// videos start at `.off` (their sound usually is the point), photos and cards
+/// at `.full`; clips stored before this field decode as `.full`.
+enum MusicLevel: String, Codable, CaseIterable, Identifiable {
+    case off, low, medium, full
+
+    var id: Self { self }
+
+    /// Linear gain on the music. Low/Medium sit well under full (≈ −16 / −8 dB)
+    /// because songs are mastered much louder than phone-video audio.
+    var gain: Double {
+        switch self {
+        case .off: 0
+        case .low: 0.15
+        case .medium: 0.4
+        case .full: 1
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .off: "Off"
+        case .low: "Low"
+        case .medium: "Medium"
+        case .full: "Full"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .off: "speaker.slash.fill"
+        case .low: "speaker.wave.1.fill"
+        case .medium: "speaker.wave.2.fill"
+        case .full: "speaker.wave.3.fill"
+        }
+    }
+
+    /// Height of this level on the Soundtrack lane's level line, 0…1 — evenly
+    /// spaced steps, since the control is four steps rather than a fader.
+    var displayHeight: Double {
+        switch self {
+        case .off: 0
+        case .low: 1.0 / 3
+        case .medium: 2.0 / 3
+        case .full: 1
+        }
+    }
+}
+
+/// The music level across a run of consecutive clips as a piecewise-linear
+/// curve: flat at each clip's value, with a short ramp wherever it changes.
+/// The ramp sits inside the **louder** clip — the music dips before a quieter
+/// clip begins and comes back up only after it ends — so a clip set to Off is
+/// silent for its whole length. Shared by the exporter (gains, local seconds)
+/// and the Soundtrack lane (heights, global seconds) so both shape it alike.
+struct MusicLevelCurve {
+    struct Segment {
+        var start: Double
+        var end: Double
+        var value: Double
+    }
+
+    /// How long a level change takes, at most (capped to half the louder clip
+    /// so ramps at both of its ends never overlap).
+    static let rampSeconds = 0.4
+
+    /// The curve's corners, ascending in time; linear in between.
+    let points: [(t: Double, value: Double)]
+
+    /// `segments` must be contiguous and ascending (a run of clips).
+    init(segments: [Segment]) {
+        var pts: [(t: Double, value: Double)] = []
+        for (i, s) in segments.enumerated() {
+            let ramp = min(Self.rampSeconds, (s.end - s.start) / 2)
+            let prev = i > 0 ? segments[i - 1].value : nil
+            let next = i + 1 < segments.count ? segments[i + 1].value : nil
+            // Rising into this clip: start at the quieter neighbour's level.
+            if let prev, prev < s.value {
+                pts.append((s.start, prev))
+                pts.append((s.start + ramp, s.value))
+            } else {
+                pts.append((s.start, s.value))
+            }
+            // Falling out of it: reach the next clip's level at the boundary.
+            if let next, next < s.value {
+                pts.append((s.end - ramp, s.value))
+                pts.append((s.end, next))
+            } else {
+                pts.append((s.end, s.value))
+            }
+        }
+        points = pts
+    }
+
+    /// True when every clip sits at `value` (no dips to draw or render).
+    func isFlat(at value: Double) -> Bool {
+        points.allSatisfy { abs($0.value - value) < 0.0001 }
+    }
+
+    /// The level at time `t`, held flat beyond either end.
+    func value(at t: Double) -> Double {
+        guard let first = points.first, let last = points.last else { return 1 }
+        if t <= first.t { return first.value }
+        if t >= last.t { return last.value }
+        // First corner at or after t (binary search — a long song can cross
+        // hundreds of clips).
+        var lo = 0, hi = points.count - 1
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if points[mid].t < t { lo = mid + 1 } else { hi = mid }
+        }
+        let b = points[lo], a = points[max(0, lo - 1)]
+        guard b.t - a.t > 1e-9 else { return b.value }
+        return a.value + (b.value - a.value) * (t - a.t) / (b.t - a.t)
+    }
+}
+
 /// One video clip or photo assigned to a calendar day.
 struct Clip: Identifiable, Codable, Equatable, Hashable {
     var id: UUID = UUID()
@@ -490,6 +609,10 @@ struct Clip: Identifiable, Codable, Equatable, Hashable {
     /// It mixes with the clips' own audio and can span following clips — see
     /// `AudioTrack`. nil = no overlaid audio.
     var audio: AudioTrack? = nil
+    /// How loud the soundtrack plays over this clip — whichever track covers
+    /// it, started here or earlier. Creation sites pass `.off` for videos;
+    /// photos, cards and clips stored before this field keep `.full`.
+    var musicLevel: MusicLevel = .full
 
     var trimmedDuration: Double { max(0, outSeconds - inSeconds) }
 
@@ -508,7 +631,7 @@ struct Clip: Identifiable, Codable, Equatable, Hashable {
     enum CodingKeys: String, CodingKey {
         case id, fileName, date, inSeconds, outSeconds, durationSeconds, createdAt,
              kind, crop, cardID, showsDateOverlay, caption, sourcePath,
-             sourceHash, sourceBytes, transition, volume, audio
+             sourceHash, sourceBytes, transition, volume, audio, musicLevel
     }
 }
 
@@ -533,6 +656,7 @@ extension Clip {
         transition = try container.decodeIfPresent(SegmentTransition.self, forKey: .transition) ?? SegmentTransition()
         volume = try container.decodeIfPresent(Double.self, forKey: .volume) ?? 1.0
         audio = try container.decodeIfPresent(AudioTrack.self, forKey: .audio)
+        musicLevel = try container.decodeIfPresent(MusicLevel.self, forKey: .musicLevel) ?? .full
     }
 }
 

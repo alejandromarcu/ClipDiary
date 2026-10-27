@@ -496,6 +496,7 @@ struct SoundtrackView: View {
                     tint: base.color,
                     fadeInPoints: CGFloat(base.track.transition.fadeInSeconds) * pps,
                     fadeOutPoints: CGFloat(base.track.transition.fadeOutSeconds) * pps,
+                    levelPoints: levelLine(from: g.start, to: g.end, layout: layout),
                     selected: selected == base.track.id,
                     onSelect: { selected = base.track.id },
                     onBody: { tx, ended in handleDrag(base, .body, tx, ended, layout: layout, blocks: blocks) },
@@ -785,6 +786,34 @@ struct SoundtrackView: View {
     /// mapping used by the strip cells, the day/clip lines, and the audio blocks
     /// so they all land on the same integer positions (no drift).
     private func xPos(_ sec: Double) -> CGFloat { (CGFloat(sec) * pps).rounded() }
+
+    /// The clips' music level under a block spanning `start…end` (global
+    /// seconds), shaped by the same `MusicLevelCurve` the exporter renders: x in
+    /// block-local points, y the level's height (0 = Off … 1 = Full). Nil when
+    /// every clip under it plays the song at Full — nothing to draw.
+    private func levelLine(from start: Double, to end: Double,
+                           layout l: LibraryStore.TimelineLayout) -> [CGPoint]? {
+        // First clip ending after `start` (clips are in ascending order).
+        var lo = 0, hi = l.order.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if (l.endByID[l.order[mid].id] ?? 0) <= start { lo = mid + 1 } else { hi = mid }
+        }
+        var segments: [MusicLevelCurve.Segment] = []
+        for clip in l.order[lo...] {
+            guard let s = l.startByID[clip.id], s < end, let e = l.endByID[clip.id] else { break }
+            segments.append(.init(start: s, end: e, value: clip.musicLevel.displayHeight))
+        }
+        let curve = MusicLevelCurve(segments: segments)
+        guard !curve.isFlat(at: 1) else { return nil }
+        let x0 = xPos(start)
+        var points = [CGPoint(x: 0, y: curve.value(at: start))]
+        for p in curve.points where p.t > start && p.t < end {
+            points.append(CGPoint(x: xPos(p.t) - x0, y: p.value))
+        }
+        points.append(CGPoint(x: xPos(end) - x0, y: curve.value(at: end)))
+        return points
+    }
 
     /// A clip's cell width as the difference of its rounded cumulative edges, so
     /// cell boundaries telescope to exactly the line positions — no accumulated
@@ -1866,6 +1895,7 @@ private struct AudioTrimBar: View {
 private struct ClipStripCell: View {
     @EnvironmentObject var store: LibraryStore
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.undoManager) private var undoManager
     let clip: Clip
     /// This cell's full width (its rendered duration in pixels) and height.
     let cellWidth: CGFloat
@@ -1920,7 +1950,18 @@ private struct ClipStripCell: View {
         // Same as clicking the clip in the main window's timeline view: open
         // the day editor on this clip.
         .onTapGesture { openWindow(value: ReviewRequest(day: clip.date, startClipID: clip.id)) }
-        .help("Edit \(clip.date.formatted(date: .abbreviated, time: .omitted))")
+        // Set how loud the soundtrack plays over this clip right here, where
+        // the lane's level line shows the result.
+        .contextMenu {
+            Picker("Music Level", selection: Binding(get: { clip.musicLevel },
+                                                     set: { setMusicLevel($0) })) {
+                ForEach(MusicLevel.allCases) { level in
+                    Label(level.label, systemImage: level.symbol).tag(level)
+                }
+            }
+            .pickerStyle(.inline)
+        }
+        .help("Edit \(clip.date.formatted(date: .abbreviated, time: .omitted)) — right-click to set its music level")
         .task(id: thumbTaskID) {
             // Don't decode a thumbnail for a sliver too thin to show one (zoomed
             // out): the neutral fill stands in until the user zooms in. The id
@@ -1929,6 +1970,29 @@ private struct ClipStripCell: View {
             guard cellWidth >= ClipStripCell.thumbMinWidth else { image = nil; return }
             image = await store.thumbnail(for: clip)
         }
+    }
+
+    /// Sets the clip's music level, undoable with ⌘Z like the lane's edits.
+    private func setMusicLevel(_ level: MusicLevel) {
+        guard level != clip.musicLevel else { return }
+        Self.registerLevelRestore(clip.musicLevel, clipID: clip.id, on: store,
+                                  undoManager: undoManager)
+        store.setMusicLevel(level, onClip: clip.id)
+    }
+
+    /// Registers an undo restoring `level` (and, from it, the redo). Static and
+    /// keyed to the store so it outlives this cell scrolling out of view.
+    private static func registerLevelRestore(_ level: MusicLevel, clipID: UUID,
+                                             on store: LibraryStore, undoManager: UndoManager?) {
+        undoManager?.registerUndo(withTarget: store) { store in
+            MainActor.assumeIsolated {
+                if let current = store.clip(withID: clipID)?.musicLevel {
+                    registerLevelRestore(current, clipID: clipID, on: store, undoManager: undoManager)
+                }
+                store.setMusicLevel(level, onClip: clipID)
+            }
+        }
+        undoManager?.setActionName("Music Level")
     }
 
     /// Below this cell width the thumbnail isn't worth decoding (and barely
@@ -1969,6 +2033,9 @@ private struct AudioBlockView: View {
     /// as the classic NLE corner ramps so a fade is visible at a glance.
     let fadeInPoints: CGFloat
     let fadeOutPoints: CGFloat
+    /// The clips' music level under the block (x in points, y 0 = Off … 1 =
+    /// Full), or nil when it's Full throughout.
+    let levelPoints: [CGPoint]?
     let selected: Bool
     let onSelect: () -> Void
     let onBody: (CGFloat, Bool) -> Void
@@ -1984,6 +2051,9 @@ private struct AudioBlockView: View {
 
             WaveformView(samples: waveform, color: tint.opacity(0.7))
                 .padding(.top, 19).padding(.bottom, 6).padding(.horizontal, 9)
+                .allowsHitTesting(false)
+
+            levelLine
                 .allowsHitTesting(false)
 
             fadeRamps
@@ -2046,6 +2116,25 @@ private struct AudioBlockView: View {
                 edge.addLine(to: CGPoint(x: size.width, y: h))
                 ctx.stroke(edge, with: .color(tint.opacity(0.75)), style: StrokeStyle(lineWidth: 1.5))
             }
+        }
+    }
+
+    /// Where clips duck the song: a line tracing the music level — along the
+    /// top at Full, dropping toward the bottom where a clip is Low/Medium/Off —
+    /// shaded above, in the same idiom as the fade ramps.
+    private var levelLine: some View {
+        Canvas { ctx, size in
+            guard let pts = levelPoints, let first = pts.first, let last = pts.last else { return }
+            func y(_ level: CGFloat) -> CGFloat { (1 - level) * size.height }
+            var line = Path()
+            line.move(to: CGPoint(x: first.x, y: y(first.y)))
+            for p in pts.dropFirst() { line.addLine(to: CGPoint(x: p.x, y: y(p.y))) }
+            var shade = line
+            shade.addLine(to: CGPoint(x: last.x, y: 0))
+            shade.addLine(to: CGPoint(x: first.x, y: 0))
+            shade.closeSubpath()
+            ctx.fill(shade, with: .color(.black.opacity(0.15)))
+            ctx.stroke(line, with: .color(tint.opacity(0.75)), style: StrokeStyle(lineWidth: 1.5))
         }
     }
 

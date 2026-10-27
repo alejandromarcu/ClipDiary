@@ -25,7 +25,7 @@ Deliberate improvements over 1SE:
   Keyboard Shortcuts windows.
 - `Models.swift` — `Clip` struct (id, fileName, date, inSeconds, outSeconds,
   durationSeconds, createdAt, kind, crop, cardID, sourcePath, sourceHash,
-  sourceBytes, audio) + date/time helpers. (`id` is a random `UUID`, not a content
+  sourceBytes, audio, musicLevel) + date/time helpers. (`id` is a random `UUID`, not a content
   hash.) A clip is a video or a photo (`ClipKind`); either kind may carry an
   optional `CropRect` (unit coords, top-left origin, relative to the oriented
   image/frame — photos crop in `PhotoCropView`, videos via the trim editor's
@@ -53,7 +53,17 @@ Deliberate improvements over 1SE:
   later delete/re-date collapses the span to the start clip via
   `TimelineLayout.audibleSpan`). It mixes with the clip's
   own audio and plays alone over silent photos. `ActiveAudioRef` pairs a
-  spanning track with its start clip for the editors' music bar.
+  spanning track with its start clip for the editors' music bar. Each clip
+  also has a **`musicLevel`** (`MusicLevel`: off/low/medium/full, gains 0 /
+  0.15 / 0.4 / 1): how loud *any* track playing over it is, on top of the
+  track's own volume — so a song spanning many clips can duck under a video
+  whose own sound matters. Decodes as `.full` when absent (old clips sound
+  unchanged); creation sites pass `.off` for **new videos** (pick drafts,
+  Import Media, both 1SE imports), photos/cards keep `.full`.
+  `MusicLevelCurve` turns a run of clips' levels into a piecewise-linear
+  curve with a ≤0.4s ramp at each change, placed inside the **louder** clip
+  (the music is already down when a quieter clip starts) — shared by the
+  exporter and the Soundtrack lane so both shape it identically.
   `sourceHash` (lowercase-hex
   SHA-256 of the copied media bytes) + `sourceBytes` (file size) are recorded at
   pick/import time so the project can be rebuilt by content if `Clips/` is lost
@@ -100,7 +110,9 @@ Deliberate improvements over 1SE:
   editor then sets the `AudioTrack` on its clip draft), `pruneUnusedAudioFile`
   deletes it when no clip references it (also from `delete`, which additionally
   re-anchors any track *ending* on the deleted clip to the clip before it),
-  `setAudioTrack`/`moveAudioTrack`
+  `setMusicLevel` sets a clip's music level (saved at once; `update` keeps
+  the stored level and audio, so an editor's stale snapshot can't clobber
+  them), `setAudioTrack`/`moveAudioTrack`
   set/clear/relocate a block (the Soundtrack timeline; a move refuses to land
   on a clip that already starts another song), and `activeAudio(over:)`
   lists the tracks playing over a clip (by global render order, capped by each
@@ -224,7 +236,11 @@ Deliberate improvements over 1SE:
   clip (`store.activeAudio(over:)`) shows read-only too. A review draft gets a
   ✕ to drop its track instead, and its orphaned `Audio/` copy is pruned on
   revert/skip; `TrimEditor` also previews the song over Play/Preview Trim with
-  a synced `AVAudioPlayer`), `DayPickerField`, `ReviewItemInfo`/
+  a synced `AVAudioPlayer`, ducked by the clip's music level; the bar badges
+  the level when it isn't Full, and adding a track from it raises an Off clip
+  to Full), `MusicLevelRow` (the four-step **Music** segmented row under
+  Playback in both editors — live through the store for a picked clip, on
+  the draft in review), `DayPickerField`, `ReviewItemInfo`/
   `ReviewItemHeader`, `ClipInfoHeader` (library mode's pane header: original
   source file name, resolution/length/capture time, Reveal in Finder),
   `PaneSectionLabel`, `ResizablePaneDivider` (drag-resizes the side pane),
@@ -290,6 +306,9 @@ Deliberate improvements over 1SE:
   (Add/Remove are excluded — they change which files exist in `Audio/`, which a
   snapshot can't bring back; Remove — the inspector button or **⌫** — confirms
   instead, since it deletes the copied file).
+  Each block also draws a **level line** (the clips' `MusicLevelCurve` under
+  it, shaded above, like the fade ramps) wherever clips duck it, and
+  right-clicking a clip in the strip sets its music level (⌘Z-undoable).
   Below the timeline a **track list** (`Table`, `TrackInspector`, stripes off)
   lists every track in play order with the day range it **Plays**
   ("Jun 7 – 9, 2026" via `endDay`), **Used** length (its span here) and
@@ -413,7 +432,10 @@ Deliberate improvements over 1SE:
   Every placed song gets an `AVMutableAudioMixInputParameters` envelope
   (volume, its own fades at its true start/end — and the render's bookend
   fade-in/out ramps the music with the picture; a clip fading mid-video
-  doesn't), folded into the same `audioMix`. Preview and export need no
+  doesn't), multiplied by the **music levels** of the clips each fragment
+  covers (`applyMusicEnvelope`: one contiguous ramp between every corner of
+  the fades and the `MusicLevelCurve`), folded into the same `audioMix`.
+  Preview and export need no
   further work — `MonthComposition.audioMix` already flows to both.
 
 ## Conventions & constraints
