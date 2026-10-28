@@ -7,6 +7,23 @@ The format loosely follows [Keep a Changelog](https://keepachangelog.com/),
 and versions follow [Semantic Versioning](https://semver.org/)
 (`MAJOR.MINOR.PATCH`).
 
+## [1.36.0] - 2026-10-27
+
+- **Duck the soundtrack under individual clips.** Every clip now has a
+  **Music** level (Off, Low, Medium or Full) under Playback in the day
+  window's editors. It sets how loud the soundtrack plays while that clip is
+  on screen, so one song can run across a whole stretch of clips but drop
+  out under a video whose own sound you want to hear, or stay quietly
+  underneath one where it matters less. The music fades down before a
+  quieter clip starts and comes back up after it ends, so a clip set to Off
+  is silent for its whole length.
+- New videos start at **Off** and new photos at **Full**. Clips you already
+  have stay at Full, so existing videos sound exactly as before. Adding a
+  track from a clip's own music bar raises that clip from Off to Full.
+- In the Soundtrack window, right-click a clip to set its music level (⌘Z
+  undoes it). Each song's block draws a line showing where clips lower it.
+  The editors' music bar shows the clip's level when it isn't Full.
+
 ## [1.35.1] - 2026-09-25
 
 - **Fixed:** the Timeline view could freeze (spinning beach ball, never

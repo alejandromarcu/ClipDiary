@@ -730,7 +730,9 @@ struct ReviewWindow: View {
                 fileName: "",
                 date: day,
                 outSeconds: duration,
-                durationSeconds: duration
+                durationSeconds: duration,
+                // A video's own sound usually matters — keep music out from under it.
+                musicLevel: .off
             )
             draftItemID = item.id
         } else {

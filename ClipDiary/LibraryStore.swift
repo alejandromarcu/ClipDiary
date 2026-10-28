@@ -777,7 +777,8 @@ final class LibraryStore: ObservableObject {
                 date: clipDate.dayKey,
                 inSeconds: 0,
                 outSeconds: duration,
-                durationSeconds: duration
+                durationSeconds: duration,
+                musicLevel: .off
             )
             if let digest = Self.contentDigest(of: destURL) {
                 clip.sourceHash = digest.hash
@@ -808,7 +809,8 @@ final class LibraryStore: ObservableObject {
                 inSeconds: 0,
                 outSeconds: duration,
                 durationSeconds: duration,
-                showsDateOverlay: showsDateOverlay
+                showsDateOverlay: showsDateOverlay,
+                musicLevel: .off
             )
             if let digest = Self.contentDigest(of: destURL) {
                 clip.sourceHash = digest.hash
@@ -936,7 +938,8 @@ final class LibraryStore: ObservableObject {
             outSeconds: duration,
             durationSeconds: duration,
             createdAt: createdAt,
-            caption: caption
+            caption: caption,
+            musicLevel: .off
         )
         clip.sourceHash = digest.hash
         clip.sourceBytes = digest.bytes
@@ -1054,6 +1057,9 @@ final class LibraryStore: ObservableObject {
         // audio — otherwise an audio edit made in the Soundtrack window while an
         // editor is open would be clobbered by its stale snapshot on save.
         clip.audio = clips[idx].audio
+        // Same for the music level: set live through `setMusicLevel` (editors
+        // and the Soundtrack window's clip strip), never via a stale snapshot.
+        clip.musicLevel = clips[idx].musicLevel
         // The day/photo editors save on disappear, so just clicking through a
         // day's clips (or closing the editor untouched) would otherwise
         // re-encode and rewrite the entire library each time — skip the write
@@ -1400,6 +1406,15 @@ final class LibraryStore: ObservableObject {
 
     /// Sets, replaces, or clears (`nil`) a clip's audio track, pruning a
     /// now-unreferenced previous file. Used by the Soundtrack timeline.
+    /// How loud the soundtrack plays over one clip. Saved immediately (like the
+    /// audio methods) so an open preview and the Soundtrack lane follow along.
+    func setMusicLevel(_ level: MusicLevel, onClip clipID: UUID) {
+        guard let index = clips.firstIndex(where: { $0.id == clipID }),
+              clips[index].musicLevel != level else { return }
+        clips[index].musicLevel = level
+        save()
+    }
+
     func setAudioTrack(_ track: AudioTrack?, onClip clipID: UUID) {
         guard let index = clips.firstIndex(where: { $0.id == clipID }) else { return }
         let previous = clips[index].audio

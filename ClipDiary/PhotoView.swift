@@ -176,7 +176,8 @@ struct PhotoEditor: View {
                 cropControls
                 // A photo has no audio of its own, but a song can still play
                 // over it — the same music bar the video editor shows.
-                ClipMusicLane(clip: clip, isReview: isReview, draftAudio: $clip.audio)
+                ClipMusicLane(clip: clip, isReview: isReview, draftAudio: $clip.audio,
+                              draftLevel: $clip.musicLevel)
                 Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -207,6 +208,7 @@ struct PhotoEditor: View {
             PaneSectionLabel(title: "Playback")
                 .padding(.top, 6)
             TransitionRow(transition: clip.transition) { showTransition = true }
+            MusicLevelRow(clipID: clip.id, isReview: isReview, draftLevel: $clip.musicLevel)
             if !isCard { dateStampToggle }
             PaneSectionLabel(title: "Placement")
                 .padding(.top, 6)
